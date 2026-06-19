@@ -8,17 +8,14 @@ COPY *.slnx ./
 COPY nuget.config ./
 COPY Directory.Build.props Directory.Packages.props ./
 COPY src/FixPortal.Ci.Backend.Api/FixPortal.Ci.Backend.Api.csproj src/FixPortal.Ci.Backend.Api/
-# The GitHub Packages token is provided as a BuildKit secret (mounted into the
-# restore step's env only) rather than an ARG/build-arg, so it never persists in
-# the image layer history. nuget.config reads it via %GITHUB_PACKAGES_TOKEN%.
-RUN --mount=type=secret,id=github_packages_token,env=GITHUB_PACKAGES_TOKEN \
-    dotnet restore src/FixPortal.Ci.Backend.Api/FixPortal.Ci.Backend.Api.csproj
+RUN dotnet restore src/FixPortal.Ci.Backend.Api/FixPortal.Ci.Backend.Api.csproj
 COPY . .
 RUN dotnet publish src/FixPortal.Ci.Backend.Api/FixPortal.Ci.Backend.Api.csproj \
     --configuration Release --output /app --no-restore
 
 # Runtime stage
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
+LABEL org.opencontainers.image.source="https://github.com/FixPortal/fixportal-ci-backend"
 WORKDIR /app
 # Metrics: the background worker shallow-clones each repo and runs Lizard.
 # Install Lizard in an isolated virtual environment (PEP 668-safe).

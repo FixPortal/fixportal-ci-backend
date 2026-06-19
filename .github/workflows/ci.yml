@@ -87,9 +87,6 @@ jobs:
           tags: |
             ghcr.io/fixportal/fixportal-ci-backend:latest
             ghcr.io/fixportal/fixportal-ci-backend:sha-${{ github.sha }}
-          # BuildKit secret (not build-args) so the token is not baked into image history.
-          secrets: |
-            github_packages_token=${{ secrets.GITHUB_TOKEN }}
 
   deploy:
     name: Deploy (Azure Container Apps)
