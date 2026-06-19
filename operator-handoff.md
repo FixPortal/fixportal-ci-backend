@@ -243,12 +243,6 @@ To rotate either:
 > without a full redeploy, restart the revision (`az containerapp revision
 > restart`) for the new value to take effect.
 
-> **Build-time package token.** The Docker build authenticates to the private
-> FixPortal NuGet feed with `secrets.GITHUB_TOKEN` — the ephemeral, per-run
-> token GitHub Actions mints automatically. It is passed as a BuildKit secret
-> (never baked into image history) and is **not** a stored secret, so there is
-> nothing to rotate. Dependabot needs the same access via its own
-> `GITHUB_PACKAGES_TOKEN` Dependabot secret (see `.github/dependabot.yml`).
 
 ## Validation
 
