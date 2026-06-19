@@ -1,22 +1,8 @@
 version: 2
 
-# Private FixPortal GitHub Packages NuGet feed (mirrors nuget.config). Without
-# this, Dependabot cannot authenticate to the feed and silently skips updates
-# for the FixPortal.* packages (e.g. FixPortal.CodeStyle). GITHUB_PACKAGES_TOKEN
-# must be added as a Dependabot secret (Settings -> Secrets -> Dependabot), not
-# only an Actions secret — Dependabot does not see Actions secrets.
-registries:
-  fixportal-nuget:
-    type: nuget-feed
-    url: https://nuget.pkg.github.com/FixPortal/index.json
-    username: FixPortal
-    password: ${{secrets.GITHUB_PACKAGES_TOKEN}}
-
 updates:
   - package-ecosystem: nuget
     directory: /
-    registries:
-      - fixportal-nuget
     schedule:
       interval: weekly
       day: monday
