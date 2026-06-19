@@ -1,0 +1,29 @@
+services:
+  backend:
+    image: ghcr.io/fixportal/fixportal-ci-backend:latest
+    environment:
+      GitHub__Token: ${GITHUB_TOKEN}
+      GitHub__Owner: ${GITHUB_OWNER}
+      Admin__ExposePrivateToGuests: "true"
+      # Allow the frontend container on port 80.
+      Cors__AllowedOrigins__0: http://localhost
+      Dashboard__SnapshotPath: /app/data/dashboard-snapshot.json
+    ports:
+      - "5049:8080"
+    volumes:
+      - snapshot-data:/app/data
+
+  frontend:
+    # The board UI image, built and published from the open-source
+    # fixportal-ci-frontend repo: https://github.com/FixPortal/fixportal-ci-frontend
+    image: ghcr.io/fixportal/fixportal-ci-frontend:latest
+    environment:
+      # Internal service name; the frontend's nginx proxies /api/ to this.
+      BACKEND_URL: http://backend:8080
+    ports:
+      - "8082:8080"
+    depends_on:
+      - backend
+
+volumes:
+  snapshot-data:

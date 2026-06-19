@@ -1,0 +1,388 @@
+using System.Text.Json;
+using FixPortal.Ci.Backend.Api.Dashboard.Model;
+using FixPortal.Ci.Backend.Api.Integrations.GitHub;
+using Microsoft.Extensions.Options;
+using NodaTime;
+
+namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
+
+public sealed class DashboardRefreshService(
+    GitHubOrgClient client,
+    GitHubInventoryCache inventory,
+    IDashboardSnapshotStore store,
+    DashboardSnapshotState state,
+    PerRepoCache<RepoMetrics> metrics,
+    [FromKeyedServices("deploys")] PerRepoCache<IReadOnlyList<JobSignal>> deploys,
+    [FromKeyedServices("packages")] PerRepoCache<IReadOnlyList<JobSignal>> packages,
+    PerRepoCache<MergedPullRequest> mergedPrs,
+    IOptions<GitHubOptions> gitHub,
+    IClock clock,
+    ILogger<DashboardRefreshService> logger)
+{
+    private const int MaxParallelRepos = 6;
+
+    public async Task RefreshAsync(CancellationToken ct)
+    {
+        var repos = await inventory.GetRepositoriesAsync(ct);
+
+        // When one repo hits the rate limit, cancel this CTS to stop the other parallel fetches
+        // from burning the remaining quota. Linked to ct so host shutdown still propagates.
+        using var rateLimitCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        using var gate = new SemaphoreSlim(MaxParallelRepos);
+        var tasks = new List<Task<(RepositorySnapshot Snapshot, bool FetchFailed, IReadOnlyList<WorkflowRun> Runs)>>(repos.Count);
+        tasks.AddRange(repos.Select(repo => CollectRepoWithGateAsync(repo, gate, rateLimitCts, ct)));
+        var results = await Task.WhenAll(tasks);
+
+        var previous = state.Current;
+        var repositories = MergeWithPrevious(
+            results.Select(r => (r.Snapshot, r.FetchFailed)).ToList(), previous);
+        repositories = InheritEnrichment(repositories, previous, mergedPrs);
+        // Alphabetical by name; the public/private boards filter this list and a
+        // filter preserves order, so one sort orders both groups ascending.
+        repositories = repositories.OrderBy(r => r.Name, StringComparer.OrdinalIgnoreCase).ToList();
+        var lastMerged = PickLatestMerged(repositories.Select(r => r.LastMergedPr));
+        var now = clock.GetCurrentInstant();
+        var ciTrend = BuildCiTrendForRefresh(results, now, previous);
+        var snapshot = new DashboardSnapshot(
+            now, gitHub.Value.Owner, repositories, BuildSummary(repositories), lastMerged, ciTrend);
+
+        // Compute precise public snapshot (which separates public trend and public last merged PR)
+        var publicRepos = repositories.Where(r => !r.Private).ToList();
+        var publicLastMerged = PickLatestMerged(publicRepos.Select(r => r.LastMergedPr));
+        var publicResults = results.Where(r => !r.Snapshot.Private).ToList();
+        var publicCiTrend = BuildCiTrendForRefresh(publicResults, now, state.Public);
+        var publicSnapshot = new DashboardSnapshot(
+            now, gitHub.Value.Owner, publicRepos, BuildSummary(publicRepos), publicLastMerged, publicCiTrend);
+
+        await PersistAndPublishAsync(
+            store,
+            state,
+            snapshot,
+            publicSnapshot,
+            persist: ShouldPersist(results.Any(r => r.FetchFailed), previous is not null),
+            logger,
+            ct);
+    }
+
+    private async Task<(RepositorySnapshot Snapshot, bool FetchFailed, IReadOnlyList<WorkflowRun> Runs)> CollectRepoWithGateAsync(
+        GitHubRepoDto repo,
+        SemaphoreSlim gate,
+        CancellationTokenSource rateLimitCts,
+        CancellationToken ct)
+    {
+        var rateLimitToken = rateLimitCts.Token;
+        try
+        {
+            await gate.WaitAsync(rateLimitToken);
+        }
+        catch (OperationCanceledException) when (rateLimitToken.IsCancellationRequested && !ct.IsCancellationRequested)
+        {
+            // Another repo hit the rate limit and cancelled rateLimitCts; skip this one.
+            return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, [], []), true, []);
+        }
+        try
+        {
+            return await CollectRepoAsync(repo, rateLimitCts, rateLimitToken, ct);
+        }
+        finally
+        {
+            _ = gate.Release();
+        }
+    }
+
+    private async Task<(RepositorySnapshot Snapshot, bool FetchFailed, IReadOnlyList<WorkflowRun> Runs)> CollectRepoAsync(
+        GitHubRepoDto repo, CancellationTokenSource rateLimitCts, CancellationToken rateLimitToken, CancellationToken ct)
+    {
+        try
+        {
+            var workflows = await inventory.GetWorkflowsAsync(repo.Name, rateLimitToken);
+            var snaps = new List<WorkflowSnapshot>();
+            var runs = new List<WorkflowRun>();
+            foreach (var wf in workflows)
+            {
+                var wfRuns = await client.GetRecentRunsAsync(repo.Name, wf, rateLimitToken);
+                runs.AddRange(wfRuns);
+                var latest = wfRuns.Count > 0 ? wfRuns[0] : null;
+                snaps.Add(new WorkflowSnapshot(wf.Name, GitHubOrgClient.FileName(wf.Path),
+                    GitHubOrgClient.ToSignalState(latest), latest));
+            }
+            // PRs are supplementary: listing them needs the "Pull requests: Read"
+            // PAT scope, which workflow/run reads (Actions: Read) do not. A missing
+            // PR scope must NOT degrade the repo; rate limits propagate and abort the batch.
+            var pullRequests = await TryListOpenPullRequestsAsync(repo.Name, rateLimitToken);
+            _ = metrics.TryGet(repo.Name, out var repoMetrics);
+            _ = deploys.TryGet(repo.Name, out var repoDeploys);
+            _ = packages.TryGet(repo.Name, out var repoPackages);
+            return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, snaps, pullRequests, repoMetrics, repoDeploys, repoPackages), false, runs);
+        }
+        catch (GitHubRateLimitException ex)
+        {
+            // Cancel sibling fetches so they don't exhaust the remaining quota.
+            logger.LogWarning(ex, "GitHub rate limit reached for {Repo}; aborting batch.", repo.Name);
+            await rateLimitCts.CancelAsync();
+            return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, [], []), true, []);
+        }
+        // Treat transport/deserialization failures (and HTTP timeouts, which surface
+        // as TaskCanceledException with the request token still un-cancelled) as a
+        // degraded repo. Let genuine host-shutdown cancellation (ct triggered) propagate.
+        catch (Exception ex) when (
+            ex is HttpRequestException or JsonException
+            || ex is OperationCanceledException && !ct.IsCancellationRequested)
+        {
+            logger.LogWarning(ex, "Failed to collect signals for {Repo}; preserving last-known-good.", repo.Name);
+            return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, null, null), true, []);
+        }
+    }
+
+    // Best-effort: a missing "Pull requests: Read" scope (403) must not degrade the repo.
+    private async Task<IReadOnlyList<PullRequest>> TryListOpenPullRequestsAsync(
+        string repo, CancellationToken rateLimitToken)
+    {
+        try
+        {
+            return await client.ListOpenPullRequestsAsync(repo, rateLimitToken);
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Unauthorized)
+        {
+            logger.LogWarning(ex, "Failed to list open PRs for {Repo} due to permissions; showing none (check the PAT's Pull requests: Read scope).", repo);
+            return [];
+        }
+    }
+
+    public static IReadOnlyList<RepositorySnapshot> MergeWithPrevious(
+        IReadOnlyList<(RepositorySnapshot Snapshot, bool FetchFailed)> results, DashboardSnapshot? previous)
+    {
+        if (previous is null)
+        {
+            return results.Select(r => r.Snapshot).ToList();
+        }
+
+        var prior = previous.Repositories.ToDictionary(r => r.Name, StringComparer.OrdinalIgnoreCase);
+        return results
+            .Select(r => r.FetchFailed && prior.TryGetValue(r.Snapshot.Name, out var p) ? p : r.Snapshot)
+            .ToList();
+    }
+
+    // On cold start the enrichment caches (metrics/deploys/packages) are empty until the
+    // slow-cadence workers complete their first run (up to 300s). Without this, the first
+    // refresh would publish null/empty enrichment and overwrite the restored snapshot's good
+    // data. Inherit from the previous snapshot wherever the current value is missing.
+    public static IReadOnlyList<RepositorySnapshot> InheritEnrichment(
+        IReadOnlyList<RepositorySnapshot> current, DashboardSnapshot? previous, PerRepoCache<MergedPullRequest>? mergedPrs = null)
+    {
+        mergedPrs ??= new PerRepoCache<MergedPullRequest>();
+        if (previous is null)
+        {
+            var hasAnyInCache = current.Any(r => mergedPrs.TryGet(r.Name, out _));
+            if (!hasAnyInCache)
+            {
+                return current;
+            }
+
+            return current.Select(r =>
+            {
+                _ = mergedPrs.TryGet(r.Name, out var m);
+                return r with { LastMergedPr = m };
+            }).ToList();
+        }
+
+        var prior = previous.Repositories.ToDictionary(r => r.Name, StringComparer.OrdinalIgnoreCase);
+        return current.Select(r =>
+        {
+            prior.TryGetValue(r.Name, out var p);
+
+            _ = mergedPrs.TryGet(r.Name, out var m);
+            var inheritedLastMerged = m ?? p?.LastMergedPr;
+
+            var inheritedMetrics = r.Metrics ?? p?.Metrics;
+            var inheritedDeploys = r.Deploys ?? p?.Deploys;
+            var inheritedPackages = r.Packages ?? p?.Packages;
+
+            return r with
+            {
+                Metrics = inheritedMetrics,
+                Deploys = inheritedDeploys,
+                Packages = inheritedPackages,
+                LastMergedPr = inheritedLastMerged
+            };
+        }).ToList();
+    }
+
+    public static bool ShouldPersist(bool anyFetchFailed, bool hasPrevious) => !anyFetchFailed || hasPrevious;
+
+    public static MergedPullRequest? PickLatestMerged(IEnumerable<MergedPullRequest?> candidates) =>
+        candidates.Where(m => m is not null).OrderByDescending(m => m!.MergedAt).FirstOrDefault();
+
+    public static IReadOnlyList<CiTrendBucket> BuildCiTrendForRefresh(
+        IReadOnlyList<(RepositorySnapshot Snapshot, bool FetchFailed, IReadOnlyList<WorkflowRun> Runs)> results,
+        Instant now,
+        DashboardSnapshot? previous)
+    {
+        var fresh = BuildCiTrend(results.SelectMany(r => r.Runs), now);
+        if (previous?.CiTrend is null)
+        {
+            return fresh;
+        }
+
+        return MergeTrends(previous.CiTrend, fresh);
+    }
+
+    // Backfill a degraded refresh from the previous snapshot, aligning buckets by
+    // their clock-hour start. Both trends are hour-anchored (see BuildCiTrend), so
+    // two buckets with the same BucketStart are the same wall-clock hour — no
+    // hour-shift arithmetic or rounding is needed, and the alignment cannot drift
+    // when refreshes fall at different points within an hour. A fresh NoData bucket
+    // inherits the previous state for the same hour — but only from a bucket that
+    // was itself freshly observed, never an already-backfilled one. That bounds a
+    // once-real (e.g. Failing) state to a single carry-over hop, so a sustained
+    // outage cannot chain it forward indefinitely across repeated degraded refreshes.
+    public static IReadOnlyList<CiTrendBucket> MergeTrends(
+        IReadOnlyList<CiTrendBucket> previous,
+        IReadOnlyList<CiTrendBucket> fresh)
+    {
+        var priorByHour = new Dictionary<Instant, CiTrendBucket>(previous.Count);
+        foreach (var bucket in previous)
+        {
+            priorByHour[bucket.BucketStart] = bucket;
+        }
+
+        var result = new List<CiTrendBucket>(fresh.Count);
+        foreach (var current in fresh)
+        {
+            if (current.State != CiTrendState.NoData)
+            {
+                result.Add(current);
+                continue;
+            }
+
+            if (priorByHour.TryGetValue(current.BucketStart, out var prior)
+                && prior.State != CiTrendState.NoData && !prior.IsBackfilled)
+            {
+                result.Add(new CiTrendBucket(current.BucketStart, prior.State) { IsBackfilled = true });
+            }
+            else
+            {
+                result.Add(current);
+            }
+        }
+        return result;
+    }
+
+    public static async Task PersistAndPublishAsync(
+        IDashboardSnapshotStore store,
+        DashboardSnapshotState state,
+        DashboardSnapshot snapshot,
+        DashboardSnapshot publicSnapshot,
+        bool persist,
+        ILogger logger,
+        CancellationToken ct)
+    {
+        if (persist)
+        {
+            try
+            {
+                await store.SaveAsync(snapshot, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                logger.LogError(ex, "Failed to persist dashboard snapshot; continuing with live in-memory state.");
+            }
+        }
+        else
+        {
+            logger.LogWarning("Dashboard refresh degraded with no prior snapshot; serving partial data without persisting.");
+        }
+
+        state.Update(snapshot, publicSnapshot);
+    }
+
+    // 24 hourly buckets, oldest first, aligned to UTC clock-hour boundaries. Each
+    // bucket shows only what ran in that hour: Failing if any run failed, Passing
+    // if any ran without failure, NoData if no runs landed in that window.
+    //
+    // Buckets are anchored to the top of the hour at or after `now` — not to `now`
+    // itself — so a run's bucket is stable across refreshes within the same hour
+    // instead of drifting between two adjacent buckets as `now` advances toward the
+    // next hour. The newest bucket, index 23, spans the single hour ending at the
+    // anchor; when `now` falls exactly on the hour the anchor equals `now`. Runs are
+    // binned by their own clock hour, so a run exactly on an hour boundary lands in
+    // the bucket it belongs to. Quiet hours between runs show NoData rather than
+    // carrying the prior state — use MergeTrends to backfill from a previous snapshot
+    // when a refresh is degraded.
+    public static IReadOnlyList<CiTrendBucket> BuildCiTrend(IEnumerable<WorkflowRun> runs, Instant now)
+    {
+        const int buckets = 24;
+        const long secondsPerHour = 3600;
+
+        // The clock-hour boundary at or after `now`, as a whole-hour index since the
+        // epoch. Rounding up keeps the in-progress hour visible in the newest bucket.
+        var nowSeconds = now.ToUnixTimeSeconds();
+        var remainder = (nowSeconds % secondsPerHour + secondsPerHour) % secondsPerHour;
+        var anchorHour = (nowSeconds - remainder) / secondsPerHour + (remainder == 0 ? 0 : 1);
+
+        var anyRun = new bool[buckets];
+        var anyFail = new bool[buckets];
+        foreach (var run in runs)
+        {
+            if (run.UpdatedAt > now)
+            {
+                continue;           // future-dated (clock skew): drop
+            }
+
+            var runHour = run.UpdatedAt.ToUnixTimeSeconds() / secondsPerHour;
+            // A run in the anchor's preceding hour lands in the newest bucket, index
+            // 23; each older hour steps the index down by one. Kept as a long until
+            // the range check so a far-past timestamp cannot overflow into range.
+            var idx = runHour - anchorHour + buckets;
+            if (idx is < 0 or >= buckets)
+            {
+                continue;         // outside the 24h window: drop
+            }
+
+            anyRun[idx] = true;
+            if (GitHubOrgClient.ToSignalState(run.Status, run.Conclusion) == SignalState.Failure)
+            {
+                anyFail[idx] = true;
+            }
+        }
+
+        var result = new List<CiTrendBucket>(buckets);
+        for (var i = 0; i < buckets; i++)
+        {
+            var runState = anyFail[i] ? CiTrendState.Failing : CiTrendState.Passing;
+            var state = anyRun[i] ? runState : CiTrendState.NoData;
+            var bucketStart = Instant.FromUnixTimeSeconds((anchorHour - (buckets - i)) * secondsPerHour);
+            result.Add(new CiTrendBucket(bucketStart, state));
+        }
+        return result;
+    }
+
+    public static IReadOnlyList<SummaryCount> BuildSummary(IReadOnlyList<RepositorySnapshot> repos)
+    {
+        var workflows = repos.SelectMany(r => r.Workflows).ToList();
+        return
+        [
+            new SummaryCount("repos", repos.Count),
+            new SummaryCount("workflows", workflows.Count),
+            new SummaryCount("failing", workflows.Count(w => w.State == SignalState.Failure)),
+            new SummaryCount("running", workflows.Count(w => w.State == SignalState.Running)),
+            new SummaryCount("no-ci", repos.Count(r => r.Workflows.Count == 0)),
+            // Null-tolerant: a snapshot restored from a pre-PR on-disk file
+            // deserializes PullRequests to null and can be reintroduced via
+            // MergeWithPrevious for a degraded repo. Metrics is already guarded below.
+            new SummaryCount("open-prs", repos.Sum(r => r.PullRequests is null ? 0 : r.PullRequests.Count)),
+            new SummaryCount("nloc-fixportal", repos.Where(r => r.Metrics is not null && !r.Name.Contains("quickfixn", StringComparison.OrdinalIgnoreCase)).Sum(r => r.Metrics!.Nloc)),
+            new SummaryCount("nloc-quickfixn", repos.Where(r => r.Metrics is not null && r.Name.Contains("quickfixn", StringComparison.OrdinalIgnoreCase)).Sum(r => r.Metrics!.Nloc)),
+            new SummaryCount("deploys", repos.Sum(r => r.Deploys is null ? 0 : r.Deploys.Count)),
+            new SummaryCount("packages", repos.Sum(r => r.Packages is null ? 0 : r.Packages.Count)),
+            new SummaryCount("deploys-failing", repos.Sum(r => r.Deploys is null ? 0 : r.Deploys.Count(d => d.State == SignalState.Failure))),
+            new SummaryCount("deploys-running", repos.Sum(r => r.Deploys is null ? 0 : r.Deploys.Count(d => d.State == SignalState.Running))),
+            new SummaryCount("packages-failing", repos.Sum(r => r.Packages is null ? 0 : r.Packages.Count(d => d.State == SignalState.Failure))),
+        ];
+    }
+
+}

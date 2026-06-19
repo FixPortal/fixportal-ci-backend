@@ -1,0 +1,51 @@
+# Contributing
+
+Thanks for your interest in improving this project. It is maintained on a
+best-effort basis; issues and pull requests are welcome.
+
+## Ground rules
+
+- Be civil. This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+- By contributing, you agree your contributions are licensed under the
+  [Apache License 2.0](LICENSE), the same licence as the project.
+- Open an issue before a large change so we can agree the approach before you
+  invest the time.
+
+## Getting set up
+
+Prerequisites: **.NET 10 SDK** and a fine-grained read-only GitHub PAT (see
+[operator-handoff.md](operator-handoff.md#github) for the exact scopes).
+
+```bash
+git clone https://github.com/FixPortal/fixportal-ci-backend.git
+cd fixportal-ci-backend/src/FixPortal.Ci.Backend.Api
+dotnet user-secrets init
+dotnet user-secrets set "GitHub:Token" "<your-read-only-PAT>"
+dotnet user-secrets set "GitHub:Owner" "<your-org>"
+dotnet run           # API on http://localhost:5049
+```
+
+## Before you open a PR
+
+Run the full local check — CI runs the same and must pass before a merge:
+
+```bash
+dotnet build
+dotnet test          # xUnit
+```
+
+## Branches and commits
+
+- Branch from `main` using `feat/<scope>`, `fix/<scope>`, or `chore/<scope>`.
+- Write clear, present-tense commit subjects.
+- PRs merge via **rebase** — no merge commits, no squash. Keep your branch
+  rebased on `main`.
+
+## What makes a good PR
+
+- One focused change per PR.
+- Tests for new behaviour or a bug fix that would have caught the regression.
+- Keep the service **read-only**: it must never request write scopes or mutate
+  anything on GitHub.
+- Changes to the `DashboardSnapshot` JSON shape are a published contract shared
+  with the frontend — call them out explicitly in the PR description.

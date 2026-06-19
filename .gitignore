@@ -1,0 +1,23 @@
+# Superpowers scratch
+.superpowers/
+
+# .NET build output
+[Bb]in/
+[Oo]bj/
+*.user
+
+# Test + mutation-testing output
+TestResults/
+StrykerOutput/
+
+# Dashboard snapshot persistence (runtime state, never source)
+App_Data/
+
+# Dogfood / QA audit output (screenshots, videos, reports — local only)
+dogfood-output/
+
+.vs/
+
+# Knowledge-graph artifacts (generated — graphify agent graph, understand-anything human graph)
+graphify-out/
+.understand-anything/

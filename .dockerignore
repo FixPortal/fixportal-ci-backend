@@ -1,0 +1,13 @@
+# Keep the build context small and reproducible — let the image build do the restores.
+**/bin
+**/obj
+**/node_modules
+**/dist
+**/TestResults
+**/StrykerOutput
+.git
+.github
+.vs
+.vscode
+*.user
+docs

@@ -1,0 +1,81 @@
+version: 2
+
+# Private FixPortal GitHub Packages NuGet feed (mirrors nuget.config). Without
+# this, Dependabot cannot authenticate to the feed and silently skips updates
+# for the FixPortal.* packages (e.g. FixPortal.CodeStyle). GITHUB_PACKAGES_TOKEN
+# must be added as a Dependabot secret (Settings -> Secrets -> Dependabot), not
+# only an Actions secret — Dependabot does not see Actions secrets.
+registries:
+  fixportal-nuget:
+    type: nuget-feed
+    url: https://nuget.pkg.github.com/FixPortal/index.json
+    username: FixPortal
+    password: ${{secrets.GITHUB_PACKAGES_TOKEN}}
+
+updates:
+  - package-ecosystem: nuget
+    directory: /
+    registries:
+      - fixportal-nuget
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/London
+    open-pull-requests-limit: 10
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      microsoft-extensions:
+        patterns:
+          - "Microsoft.Extensions.*"
+      aspnetcore:
+        patterns:
+          - "Microsoft.AspNetCore.*"
+      ef-core:
+        patterns:
+          - "Microsoft.EntityFrameworkCore"
+          - "Microsoft.EntityFrameworkCore.*"
+      xunit:
+        patterns:
+          - "xunit"
+          - "xunit.*"
+          - "xunit.v3"
+          - "xunit.v3.*"
+      testing:
+        patterns:
+          - "NSubstitute"
+          - "NSubstitute.*"
+          - "AwesomeAssertions"
+          - "AwesomeAssertions.*"
+          - "Microsoft.NET.Test.Sdk"
+          - "coverlet.*"
+      nodatime:
+        patterns:
+          - "NodaTime"
+          - "NodaTime.*"
+      serilog:
+        patterns:
+          - "Serilog"
+          - "Serilog.*"
+      azure-sdk:
+        patterns:
+          - "Azure.*"
+          - "Microsoft.Azure.*"
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: Europe/London
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns:
+          - "*"

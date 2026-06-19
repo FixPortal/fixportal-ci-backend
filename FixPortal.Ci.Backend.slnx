@@ -1,0 +1,13 @@
+<Solution>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Folder Name="/src/">
+    <Project Path="src/FixPortal.Ci.Backend.Api/FixPortal.Ci.Backend.Api.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/FixPortal.Ci.Backend.Api.Tests/FixPortal.Ci.Backend.Api.Tests.csproj" />
+  </Folder>
+</Solution>

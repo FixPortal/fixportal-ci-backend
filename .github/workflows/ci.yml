@@ -1,0 +1,219 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# Cancel redundant in-progress runs on branches/PRs, but NEVER on main: a second
+# push to main while a prior run's deploy is mid-flight must not cancel that run
+# (workflow-level cancellation overrides the deploy job's own group). main runs
+# therefore run to completion; the deploy job additionally guards itself.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  backend:
+    name: Backend (.NET)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Lint workflows (actionlint)
+        uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8 # v2
+        with:
+          shellcheck: true
+
+      - name: Set up .NET
+        uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore FixPortal.Ci.Backend.slnx
+        env:
+          GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build
+        run: dotnet build FixPortal.Ci.Backend.slnx --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory ./TestResults
+
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: test-results
+          path: ./TestResults/*.trx
+          if-no-files-found: ignore
+
+  publish:
+    name: Publish image (GHCR)
+    needs: [backend]
+    # main-only, mirrors the deploy gate so the public image tracks main.
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Setup Blacksmith Builder
+        uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@650006c6eb7dba73a995cc03b0b2d7f5ca915bee # v4.2.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push to GHCR
+        uses: useblacksmith/build-push-action@fb9e3e6a9299c78462bfadd0d93352c316adc9b8 # v2
+        with:
+          context: .
+          # Pin to the deploy target architecture — runner may be ARM64.
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/fixportal/fixportal-ci-backend:latest
+            ghcr.io/fixportal/fixportal-ci-backend:sha-${{ github.sha }}
+          # BuildKit secret (not build-args) so the token is not baked into image history.
+          secrets: |
+            github_packages_token=${{ secrets.GITHUB_TOKEN }}
+
+  deploy:
+    name: Deploy (Azure Container Apps)
+    needs: [publish]
+    # main-only: the explicit ref check also blocks workflow_dispatch from a feature branch.
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Deploy must never be cancelled mid-flight; keep this job-level so PR/feature
+    # branch runs above can still cancel redundant CI without killing a live deploy.
+    concurrency:
+      group: deploy-${{ github.ref }}
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+      packages: read
+    env:
+      # Deployer-specific targets come from repository Secrets (Settings → Secrets
+      # and variables → Actions) so no infra identifiers live in source AND they
+      # are masked in the public Actions logs. The public custom domain is a plain
+      # Variable. See operator-handoff.md for the full list and how to set them.
+      AZURE_RESOURCE_GROUP: ${{ secrets.AZURE_RESOURCE_GROUP }}
+      ACR_NAME: ${{ secrets.ACR_NAME }}
+      ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
+      IMAGE_REPO: fixportal-ci-backend
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Lint workflows (actionlint)
+        uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8 # v2
+        with:
+          shellcheck: true
+
+      - name: Azure login (OIDC)
+        uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Import image from GHCR into ACR
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          # Import the image already built and pushed by the publish job instead of
+          # rebuilding from source, guaranteeing GHCR and ACR carry identical digests.
+          az acr import \
+            --name "$ACR_NAME" \
+            --source "ghcr.io/fixportal/fixportal-ci-backend:sha-$IMAGE_TAG" \
+            --image "$IMAGE_REPO:$IMAGE_TAG" \
+            --username "${{ github.actor }}" \
+            --password "${{ secrets.GITHUB_TOKEN }}" \
+            --force
+
+      - name: Deploy container app (Bicep)
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          DASHBOARD_GH_TOKEN: ${{ secrets.DASHBOARD_GH_TOKEN }}
+          CI_ADMIN_KEY: ${{ secrets.CI_ADMIN_KEY }}
+          ACA_ENVIRONMENT_ID: ${{ secrets.ACA_ENVIRONMENT_ID }}
+          PULL_IDENTITY_ID: ${{ secrets.PULL_IDENTITY_ID }}
+          CUSTOM_DOMAIN_CERT_ID: ${{ secrets.CUSTOM_DOMAIN_CERT_ID }}
+          CUSTOM_DOMAIN_NAME: ${{ vars.CUSTOM_DOMAIN_NAME }}
+          # JSON array string, e.g. ["https://www.fixportal.org"]. Passed via env (not
+          # inlined into the command) so the shell doesn't strip the inner quotes. A
+          # Secret (not a Variable) for consistency with the rest of the deploy config.
+          CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
+        run: |
+          image="$ACR_LOGIN_SERVER/$IMAGE_REPO:$IMAGE_TAG"
+
+          if [ -n "$CUSTOM_DOMAIN_NAME" ] && [ -z "$CUSTOM_DOMAIN_CERT_ID" ]; then
+            echo "CUSTOM_DOMAIN_CERT_ID must be set when CUSTOM_DOMAIN_NAME is set." >&2
+            exit 1
+          fi
+
+          if [ -n "$CUSTOM_DOMAIN_CERT_ID" ] && [ -z "$CUSTOM_DOMAIN_NAME" ]; then
+            echo "CUSTOM_DOMAIN_NAME must be set when CUSTOM_DOMAIN_CERT_ID is set." >&2
+            exit 1
+          fi
+
+          deploy_args=(
+            --resource-group "$AZURE_RESOURCE_GROUP"
+            --template-file deploy/bicep/main.bicep
+            --parameters
+            image="$image"
+            gitHubOwner=FixPortal
+            gitHubToken="$DASHBOARD_GH_TOKEN"
+            adminKey="$CI_ADMIN_KEY"
+            managedEnvironmentId="$ACA_ENVIRONMENT_ID"
+            acrLoginServer="$ACR_LOGIN_SERVER"
+            pullIdentityId="$PULL_IDENTITY_ID"
+          )
+
+          if [ -n "$CUSTOM_DOMAIN_NAME" ]; then
+            deploy_args+=(customDomainName="$CUSTOM_DOMAIN_NAME")
+          fi
+
+          if [ -n "$CUSTOM_DOMAIN_CERT_ID" ]; then
+            deploy_args+=(customDomainCertificateId="$CUSTOM_DOMAIN_CERT_ID")
+          fi
+
+          if [ -n "$CORS_ALLOWED_ORIGINS" ]; then
+            deploy_args+=(corsAllowedOrigins="$CORS_ALLOWED_ORIGINS")
+          fi
+
+          fqdn=$(az deployment group create "${deploy_args[@]}" --query "properties.outputs.fqdn.value" -o tsv)
+          if [ -z "$fqdn" ]; then
+            echo "::error::FQDN output from deployment is empty; aborting health probe."
+            exit 1
+          fi
+          echo "FQDN=$fqdn" >> "$GITHUB_ENV"
+
+      - name: Health probe
+        run: |
+          # Probe the API snapshot endpoint directly — the root path is a redirect
+          # and would pass even if the backend is down.
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://$FQDN/api/dashboard/snapshot"); then :; else code="000"; fi
+            echo "Attempt $attempt: HTTP $code"
+            if [ "$code" = "200" ] || [ "$code" = "204" ]; then
+              echo "Dashboard is serving at https://$FQDN/"
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::error::Dashboard did not return a healthy status after deploy"
+          exit 1
