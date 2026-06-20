@@ -7,6 +7,9 @@ stack: .NET 10 · ASP.NET Core minimal API · NodaTime
 license: Apache-2.0
 ---
 
+![Build](https://github.com/FixPortal/fixportal-ci-backend/actions/workflows/ci.yml/badge.svg)
+![License](https://img.shields.io/github/license/FixPortal/fixportal-ci-backend)
+
 # FixPortal CI Dashboard — Backend API
 
 > The backend for a read-only, **org-wide** CI/CD status board. Point it at a
@@ -76,6 +79,14 @@ graph LR
 | Metrics | Lizard (`1.22.2`), run against shallow clones |
 | Host | Azure Container Apps (single always-on replica) |
 | CI | GitHub Actions — .NET build/test, Stryker mutation testing, CodeQL, Dependabot |
+
+## Compatibility
+
+| Runtime | Support |
+|---|---|
+| .NET 10 | Required — no down-level targets |
+| Docker (any OCI host) | Supported via multi-stage `Dockerfile` (non-root, port 8080) |
+| Azure Container Apps | Primary deployment target |
 
 ## Quick start — Docker Compose (full stack)
 
@@ -147,6 +158,54 @@ are required.
 dotnet test FixPortal.Ci.Backend.sln          # xUnit
 ```
 
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Snapshot returns stale data after a workflow run | Refresh worker polls on a 60 s cadence; run completed between polls | Wait up to 60 s, or restart to force an immediate poll |
+| Snapshot is empty on startup | First poll not yet complete | Allow ~5 s; endpoint returns `200` with empty `repos` array until first poll finishes |
+| `MetricsEnrichmentWorker` logs `git clone` errors | PAT lacks **Contents** read permission | Re-issue PAT with Contents (read) and update `GitHub__Token` |
+| PRs not appearing | PAT lacks **Pull requests** read permission | Re-issue PAT with Pull requests (read) and update `GitHub__Token` |
+| CORS errors in the browser | Board UI origin not in `AllowedOrigins` | Add origin to `Dashboard:AllowedOrigins` in `appsettings.json` or via `Dashboard__AllowedOrigins__0` env var |
+| `401 Unauthorized` from GitHub API | Token expired or revoked | Generate a new fine-grained PAT and update the secret or env var |
+
+## Contributing
+
+PRs welcome. Branch from `main`; CI runs build, xUnit tests, Stryker mutation
+tests, and CodeQL on every PR.
+
+```
+dotnet build FixPortal.Ci.Backend.sln
+dotnet test FixPortal.Ci.Backend.sln
+```
+
+Merge style is **rebase-merge** — squash and merge commits are not used.
+
 ## License
 
 [Apache-2.0](LICENSE) © 2026 Chris Dowling.
+
+## Appendix
+
+### Container images
+
+Both images publish to GHCR on every push to `main`, tagged `:latest` and the
+short commit SHA.
+
+| Image | Pull command |
+|---|---|
+| Backend API | `docker pull ghcr.io/fixportal/fixportal-ci-backend:latest` |
+| Board UI | `docker pull ghcr.io/fixportal/fixportal-ci-frontend:latest` |
+
+### Related repositories
+
+| Repository | Purpose |
+|---|---|
+| [`FixPortal/fixportal-ci-frontend`](https://github.com/FixPortal/fixportal-ci-frontend) | Open-source board UI — reference snapshot consumer |
+
+### Key endpoints
+
+| Endpoint | Description |
+|---|---|
+| `GET /api/dashboard/snapshot` | Full org snapshot — workflows, PRs, metrics, job lanes |
+| `GET /*` (non-API) | 301 redirect to `https://www.fixportal.org/ci` |
