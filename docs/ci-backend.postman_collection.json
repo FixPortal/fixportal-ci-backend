@@ -1,0 +1,78 @@
+{
+  "info": {
+    "name": "CI Backend API",
+    "description": "API endpoints for the FixPortal CI Dashboard Backend service.\n\nSetup:\n1. Set `baseUrl` to `http://localhost:5000/api` (local) or your deployed production backend URL.\n2. Set `adminKey` to the value of `Admin:AdminKey` configuration.\n3. The public snapshot is unauthenticated; the admin snapshot requires the `X-Admin-Key` header.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:5000/api",
+      "type": "string",
+      "description": "Base URL of the CI Backend API (including /api)."
+    },
+    {
+      "key": "adminKey",
+      "value": "",
+      "type": "string",
+      "description": "Shared key for administrative endpoints."
+    }
+  ],
+  "item": [
+    {
+      "name": "Dashboard",
+      "item": [
+        {
+          "name": "Get Dashboard Snapshot",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/dashboard/snapshot",
+              "host": ["{{baseUrl}}"],
+              "path": ["dashboard", "snapshot"]
+            },
+            "description": "Get the public dashboard snapshot containing CI project status. Private repositories are automatically stripped unless explicitly exposed to guests in configuration."
+          }
+        },
+        {
+          "name": "Get Dashboard Snapshot (Admin)",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Admin-Key",
+                "value": "{{adminKey}}",
+                "type": "text"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/dashboard/snapshot/admin",
+              "host": ["{{baseUrl}}"],
+              "path": ["dashboard", "snapshot", "admin"]
+            },
+            "description": "Get the full dashboard snapshot including private repositories. Protected by a shared key passed as X-Admin-Key."
+          }
+        }
+      ]
+    },
+    {
+      "name": "Health",
+      "item": [
+        {
+          "name": "Get Health Status",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/health",
+              "host": ["{{baseUrl}}"],
+              "path": ["health"]
+            },
+            "description": "Get backend service health status, including GitHub API credential check."
+          }
+        }
+      ]
+    }
+  ]
+}
