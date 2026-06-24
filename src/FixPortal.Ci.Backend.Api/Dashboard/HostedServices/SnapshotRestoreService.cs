@@ -21,7 +21,9 @@ public sealed class SnapshotRestoreService(
             var restored = await store.LoadAsync(cancellationToken);
             if (restored is not null)
             {
-                state.Update(restored, DashboardSnapshotState.ComputePublicSnapshot(restored));
+                // Prefer the persisted public trend (accurate, public-only); fall
+                // back to the lossy reclassification for pre-PublicCiTrend snapshots.
+                state.Update(restored, DashboardSnapshotState.ComputePublicSnapshot(restored, restored.PublicCiTrend));
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

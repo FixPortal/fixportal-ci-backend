@@ -43,8 +43,6 @@ public sealed class DashboardRefreshService(
         var lastMerged = PickLatestMerged(repositories.Select(r => r.LastMergedPr));
         var now = clock.GetCurrentInstant();
         var ciTrend = BuildCiTrendForRefresh(results, now, previous);
-        var snapshot = new DashboardSnapshot(
-            now, gitHub.Value.Owner, repositories, BuildSummary(repositories), lastMerged, ciTrend);
 
         // Compute precise public snapshot (which separates public trend and public last merged PR)
         var publicRepos = repositories.Where(r => !r.Private).ToList();
@@ -53,6 +51,12 @@ public sealed class DashboardRefreshService(
         var publicCiTrend = BuildCiTrendForRefresh(publicResults, now, state.Public);
         var publicSnapshot = new DashboardSnapshot(
             now, gitHub.Value.Owner, publicRepos, BuildSummary(publicRepos), publicLastMerged, publicCiTrend);
+
+        // Persist the public trend on the full snapshot so a cold-start restore
+        // surfaces the accurate public trend rather than the lossy reclassification.
+        var snapshot = new DashboardSnapshot(
+            now, gitHub.Value.Owner, repositories, BuildSummary(repositories), lastMerged, ciTrend,
+            PublicCiTrend: publicCiTrend);
 
         await PersistAndPublishAsync(
             store,

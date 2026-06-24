@@ -123,7 +123,8 @@ public sealed class GitHubOrgClient(
         while (true)
         {
             var batch = await SendAsync<List<GitHubPullDto>>(
-                $"repos/{_gitHub.Owner}/{repo}/pulls?state=open&per_page=100&page={page}", ct) ?? [];
+                $"repos/{_gitHub.Owner}/{repo}/pulls?state=open&per_page=100&page={page}", ct,
+                affectsAuthState: false) ?? [];
             all.AddRange(batch);
             if (batch.Count < 100)
             {
@@ -162,7 +163,8 @@ public sealed class GitHubOrgClient(
             }
 
             var response = await SendAsync<GitHubSearchResponse>(
-                $"search/issues?q={q}&sort=updated&order=desc&per_page={perPage}&page={page}", ct);
+                $"search/issues?q={q}&sort=updated&order=desc&per_page={perPage}&page={page}", ct,
+                affectsAuthState: false);
             var items = response?.Items ?? [];
             if (items.Count == 0)
             {
@@ -404,7 +406,15 @@ public sealed class GitHubOrgClient(
 
     public static string FileName(string path) => Path.GetFileName(path);
 
-    private async Task<T?> SendAsync<T>(string url, CancellationToken ct)
+    // affectsAuthState gates whether this request drives the global auth-error
+    // health signal. Primary endpoints (repos/workflows/runs) set it on a 401/403
+    // and clear it on success, so /api/health reports a genuinely broken token.
+    // Best-effort PR endpoints pass false: a token missing only the
+    // "Pull requests: Read" scope 403s there, and treating that as a global auth
+    // error flipped /api/health to Degraded until the next primary 200 cleared it
+    // — a flap. Such a request still throws GitHubAuthException (its caller swallows
+    // it and shows no PRs); it just never touches the shared health state.
+    private async Task<T?> SendAsync<T>(string url, CancellationToken ct, bool affectsAuthState = true)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
         request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
@@ -425,25 +435,37 @@ public sealed class GitHubOrgClient(
 
         if (response.StatusCode == HttpStatusCode.NotModified && cached is not null)
         {
-            state?.SetAuthError(null);
+            if (affectsAuthState)
+            {
+                state?.SetAuthError(null);
+            }
             return (T?)cached.Payload;
         }
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
-            state?.SetAuthError(null);
+            if (affectsAuthState)
+            {
+                state?.SetAuthError(null);
+            }
             return default;
         }
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
             var err = $"GitHub authentication failed (HTTP 401 Unauthorized) for {url}. Verify the configured PAT token.";
-            state?.SetAuthError(err);
+            if (affectsAuthState)
+            {
+                state?.SetAuthError(err);
+            }
             throw new GitHubAuthException(err);
         }
         if (response.StatusCode == HttpStatusCode.Forbidden && !IsRateLimited(response))
         {
             var err = $"GitHub authorization failed (HTTP 403 Forbidden) for {url}. Verify SSO or scopes.";
-            state?.SetAuthError(err);
+            if (affectsAuthState)
+            {
+                state?.SetAuthError(err);
+            }
             throw new GitHubAuthException(err);
         }
 
@@ -462,7 +484,10 @@ public sealed class GitHubOrgClient(
             _etags.Set(url, etag, value);
         }
 
-        state?.SetAuthError(null);
+        if (affectsAuthState)
+        {
+            state?.SetAuthError(null);
+        }
         return value;
     }
 

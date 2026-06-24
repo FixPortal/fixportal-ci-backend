@@ -175,14 +175,32 @@ jobs:
             exit 1
           fi
 
+          # Keep the @secure() secrets (gitHubToken, adminKey) out of the az
+          # argv — a command-line value is visible in the process table to
+          # anything sharing the runner. jq writes them into a parameters file
+          # with proper JSON escaping (a raw heredoc would break on a secret
+          # containing a quote or backslash); the trap removes it even on failure.
+          params_file="$(mktemp)"
+          trap 'rm -f "$params_file"' EXIT
+          jq -n \
+            --arg gitHubToken "$DASHBOARD_GH_TOKEN" \
+            --arg adminKey "$CI_ADMIN_KEY" \
+            '{
+              "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+              "contentVersion": "1.0.0.0",
+              "parameters": {
+                "gitHubToken": { "value": $gitHubToken },
+                "adminKey": { "value": $adminKey }
+              }
+            }' > "$params_file"
+
           deploy_args=(
             --resource-group "$AZURE_RESOURCE_GROUP"
             --template-file deploy/bicep/main.bicep
+            --parameters "@$params_file"
             --parameters
             image="$image"
             gitHubOwner=FixPortal
-            gitHubToken="$DASHBOARD_GH_TOKEN"
-            adminKey="$CI_ADMIN_KEY"
             managedEnvironmentId="$ACA_ENVIRONMENT_ID"
             acrLoginServer="$ACR_LOGIN_SERVER"
             pullIdentityId="$PULL_IDENTITY_ID"
