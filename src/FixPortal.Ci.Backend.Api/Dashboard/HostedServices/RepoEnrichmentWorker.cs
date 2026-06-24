@@ -57,13 +57,21 @@ public abstract class RepoEnrichmentWorker<T>(
         while (!firstSweepSuccessful && !stoppingToken.IsCancellationRequested)
         {
             var success = await SweepSafelyAsync(stoppingToken);
-            if (success && !cache.IsEmpty)
+            if (success)
             {
+                // A successful sweep ends cold-start even if it produced no cached
+                // values: an org with no matching repos legitimately yields an empty
+                // cache, and retrying every 5 minutes forever would never converge.
+                // The steady-state cadence picks up data once any repo emits it.
                 firstSweepSuccessful = true;
+                if (cache.IsEmpty)
+                {
+                    logger.LogInformation("{Name} cold-start sweep completed but produced no cached values (no matching repos?); switching to steady-state cadence.", Name);
+                }
             }
             else
             {
-                logger.LogWarning("{Name} cold-start sweep failed or cache remains empty; retrying in 5 minutes.", Name);
+                logger.LogWarning("{Name} cold-start sweep failed; retrying in 5 minutes.", Name);
                 try
                 {
                     await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
@@ -125,8 +133,11 @@ public abstract class RepoEnrichmentWorker<T>(
             {
                 throw;
             }
-            catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException)
+            catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or GitHubAuthException)
             {
+                // A per-repo auth/authz failure (e.g. the PAT lacks access to this one
+                // repo) skips only this repo's enrichment — it must not abort the sweep
+                // and leave every other repo's signal stale for this cycle.
                 logger.LogWarning(ex, "Failed to collect enrichment for {Repo} during {Name} sweep; keeping prior cached value.", repo.Name, Name);
             }
         }

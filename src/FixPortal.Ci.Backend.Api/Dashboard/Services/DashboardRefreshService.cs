@@ -108,7 +108,8 @@ public sealed class DashboardRefreshService(
             }
             // PRs are supplementary: listing them needs the "Pull requests: Read"
             // PAT scope, which workflow/run reads (Actions: Read) do not. A missing
-            // PR scope must NOT degrade the repo; rate limits propagate and abort the batch.
+            // PR scope, or a transient PR-endpoint error, must NOT degrade the repo;
+            // only rate limits propagate and abort the batch.
             var pullRequests = await TryListOpenPullRequestsAsync(repo.Name, rateLimitToken);
             _ = metrics.TryGet(repo.Name, out var repoMetrics);
             _ = deploys.TryGet(repo.Name, out var repoDeploys);
@@ -122,6 +123,17 @@ public sealed class DashboardRefreshService(
             await rateLimitCts.CancelAsync();
             return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, [], []), true, []);
         }
+        // An auth/authz failure (401, or a non-rate-limit 403 — e.g. SSO not granted
+        // or the PAT lacking Actions access on this one repo) is per-repo, NOT a
+        // batch-wide condition like a rate limit. Degrade just this repo and let the
+        // siblings complete; SendAsync has already recorded the auth error so the
+        // health endpoint reports Degraded. Without this catch the exception would
+        // escape Task.WhenAll and abandon every sibling's freshly fetched signals.
+        catch (GitHubAuthException ex)
+        {
+            logger.LogWarning(ex, "GitHub auth failed for {Repo}; preserving last-known-good for this repo only.", repo.Name);
+            return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, null, null), true, []);
+        }
         // Treat transport/deserialization failures (and HTTP timeouts, which surface
         // as TaskCanceledException with the request token still un-cancelled) as a
         // degraded repo. Let genuine host-shutdown cancellation (ct triggered) propagate.
@@ -134,7 +146,12 @@ public sealed class DashboardRefreshService(
         }
     }
 
-    // Best-effort: a missing "Pull requests: Read" scope (403) must not degrade the repo.
+    // Best-effort: PRs are supplementary, so neither a missing "Pull requests: Read"
+    // scope nor a transient PR-endpoint error may degrade the repo — show no PRs and
+    // keep the freshly fetched workflow/run signals. A 401/403 on this endpoint
+    // surfaces as GitHubAuthException (SendAsync maps it before EnsureSuccessStatusCode);
+    // a 5xx or transport fault surfaces as HttpRequestException. Both return []. Rate
+    // limits (GitHubRateLimitException) deliberately propagate to abort the batch.
     private async Task<IReadOnlyList<PullRequest>> TryListOpenPullRequestsAsync(
         string repo, CancellationToken rateLimitToken)
     {
@@ -142,9 +159,14 @@ public sealed class DashboardRefreshService(
         {
             return await client.ListOpenPullRequestsAsync(repo, rateLimitToken);
         }
-        catch (HttpRequestException ex) when (ex.StatusCode is System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.Unauthorized)
+        catch (GitHubAuthException ex)
         {
             logger.LogWarning(ex, "Failed to list open PRs for {Repo} due to permissions; showing none (check the PAT's Pull requests: Read scope).", repo);
+            return [];
+        }
+        catch (HttpRequestException ex)
+        {
+            logger.LogWarning(ex, "Failed to list open PRs for {Repo} ({Status}); showing none for this cycle.", repo, ex.StatusCode);
             return [];
         }
     }
