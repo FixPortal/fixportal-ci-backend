@@ -85,7 +85,7 @@ Both the frontend and backend can be run locally using the configuration in [doc
 ### 1. Authenticate with GitHub Container Registry (GHCR)
 The package images are hosted privately on GHCR. Fine-grained PATs are problematic with GHCR; you must use a **GitHub Classic PAT** with the **`read:packages`** scope enabled.
 
-Log your local Docker daemon into `ghcr.io` using your **personal GitHub username** (e.g. `DestructiveDude`, **not** the organization name `FixPortal`) and your Classic PAT. On Windows, you can log in securely (without leaking the PAT in your terminal history) using this PowerShell command:
+Log your local Docker daemon into `ghcr.io` using your **personal GitHub username** (e.g. `chris-fixportal`, **not** the organization name `FixPortal`) and your Classic PAT. On Windows, you can log in securely (without leaking the PAT in your terminal history) using this PowerShell command:
 
 ```powershell
 $pat = Read-Host "GitHub classic PAT with read:packages" -AsSecureString
