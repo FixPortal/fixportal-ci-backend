@@ -38,8 +38,8 @@ param gitHubToken string
 @secure()
 param adminKey string
 
-@description('Background refresh cadence in seconds.')
-param refreshSeconds int = 60
+@description('Background refresh cadence in seconds. ETag conditional GETs keep a tight cadence within the GitHub rate budget (304s are not billed).')
+param refreshSeconds int = 30
 
 @description('''Origins permitted to GET the snapshot cross-origin (the FixPortal SPA).
 Emitted as Cors__AllowedOrigins__N env vars and read by the API's CORS policy.
