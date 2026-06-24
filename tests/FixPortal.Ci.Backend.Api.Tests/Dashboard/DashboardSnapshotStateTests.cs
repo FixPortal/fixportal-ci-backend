@@ -56,6 +56,28 @@ public class DashboardSnapshotStateTests
     }
 
     [Fact]
+    public void ComputePublicSnapshot_uses_the_persisted_public_trend_verbatim()
+    {
+        // B5-full: when a persisted public-only trend is supplied (cold-start restore
+        // from a snapshot that carried PublicCiTrend), it is used as-is — it was
+        // computed from public repos only, so a genuine public Failing is accurate
+        // and must survive, unlike the lossy fallback which reclassifies every Failing.
+        var full = Snapshot(
+            [Repo("pub", isPrivate: false, SignalState.Failure)],
+            [new CiTrendBucket(T, CiTrendState.Passing)]);
+        var persistedPublic = new[]
+        {
+            new CiTrendBucket(T, CiTrendState.Failing),
+            new CiTrendBucket(T.Plus(Duration.FromHours(1)), CiTrendState.Passing),
+        };
+
+        var pub = DashboardSnapshotState.ComputePublicSnapshot(full, persistedPublic);
+
+        _ = pub.CiTrend.Should().BeSameAs(persistedPublic);
+        _ = pub.CiTrend!.Select(b => b.State).Should().Equal(CiTrendState.Failing, CiTrendState.Passing);
+    }
+
+    [Fact]
     public void Update_publishes_current_and_public_together()
     {
         var state = new DashboardSnapshotState();

@@ -51,8 +51,9 @@ public sealed class DashboardSnapshotState
         );
     }
 
-    // Cold-start approximation ONLY (SnapshotRestoreService, before the first live
-    // refresh). The persisted full trend is computed from ALL repos (public AND
+    // Cold-start FALLBACK only, for a snapshot persisted before PublicCiTrend
+    // existed (SnapshotRestoreService now prefers the persisted public trend when
+    // present). The persisted full trend is computed from ALL repos (public AND
     // private) and the snapshot carries no per-repo run history, so a historical
     // Failing bucket cannot be attributed to a public vs a private repo. We must
     // therefore NEVER surface a Failing we cannot prove is public — otherwise a

@@ -67,6 +67,43 @@ public class FileDashboardSnapshotStoreTests
     }
 
     [Fact]
+    public async Task SaveAsync_should_round_trip_the_persisted_public_ci_trend()
+    {
+        // B5-full: the public-only trend is persisted on the full snapshot so a
+        // cold-start restore surfaces it accurately. It must survive the round trip.
+        var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
+        var sut = new FileDashboardSnapshotStore(path);
+        var ciTrend = new[]
+        {
+            new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 0), CiTrendState.Failing),
+        };
+        var publicCiTrend = new[]
+        {
+            new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 0), CiTrendState.Passing),
+        };
+        var snapshot = new DashboardSnapshot(
+            Instant.FromUtc(2026, 5, 28, 18, 0),
+            "FixPortal",
+            [],
+            [],
+            null,
+            ciTrend,
+            publicCiTrend);
+
+        try
+        {
+            await sut.SaveAsync(snapshot, CancellationToken.None);
+            var reloaded = await sut.LoadAsync(CancellationToken.None);
+            _ = reloaded!.PublicCiTrend.Should().BeEquivalentTo(publicCiTrend);
+            _ = reloaded.Should().BeEquivalentTo(snapshot);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task LoadAsync_should_discard_a_snapshot_with_non_hour_aligned_trend_buckets()
     {
         // A pre-anchoring snapshot has BucketStart at an arbitrary refresh instant

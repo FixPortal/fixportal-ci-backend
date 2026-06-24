@@ -88,10 +88,19 @@ public sealed record CiTrendBucket(Instant BucketStart, CiTrendState State)
     public bool IsBackfilled { get; init; }
 }
 
+// PublicCiTrend is the public-only CI trend, persisted alongside the all-repo
+// CiTrend so a cold-start restore can surface the accurate public trend instead
+// of the lossy reclassification in DashboardSnapshotState.BuildPublicCiTrendFromSnapshot
+// (which cannot attribute a historical Failing bucket to a public vs private
+// repo). It is set only on the persisted full snapshot; the public snapshot
+// served to clients already carries the public trend in CiTrend, so it leaves
+// PublicCiTrend null. Null on a snapshot written before this field existed, in
+// which case restore falls back to the reclassification.
 public sealed record DashboardSnapshot(
     Instant RefreshedAt,
     string Org,
     IReadOnlyList<RepositorySnapshot> Repositories,
     IReadOnlyList<SummaryCount> Summary,
     MergedPullRequest? LastMergedPr,
-    IReadOnlyList<CiTrendBucket>? CiTrend = null);
+    IReadOnlyList<CiTrendBucket>? CiTrend = null,
+    IReadOnlyList<CiTrendBucket>? PublicCiTrend = null);
