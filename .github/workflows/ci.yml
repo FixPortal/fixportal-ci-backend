@@ -56,7 +56,7 @@ jobs:
           if-no-files-found: ignore
 
   publish:
-    name: Publish image (GHCR)
+    name: Publish Image (GHCR)
     needs: [backend]
     # main-only, mirrors the deploy gate so the public image tracks main.
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
