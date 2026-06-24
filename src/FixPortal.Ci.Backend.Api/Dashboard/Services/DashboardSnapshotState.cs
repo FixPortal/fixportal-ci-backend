@@ -9,30 +9,31 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 /// and durability.
 ///
 /// Single-writer by design: only the startup restore and the one
-/// <c>DashboardRefreshWorker</c> background service write <c>Current</c>; many
-/// request threads read it. The <c>volatile</c> field guarantees safe reference
-/// publication for that model. A second concurrent writer would require an
+/// <c>DashboardRefreshWorker</c> background service publish snapshots; many
+/// request threads read them. Both snapshots are published together as one
+/// immutable <see cref="Snapshots"/> pair behind a single <c>volatile</c>
+/// reference, so a reader can never observe a refreshed <c>Current</c> paired
+/// with a stale <c>Public</c> (the two fields are swapped atomically by one
+/// reference write). A second concurrent writer would require an
 /// <c>Interlocked</c>/lock-based check-then-set instead.
 /// </summary>
 public sealed class DashboardSnapshotState
 {
-    private volatile DashboardSnapshot? _current;
-    private volatile DashboardSnapshot? _public;
+    private sealed record Snapshots(DashboardSnapshot? Current, DashboardSnapshot? Public);
+
+    private volatile Snapshots _snapshots = new(null, null);
     private volatile string? _lastAuthError;
 
     public string? LastAuthError => _lastAuthError;
 
     public void SetAuthError(string? error) => _lastAuthError = error;
 
-    public DashboardSnapshot? Current => _current;
+    public DashboardSnapshot? Current => _snapshots.Current;
 
-    public DashboardSnapshot? Public => _public;
+    public DashboardSnapshot? Public => _snapshots.Public;
 
-    public void Update(DashboardSnapshot current, DashboardSnapshot publicSnap)
-    {
-        _current = current;
-        _public = publicSnap;
-    }
+    public void Update(DashboardSnapshot current, DashboardSnapshot publicSnap) =>
+        _snapshots = new Snapshots(current, publicSnap);
 
     public static DashboardSnapshot ComputePublicSnapshot(DashboardSnapshot full, IReadOnlyList<CiTrendBucket>? publicCiTrend = null)
     {
@@ -50,6 +51,14 @@ public sealed class DashboardSnapshotState
         );
     }
 
+    // Cold-start approximation ONLY (SnapshotRestoreService, before the first live
+    // refresh). The persisted full trend is computed from ALL repos (public AND
+    // private) and the snapshot carries no per-repo run history, so a historical
+    // Failing bucket cannot be attributed to a public vs a private repo. We must
+    // therefore NEVER surface a Failing we cannot prove is public — otherwise a
+    // private repo's failure leaks onto the public trend. Reclassify every Failing
+    // bucket to Passing; the first live refresh (~one refresh cycle) recomputes the
+    // public trend accurately from fresh public-only runs and replaces this.
     private static IReadOnlyList<CiTrendBucket>? BuildPublicCiTrendFromSnapshot(
         DashboardSnapshot full,
         IReadOnlyList<RepositorySnapshot> publicRepos)
@@ -64,14 +73,8 @@ public sealed class DashboardSnapshotState
             return full.CiTrend.Select(b => new CiTrendBucket(b.BucketStart, CiTrendState.NoData)).ToList();
         }
 
-        var anyPublicFailing = publicWorkflows.Any(w => w.State == SignalState.Failure);
-        if (!anyPublicFailing)
-        {
-            return full.CiTrend.Select(b => b.State == CiTrendState.Failing 
-                ? new CiTrendBucket(b.BucketStart, CiTrendState.Passing) 
-                : b).ToList();
-        }
-
-        return full.CiTrend;
+        return full.CiTrend.Select(b => b.State == CiTrendState.Failing
+            ? new CiTrendBucket(b.BucketStart, CiTrendState.Passing)
+            : b).ToList();
     }
 }

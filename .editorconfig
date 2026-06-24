@@ -1,6 +1,7 @@
-# Formatter-only keys. All analyzer/style RULES come from the FixPortal.CodeStyle
-# package's global config — do not duplicate them here. Add a local rule override
-# ONLY for a genuine project-specific need, with a comment why.
+# Formatter-only keys. This repo wires no analyzer-rule package, so this file
+# governs formatting only; code-quality enforcement is the compiler's own
+# analyzers under TreatWarningsAsErrors (see Directory.Build.props). Add a local
+# analyzer-rule override ONLY for a genuine project-specific need, with a comment why.
 
 root = true
 

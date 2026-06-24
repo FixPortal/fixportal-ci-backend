@@ -67,6 +67,10 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
+      # Third-party (useblacksmith/*) actions, SHA-pinned. They run in this
+      # packages:write job with access to the GHCR-write GITHUB_TOKEN and the build
+      # context, so the pinned SHAs are a deliberate supply-chain trust decision:
+      # update them only by reviewing the target revision, never by bumping the tag.
       - name: Setup Blacksmith Builder
         uses: useblacksmith/setup-docker-builder@ab5c1da94f53f5cd75c1038092aa276dddfccbba # v1
 
@@ -115,11 +119,9 @@ jobs:
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - name: Lint workflows (actionlint)
-        uses: raven-actions/actionlint@205b530c5d9fa8f44ae9ed59f341a0db994aa6f8 # v2
-        with:
-          shellcheck: true
-
+      # actionlint already ran in the backend job (which this job transitively
+      # needs); the workflows cannot have changed between jobs in the same run, so
+      # re-linting here is redundant.
       - name: Azure login (OIDC)
         uses: azure/login@532459ea530d8321f2fb9bb10d1e0bcf23869a43 # v3
         with:
@@ -130,15 +132,21 @@ jobs:
       - name: Import image from GHCR into ACR
         env:
           IMAGE_TAG: ${{ github.sha }}
+          # GHCR read token. Passed via env so the secret is not templated directly
+          # into the command line in the workflow source.
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          # Import the image already built and pushed by the publish job instead of
-          # rebuilding from source, guaranteeing GHCR and ACR carry identical digests.
+          # Import the image the publish job already built and pushed, rather than
+          # rebuilding from source, so ACR receives that same artifact. The SHA tag
+          # is immutable by construction; --force makes a re-run of the same commit
+          # idempotent (it overwrites the identical tag instead of erroring). It does
+          # NOT itself verify digests.
           az acr import \
             --name "$ACR_NAME" \
             --source "ghcr.io/fixportal/fixportal-ci-backend:sha-$IMAGE_TAG" \
             --image "$IMAGE_REPO:$IMAGE_TAG" \
             --username "${{ github.actor }}" \
-            --password "${{ secrets.GITHUB_TOKEN }}" \
+            --password "$GHCR_TOKEN" \
             --force
 
       - name: Deploy container app (Bicep)

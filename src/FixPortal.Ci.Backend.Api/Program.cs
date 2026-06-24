@@ -38,7 +38,13 @@ builder.Services.AddOptions<DashboardOptions>()
     .Validate(o => o.JobLanes.All(l => l.MaxRunsToScan > 0), "Dashboard:JobLanes:MaxRunsToScan must be greater than zero.")
     .ValidateOnStart();
 builder.Services.AddOptions<AdminOptions>()
-    .Bind(builder.Configuration.GetSection("Admin"));
+    .Bind(builder.Configuration.GetSection("Admin"))
+    // An empty AdminKey is valid and fails closed: the admin endpoint returns 401
+    // unconditionally when no key is configured. But a *set* key that is implausibly
+    // short is almost certainly a truncated/typo'd secret — reject it at startup
+    // rather than shipping a guessable admin key.
+    .Validate(o => o.AdminKey.Length is 0 or >= 16, "Admin:AdminKey, when set, must be at least 16 characters.")
+    .ValidateOnStart();
 
 // CORS so the FixPortal SPA (a separate origin) can read the public snapshot.
 // Empty config -> no origins allowed (safe default until the SPA origin is set

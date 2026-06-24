@@ -42,6 +42,24 @@ public class RepoEnrichmentWorkerTests
     }
 
     [Fact]
+    public async Task RunSweep_continues_past_a_per_repo_auth_failure()
+    {
+        // A GitHubAuthException on one repo (e.g. the PAT lacks access to it) must
+        // skip only that repo — the sweep must still enrich the others, not abort
+        // and leave every repo's signal stale for the cycle.
+        var cache = new PerRepoCache<RepoMetrics>();
+        var value = new RepoMetrics(10, 1.0, 1, 0, Instant.FromUnixTimeSeconds(1));
+        var worker = new FakeEnrichmentWorker(cache, repo =>
+            repo.Name == "denied" ? throw new GitHubAuthException("403") : value);
+
+        await worker.Sweep([Repo("a"), Repo("denied"), Repo("c")], CancellationToken.None);
+
+        _ = cache.TryGet("a", out _).Should().BeTrue();
+        _ = cache.TryGet("c", out _).Should().BeTrue();
+        _ = cache.TryGet("denied", out _).Should().BeFalse();
+    }
+
+    [Fact]
     public async Task RunSweep_keeps_prior_when_collect_returns_null()
     {
         var cache = new PerRepoCache<RepoMetrics>();
