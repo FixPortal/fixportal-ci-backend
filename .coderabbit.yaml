@@ -1,0 +1,51 @@
+reviews:
+  profile: assertive
+  poem: false
+  high_level_summary: true
+  review_status: true
+  collapse_walkthrough: true
+  request_changes_workflow: true
+
+  tools:
+    eslint:
+      enabled: false
+
+  auto_review:
+    enabled: true
+    drafts: false
+
+  path_filters:
+    - "!**/bin/**"
+    - "!**/obj/**"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/coverage/**"
+    - "!**/*.lock"
+    - "!**/package-lock.json"
+    - "!**/pnpm-lock.yaml"
+    - "!**/yarn.lock"
+
+  instructions: |
+    Review as a senior engineer. Prioritise correctness, security, maintainability,
+    testability, and accidental complexity.
+
+    Do not nitpick style unless it affects readability or consistency.
+    Prefer actionable findings over commentary.
+    Call out missing tests for changed behaviour.
+    Treat generated files, lock files, snapshots, and formatting churn as low value.
+
+    For .NET code, pay particular attention to:
+    - async/await correctness
+    - cancellation token propagation
+    - nullability
+    - DI lifetime mistakes
+    - EF Core query behaviour
+    - exception handling and logging
+    - test coverage around edge cases
+
+    For TypeScript/React code, pay particular attention to:
+    - state/effect dependency bugs
+    - request spam or accidental polling
+    - accessibility regressions
+    - error/loading/empty states
+    - unnecessary re-renders
