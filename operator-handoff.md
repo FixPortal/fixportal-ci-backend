@@ -80,7 +80,7 @@ server-side in the background collector.
 
 ## Running locally via Docker Compose
 
-Both the frontend and backend can be run locally using the configuration in [docker-compose.yml](file:///D:/FixPortal/fixportal-ci-backend/docker-compose.yml). 
+Both the frontend and backend can be run locally using the configuration in [docker-compose.yml](file:///D:/fix-portal/fixportal-ci-backend/docker-compose.yml). 
 
 ### 1. Authenticate with GitHub Container Registry (GHCR)
 The package images are hosted privately on GHCR. Fine-grained PATs are problematic with GHCR; you must use a **GitHub Classic PAT** with the **`read:packages`** scope enabled.
@@ -113,7 +113,7 @@ docker compose up -d
 If port `80` is already in use on your Windows host (e.g., by IIS, Skype, or other web servers), Docker will fail to bind the frontend container and throw an error about access permissions/socket binding.
 
 To resolve this:
-1. Open [docker-compose.yml](file:///D:/FixPortal/fixportal-ci-backend/docker-compose.yml).
+1. Open [docker-compose.yml](file:///D:/fix-portal/fixportal-ci-backend/docker-compose.yml).
 2. Find the `frontend` service ports definition:
    ```yaml
    ports:
