@@ -24,7 +24,10 @@ public static class ProcessRunner
     private static void AppendBounded(StringBuilder sb, string line)
     {
         _ = sb.AppendLine(line);
-        if (sb.Length > MaxCaptureChars)
+        // Trim only once the buffer reaches twice the cap, back down to the cap, so
+        // the O(n) Remove shift is amortized to O(1) per line rather than firing on
+        // every append once capped.
+        if (sb.Length > MaxCaptureChars * 2)
         {
             _ = sb.Remove(0, sb.Length - MaxCaptureChars);
         }
