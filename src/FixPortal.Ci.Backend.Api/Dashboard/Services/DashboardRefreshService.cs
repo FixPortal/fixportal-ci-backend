@@ -23,6 +23,13 @@ public sealed class DashboardRefreshService(
 
     public async Task RefreshAsync(CancellationToken ct)
     {
+        // Reset the auth-health signal at the start of each cycle. SendAsync no longer
+        // clears it on success (that race let a healthy repo mask a failing sibling);
+        // instead any auth failure during this cycle re-sets it (sticky worst-of-cycle)
+        // and this once-per-cycle reset is the sole clear. Single-writer: only the one
+        // DashboardRefreshWorker drives RefreshAsync, so this reset never races a clear.
+        state.SetAuthError(null);
+
         var repos = await inventory.GetRepositoriesAsync(ct);
 
         // When one repo hits the rate limit, cancel this CTS to stop the other parallel fetches
@@ -82,7 +89,7 @@ public sealed class DashboardRefreshService(
         catch (OperationCanceledException) when (rateLimitToken.IsCancellationRequested && !ct.IsCancellationRequested)
         {
             // Another repo hit the rate limit and cancelled rateLimitCts; skip this one.
-            return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, [], []), true, []);
+            return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, null, null), true, []);
         }
         try
         {
@@ -125,14 +132,15 @@ public sealed class DashboardRefreshService(
             // Cancel sibling fetches so they don't exhaust the remaining quota.
             logger.LogWarning(ex, "GitHub rate limit reached for {Repo}; aborting batch.", repo.Name);
             await rateLimitCts.CancelAsync();
-            return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, [], []), true, []);
+            return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, null, null), true, []);
         }
         // An auth/authz failure (401, or a non-rate-limit 403 — e.g. SSO not granted
         // or the PAT lacking Actions access on this one repo) is per-repo, NOT a
         // batch-wide condition like a rate limit. Degrade just this repo and let the
-        // siblings complete; SendAsync has already recorded the auth error so the
-        // health endpoint reports Degraded. Without this catch the exception would
-        // escape Task.WhenAll and abandon every sibling's freshly fetched signals.
+        // siblings complete; SendAsync recorded the auth error on the shared health
+        // signal, which this cycle's start reset and no concurrent success can clear,
+        // so /api/health reliably reports Degraded. Without this catch the exception
+        // would escape Task.WhenAll and abandon every sibling's freshly fetched signals.
         catch (GitHubAuthException ex)
         {
             logger.LogWarning(ex, "GitHub auth failed for {Repo}; preserving last-known-good for this repo only.", repo.Name);

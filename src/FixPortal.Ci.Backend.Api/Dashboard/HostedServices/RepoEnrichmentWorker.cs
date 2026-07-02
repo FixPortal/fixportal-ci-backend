@@ -93,13 +93,25 @@ public abstract class RepoEnrichmentWorker<T>(
         }
     }
 
+    // Per-sweep tally used to decide whether a cold-start sweep genuinely succeeded.
+    protected readonly record struct SweepOutcome(int Total, int Written, int Failed);
+
     private async Task<bool> SweepSafelyAsync(CancellationToken ct)
     {
         try
         {
             var repos = await Inventory.GetRepositoriesAsync(ct);
-            await RunSweepAsync(repos, ct);
-            return true;
+            var outcome = await RunSweepAsync(repos, ct);
+            // Cold-start succeeds when the org legitimately has nothing to write — no
+            // repos, or repos with no matching signal yet (both leave the cache empty
+            // by design). It has NOT succeeded when repos existed, nothing was written,
+            // and at least one collect threw: that is a transient outage, so report
+            // failure and let the 5-minute cold-start retry cover it instead of dropping
+            // to the slow steady cadence (e.g. 12h for metrics) with an empty cache.
+            // (Collectors that soft-fail by returning null rather than throwing are not
+            // counted as failures here — distinguishing those needs a richer collect
+            // contract than the null-keeps-prior one, out of scope for this guard.)
+            return !(outcome.Total > 0 && outcome.Written == 0 && outcome.Failed > 0);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -115,9 +127,11 @@ public abstract class RepoEnrichmentWorker<T>(
 
     // The write loop, separated from repo-listing so it is unit-testable without a
     // live GitHubOrgClient. Writes the collected value for each repo, keeping the
-    // prior cached value when CollectAsync returns null.
-    protected async Task RunSweepAsync(IReadOnlyList<GitHubRepoDto> repos, CancellationToken ct)
+    // prior cached value when CollectAsync returns null. Returns the per-sweep tally.
+    protected async Task<SweepOutcome> RunSweepAsync(IReadOnlyList<GitHubRepoDto> repos, CancellationToken ct)
     {
+        var written = 0;
+        var failed = 0;
         foreach (var repo in repos)
         {
             ct.ThrowIfCancellationRequested();
@@ -127,19 +141,22 @@ public abstract class RepoEnrichmentWorker<T>(
                 if (value is not null)
                 {
                     cache.Update(repo.Name, value);
+                    written++;
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
                 throw;
             }
-            catch (Exception ex) when (ex is HttpRequestException or System.Text.Json.JsonException or GitHubAuthException)
+            // Any per-repo failure (auth/authz, transport, JSON, or a filesystem/process
+            // error from a metrics scan) skips only this repo's enrichment — it must not
+            // abort the sweep and leave every other repo's signal stale for this cycle.
+            catch (Exception ex)
             {
-                // A per-repo auth/authz failure (e.g. the PAT lacks access to this one
-                // repo) skips only this repo's enrichment — it must not abort the sweep
-                // and leave every other repo's signal stale for this cycle.
+                failed++;
                 logger.LogWarning(ex, "Failed to collect enrichment for {Repo} during {Name} sweep; keeping prior cached value.", repo.Name, Name);
             }
         }
+        return new SweepOutcome(repos.Count, written, failed);
     }
 }

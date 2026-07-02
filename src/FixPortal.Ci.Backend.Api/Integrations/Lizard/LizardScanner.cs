@@ -45,9 +45,12 @@ public sealed class LizardScanner(
             return null;
         }
 
-        TryDeleteDir(dir);
         try
         {
+            // Inside the try: TryDeleteDir only swallows IOException/UnauthorizedAccess,
+            // so any other exception it throws is caught below and degrades this one
+            // scan to null rather than escaping to abort the whole enrichment sweep.
+            TryDeleteDir(dir);
             _ = Directory.CreateDirectory(WorkRoot);
             var (cloneArguments, cloneEnvironment) = BuildCloneCommand(_gitHub.Owner, repo, _gitHub.Token, dir);
             var clone = await ProcessRunner.RunAsync(

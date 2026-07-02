@@ -69,6 +69,17 @@ public class GitHubErrorMappingTests
         _ = await act.Should().ThrowAsync<GitHubRateLimitException>();
     }
 
+    // M4: a 429 is unconditional proof of rate limiting, so it must map to
+    // GitHubRateLimitException even without X-RateLimit-Remaining / Retry-After —
+    // otherwise it fell through to HttpRequestException and did not abort the batch.
+    [Fact]
+    public async Task A_429_without_rate_limit_headers_still_maps_to_GitHubRateLimitException()
+    {
+        var client = NewClient(HttpStatusCode.TooManyRequests, rateLimited: false);
+        var act = async () => await client.ListRepositoriesAsync(CancellationToken.None);
+        _ = await act.Should().ThrowAsync<GitHubRateLimitException>();
+    }
+
     // B2: the best-effort PR endpoints (open-PR list, merged-PR search) need the
     // "Pull requests: Read" scope, which the primary workflow/run reads don't. A
     // token missing only that scope 403s here — it must NOT flip the global health
