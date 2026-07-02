@@ -34,8 +34,8 @@ builder.Services.AddOptions<DashboardOptions>()
     .Validate(o => o.RefreshSeconds > 0, "Dashboard:RefreshSeconds must be greater than zero.")
     .Validate(o => o.MetricsRefreshSeconds > 0, "Dashboard:MetricsRefreshSeconds must be greater than zero.")
     .Validate(o => o.MergedPrRefreshSeconds > 0, "Dashboard:MergedPrRefreshSeconds must be greater than zero.")
-    .Validate(o => o.JobLanes.All(l => l.RefreshSeconds > 0), "Dashboard:JobLanes:RefreshSeconds must be greater than zero.")
-    .Validate(o => o.JobLanes.All(l => l.MaxRunsToScan > 0), "Dashboard:JobLanes:MaxRunsToScan must be greater than zero.")
+    .Validate(o => o.EffectiveJobLanes.All(l => l.RefreshSeconds > 0), "Dashboard:JobLanes:RefreshSeconds must be greater than zero.")
+    .Validate(o => o.EffectiveJobLanes.All(l => l.MaxRunsToScan > 0), "Dashboard:JobLanes:MaxRunsToScan must be greater than zero.")
     .ValidateOnStart();
 builder.Services.AddOptions<AdminOptions>()
     .Bind(builder.Configuration.GetSection("Admin"))
@@ -96,10 +96,17 @@ builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
 builder.Services.AddSingleton<GitHubInventoryCache>();
 builder.Services.AddSingleton<PerRepoCache<RepoMetrics>>();
 builder.Services.AddSingleton<PerRepoCache<MergedPullRequest>>();
+// Last-known-good, no TTL — consistent with the metrics and merged-PR caches above.
+// A max-age here was ineffective: InheritEnrichment re-inherits an expired lane
+// signal from the previous snapshot every cycle (needed for cold-start continuity),
+// so the TTL only ever bit before the first snapshot existed. Dropping it makes the
+// real behaviour explicit — a persistently-failing lane keeps its last chip, exactly
+// as a stale metric or merged-PR does — rather than documenting a stale-out the code
+// never delivered.
 builder.Services.AddKeyedSingleton<PerRepoCache<IReadOnlyList<JobSignal>>>("deploys",
-    (sp, _) => new PerRepoCache<IReadOnlyList<JobSignal>>(sp.GetRequiredService<IClock>(), Duration.FromMinutes(10)));
+    (_, _) => new PerRepoCache<IReadOnlyList<JobSignal>>());
 builder.Services.AddKeyedSingleton<PerRepoCache<IReadOnlyList<JobSignal>>>("packages",
-    (sp, _) => new PerRepoCache<IReadOnlyList<JobSignal>>(sp.GetRequiredService<IClock>(), Duration.FromMinutes(10)));
+    (_, _) => new PerRepoCache<IReadOnlyList<JobSignal>>());
 builder.Services.AddSingleton<LizardScanner>();
 builder.Services.AddSingleton<DashboardRefreshService>();
 builder.Services.AddHostedService<SnapshotRestoreService>();
@@ -125,7 +132,15 @@ var app = builder.Build();
 
 var dashboardOptions = app.Services.GetRequiredService<IOptions<DashboardOptions>>().Value;
 var registeredKeys = new HashSet<string>(["deploys", "packages"], StringComparer.OrdinalIgnoreCase);
-foreach (var lane in dashboardOptions.JobLanes.Where(l => !registeredKeys.Contains(l.Key)))
+// Log the lanes actually in force (config binding is append-not-replace prone) so a
+// silently-ignored or mis-cadenced lane is visible at startup rather than a mystery.
+foreach (var lane in dashboardOptions.EffectiveJobLanes)
+{
+    app.Logger.LogInformation(
+        "JobLane '{Key}' effective: enabled={Enabled}, refresh={Refresh}s, maxRuns={MaxRuns}.",
+        lane.Key, lane.Enabled, lane.RefreshSeconds, lane.MaxRunsToScan);
+}
+foreach (var lane in dashboardOptions.EffectiveJobLanes.Where(l => !registeredKeys.Contains(l.Key)))
 {
     app.Logger.LogWarning("Configured JobLane '{Key}' is unregistered; no worker or cache exists for it and it will be ignored.", lane.Key);
 }

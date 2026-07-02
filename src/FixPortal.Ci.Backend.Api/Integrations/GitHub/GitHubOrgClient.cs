@@ -17,7 +17,7 @@ public sealed record GitHubWorkflowDto(long Id, string Name, string Path, string
 public sealed record GitHubWorkflowsResponse(IReadOnlyList<GitHubWorkflowDto>? Workflows);
 public sealed record GitHubRunItem(
     string? Status, string? Conclusion, string? HtmlUrl, string? DisplayTitle,
-    int RunNumber, string? HeadBranch, string? Event, Instant UpdatedAt);
+    int RunNumber, string? HeadBranch, string? Event, Instant UpdatedAt, long Id = 0);
 public sealed record GitHubRunsResponse(IReadOnlyList<GitHubRunItem>? WorkflowRuns);
 public sealed record GitHubUserDto(string? Login);
 public sealed record GitHubPullDto(
@@ -109,7 +109,11 @@ public sealed class GitHubOrgClient(
     private WorkflowRun ToWorkflowRun(GitHubRunItem run, string repo, GitHubWorkflowDto workflow) =>
         new(run.Status, run.Conclusion,
             string.IsNullOrWhiteSpace(run.HtmlUrl)
-                ? $"https://github.com/{_gitHub.Owner}/{repo}/actions/workflows/{FileName(workflow.Path)}"
+                // No html_url on the run (rare): link to the specific run when we have
+                // its id, falling back to the workflow file only if the id is absent.
+                ? run.Id > 0
+                    ? $"https://github.com/{_gitHub.Owner}/{repo}/actions/runs/{run.Id}"
+                    : $"https://github.com/{_gitHub.Owner}/{repo}/actions/workflows/{FileName(workflow.Path)}"
                 : run.HtmlUrl,
             string.IsNullOrWhiteSpace(run.DisplayTitle) ? workflow.Name : run.DisplayTitle,
             run.RunNumber, run.HeadBranch, run.Event, run.UpdatedAt,
@@ -408,12 +412,17 @@ public sealed class GitHubOrgClient(
 
     // affectsAuthState gates whether this request drives the global auth-error
     // health signal. Primary endpoints (repos/workflows/runs) set it on a 401/403
-    // and clear it on success, so /api/health reports a genuinely broken token.
+    // so /api/health reports a genuinely broken token. A success no longer clears
+    // it here: with up to MaxParallelRepos fetches in flight, a healthy repo's
+    // success used to race-clear a failing sibling's error, masking it. The health
+    // signal is instead reset once per refresh cycle by DashboardRefreshService and
+    // re-set by any auth failure during that cycle (sticky worst-of-cycle), so a
+    // per-repo failure can no longer be cleared by a concurrent success.
     // Best-effort PR endpoints pass false: a token missing only the
     // "Pull requests: Read" scope 403s there, and treating that as a global auth
-    // error flipped /api/health to Degraded until the next primary 200 cleared it
-    // — a flap. Such a request still throws GitHubAuthException (its caller swallows
-    // it and shows no PRs); it just never touches the shared health state.
+    // error flipped /api/health to Degraded — a flap. Such a request still throws
+    // GitHubAuthException (its caller swallows it and shows no PRs); it just never
+    // touches the shared health state.
     private async Task<T?> SendAsync<T>(string url, CancellationToken ct, bool affectsAuthState = true)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
@@ -435,18 +444,10 @@ public sealed class GitHubOrgClient(
 
         if (response.StatusCode == HttpStatusCode.NotModified && cached is not null)
         {
-            if (affectsAuthState)
-            {
-                state?.SetAuthError(null);
-            }
             return (T?)cached.Payload;
         }
         if (response.StatusCode == HttpStatusCode.NotFound)
         {
-            if (affectsAuthState)
-            {
-                state?.SetAuthError(null);
-            }
             return default;
         }
 
@@ -469,8 +470,13 @@ public sealed class GitHubOrgClient(
             throw new GitHubAuthException(err);
         }
 
-        if (response.StatusCode is HttpStatusCode.Forbidden or HttpStatusCode.TooManyRequests
-            && IsRateLimited(response))
+        // A 429 is unconditional proof of rate limiting, so treat it as rate-limited
+        // even when it carries neither X-RateLimit-Remaining:0 nor Retry-After —
+        // otherwise it fell through to a plain HttpRequestException and did not abort
+        // the sibling parallel fetches. The header check only disambiguates a 403,
+        // which is genuinely ambiguous between auth failure and rate limit.
+        if (response.StatusCode == HttpStatusCode.TooManyRequests
+            || (response.StatusCode == HttpStatusCode.Forbidden && IsRateLimited(response)))
         {
             throw new GitHubRateLimitException($"GitHub rate limit reached (HTTP {(int)response.StatusCode}) for {url}.");
         }
@@ -484,10 +490,6 @@ public sealed class GitHubOrgClient(
             _etags.Set(url, etag, value);
         }
 
-        if (affectsAuthState)
-        {
-            state?.SetAuthError(null);
-        }
         return value;
     }
 

@@ -27,7 +27,7 @@ public sealed class JobLaneEnrichmentWorker(
 {
 
 
-    private JobLaneOptions? Lane => options.Value.JobLanes.FirstOrDefault(l => l.Key == laneKey);
+    private JobLaneOptions? Lane => options.Value.EffectiveJobLanes.FirstOrDefault(l => l.Key == laneKey);
 
     protected override bool Enabled => Lane?.Enabled == true;
     protected override TimeSpan Cadence => TimeSpan.FromSeconds(Lane?.RefreshSeconds ?? 300);

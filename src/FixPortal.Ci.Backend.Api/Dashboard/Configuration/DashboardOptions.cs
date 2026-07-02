@@ -13,7 +13,14 @@ public sealed class DashboardOptions
     public string MetricsWorkDirectory { get; init; } = "";    // "" -> temp subdir
     public bool MergedPrEnabled { get; init; } = true;
     public int MergedPrRefreshSeconds { get; init; } = 300;
-    public IReadOnlyList<JobLaneOptions> JobLanes { get; init; } =
+
+    // Compiled fallback lanes, used when no Dashboard:JobLanes are configured. These
+    // are deliberately NOT the default of the bound JobLanes property below: the
+    // configuration binder APPENDS bound collection items to a pre-populated list
+    // rather than replacing it, so keeping defaults there would leave every
+    // configured lane shadowed behind the compiled default of the same Key
+    // (FirstOrDefault(Key) returns the default first). Consume EffectiveJobLanes.
+    public static readonly IReadOnlyList<JobLaneOptions> DefaultJobLanes =
     [
         new JobLaneOptions { Key = "deploys", Label = "Deploys", Patterns = ["deploy"] },
         new JobLaneOptions
@@ -22,4 +29,18 @@ public sealed class DashboardOptions
             Patterns = ["publish", "package", "docker", "image", "release", "ghcr"],
         },
     ];
+
+    // Bound from Dashboard:JobLanes. Empty by default (see DefaultJobLanes) so the
+    // binder replaces rather than appends. Consumers must use EffectiveJobLanes.
+    public IReadOnlyList<JobLaneOptions> JobLanes { get; init; } = [];
+
+    // The lanes actually in force: the configured lanes when any are bound, otherwise
+    // the compiled defaults. De-duplicated by Key (last occurrence wins) so a repeated
+    // key resolves to the last configured entry rather than the first.
+    public IReadOnlyList<JobLaneOptions> EffectiveJobLanes =>
+        JobLanes.Count == 0
+            ? DefaultJobLanes
+            : JobLanes.GroupBy(l => l.Key, StringComparer.OrdinalIgnoreCase)
+                      .Select(g => g.Last())
+                      .ToList();
 }

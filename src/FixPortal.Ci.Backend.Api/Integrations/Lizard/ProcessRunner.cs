@@ -15,6 +15,21 @@ public static class ProcessRunner
 {
     private static readonly TimeSpan PostExitDrainTimeout = TimeSpan.FromSeconds(5);
 
+    // Cap per-stream captured output so a pathological/verbose child (lizard prints a
+    // line per over-threshold function) cannot grow the buffer unbounded for up to the
+    // scan timeout. Head-truncated: the tail is preserved because ParseLizardSummary
+    // reads the trailing summary table.
+    private const int MaxCaptureChars = 1_000_000;
+
+    private static void AppendBounded(StringBuilder sb, string line)
+    {
+        _ = sb.AppendLine(line);
+        if (sb.Length > MaxCaptureChars)
+        {
+            _ = sb.Remove(0, sb.Length - MaxCaptureChars);
+        }
+    }
+
     public static async Task<ProcessResult> RunAsync(
         string fileName,
         IReadOnlyList<string> arguments,
@@ -57,7 +72,7 @@ public static class ProcessRunner
                 return;
             }
 
-            stdout.AppendLine(e.Data);
+            AppendBounded(stdout, e.Data);
         };
         process.ErrorDataReceived += (_, e) =>
         {
@@ -67,12 +82,22 @@ public static class ProcessRunner
                 return;
             }
 
-            stderr.AppendLine(e.Data);
+            AppendBounded(stderr, e.Data);
         };
 
-        if (!process.Start())
+        try
         {
-            throw new InvalidOperationException($"Failed to start process '{fileName}'.");
+            if (!process.Start())
+            {
+                throw new InvalidOperationException($"Failed to start process '{fileName}'.");
+            }
+        }
+        catch (System.ComponentModel.Win32Exception ex)
+        {
+            // Most commonly the executable is not installed / not on PATH. Surface a
+            // clear, actionable message instead of a bare Win32 error code.
+            throw new InvalidOperationException(
+                $"Failed to start process '{fileName}': {ex.Message}. Is it installed and on PATH?", ex);
         }
         // Close the child's stdin immediately so processes that read from it
         // (pwsh in non-interactive CI, git prompting for credentials) get EOF

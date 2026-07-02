@@ -9,17 +9,20 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 /// <summary>
 /// Shared, time-bounded cache over the GitHub inventory reads that several
 /// services need every cycle — the org repo list and each repo's workflow list.
-/// Without it the 60s board refresh and the (independently-timed) enrichment
-/// workers each re-list repos, and the job-lane workers re-list the workflows
-/// the board already fetched, multiplying calls against the rate budget.
+/// Its main win is deduplicating the concurrent/near-simultaneous callers of the
+/// same key (the board's own parallel per-repo fetches, and any worker sweep that
+/// lands within the same TTL window), so they share one fetch instead of N.
 ///
-/// Entries live for one board-refresh cycle (<c>RefreshSeconds</c>): the board is
-/// the freshest consumer, so anything it sees within a cycle is fresh enough for
-/// the slower workers. Pull-through with per-key single-flight — the first caller
-/// fetches, concurrent callers for the same key wait and reuse the result, and
-/// callers for different repos never block each other (so the board keeps its
-/// parallel per-repo concurrency). A failed fetch is not cached and propagates,
-/// leaving the prior entry in place; every call site already degrades to
+/// Entries live for one board-refresh cycle (<c>RefreshSeconds</c>). Because the
+/// slower enrichment workers run on much longer cadences than that window, they
+/// will usually find the entry already expired and re-fetch — so this is NOT a
+/// cross-cadence sharing cache; the sharing benefit is same-cycle. Those re-fetches
+/// are near-free anyway: the ETag store revalidates them as 304s, which GitHub does
+/// not charge against the rate budget. Pull-through with per-key single-flight — the
+/// first caller fetches, concurrent callers for the same key wait and reuse the
+/// result, and callers for different repos never block each other (so the board
+/// keeps its parallel per-repo concurrency). A failed fetch is not cached and
+/// propagates, leaving the prior entry in place; every call site already degrades to
 /// last-known-good on transport/rate-limit faults.
 /// </summary>
 public sealed class GitHubInventoryCache(

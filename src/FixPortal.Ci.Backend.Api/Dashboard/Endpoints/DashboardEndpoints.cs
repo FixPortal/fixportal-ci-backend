@@ -53,12 +53,16 @@ public static class DashboardEndpoints
             return Results.Ok(snapshot);
         });
 
-        // Health-check endpoint surfacing GitHub credential status (M8)
+        // Health-check endpoint surfacing GitHub credential status (M8). Unauthenticated,
+        // so it must NOT echo the raw auth-error string: that string embeds the failing
+        // request URL including the private repo name (repos/{owner}/{repo}/...), which
+        // would leak private repo names to anonymous callers. Return a generic message;
+        // the detailed error is already logged server-side (DashboardRefreshService).
         _ = endpoints.MapGet("/api/health", (DashboardSnapshotState state) =>
         {
-            if (state.LastAuthError is { } error)
+            if (state.LastAuthError is not null)
             {
-                return Results.Json(new { Status = "Degraded", Error = error }, statusCode: 503);
+                return Results.Json(new { Status = "Degraded", Error = "GitHub credential check failing" }, statusCode: 503);
             }
 
             return Results.Ok(new { Status = "Healthy" });
