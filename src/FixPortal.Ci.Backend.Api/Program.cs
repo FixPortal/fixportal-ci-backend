@@ -134,13 +134,14 @@ var dashboardOptions = app.Services.GetRequiredService<IOptions<DashboardOptions
 var registeredKeys = new HashSet<string>(["deploys", "packages"], StringComparer.OrdinalIgnoreCase);
 // Log the lanes actually in force (config binding is append-not-replace prone) so a
 // silently-ignored or mis-cadenced lane is visible at startup rather than a mystery.
-foreach (var lane in dashboardOptions.EffectiveJobLanes)
+var effectiveLanes = dashboardOptions.EffectiveJobLanes;
+foreach (var lane in effectiveLanes)
 {
     app.Logger.LogInformation(
         "JobLane '{Key}' effective: enabled={Enabled}, refresh={Refresh}s, maxRuns={MaxRuns}.",
         lane.Key, lane.Enabled, lane.RefreshSeconds, lane.MaxRunsToScan);
 }
-foreach (var lane in dashboardOptions.EffectiveJobLanes.Where(l => !registeredKeys.Contains(l.Key)))
+foreach (var lane in effectiveLanes.Where(l => !registeredKeys.Contains(l.Key)))
 {
     app.Logger.LogWarning("Configured JobLane '{Key}' is unregistered; no worker or cache exists for it and it will be ignored.", lane.Key);
 }
