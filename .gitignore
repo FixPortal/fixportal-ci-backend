@@ -21,3 +21,5 @@ dogfood-output/
 # Knowledge-graph artifacts (generated — graphify agent graph, understand-anything human graph)
 graphify-out/
 .understand-anything/
+
+.semgrep/
