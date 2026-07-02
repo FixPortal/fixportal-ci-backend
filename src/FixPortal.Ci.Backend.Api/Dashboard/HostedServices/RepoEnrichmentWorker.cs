@@ -102,16 +102,16 @@ public abstract class RepoEnrichmentWorker<T>(
         {
             var repos = await Inventory.GetRepositoriesAsync(ct);
             var outcome = await RunSweepAsync(repos, ct);
-            // Cold-start succeeds when the org legitimately has nothing to write — no
-            // repos, or repos with no matching signal yet (both leave the cache empty
-            // by design). It has NOT succeeded when repos existed, nothing was written,
-            // and at least one collect threw: that is a transient outage, so report
-            // failure and let the 5-minute cold-start retry cover it instead of dropping
-            // to the slow steady cadence (e.g. 12h for metrics) with an empty cache.
-            // (Collectors that soft-fail by returning null rather than throwing are not
-            // counted as failures here — distinguishing those needs a richer collect
-            // contract than the null-keeps-prior one, out of scope for this guard.)
-            return !(outcome.Total > 0 && outcome.Written == 0 && outcome.Failed > 0);
+            // Cold-start has converged only when repos existed and NONE threw. Any hard
+            // per-repo failure (even with some repos written) means a transiently-failing
+            // repo may be stranded with no cached value, so report failure and let the
+            // 5-minute cold-start retry cover it rather than dropping to the slow steady
+            // cadence (e.g. 12h for metrics) with a gap. An org with no repos legitimately
+            // converges (Total == 0). Note: collectors that soft-fail by returning null
+            // instead of throwing are not counted here — distinguishing a soft-fail null
+            // from a legitimate no-data null (e.g. a repo with no merged PR) needs a
+            // tri-state collect contract, out of scope for this guard.
+            return !(outcome.Total > 0 && outcome.Failed > 0);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

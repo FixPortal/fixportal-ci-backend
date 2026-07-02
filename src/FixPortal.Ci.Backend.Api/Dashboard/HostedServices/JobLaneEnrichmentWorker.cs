@@ -27,7 +27,10 @@ public sealed class JobLaneEnrichmentWorker(
 {
 
 
-    private JobLaneOptions? Lane => options.Value.EffectiveJobLanes.FirstOrDefault(l => l.Key == laneKey);
+    // Case-insensitive to match EffectiveJobLanes' OrdinalIgnoreCase de-dup: a
+    // configured key differing only in casing (e.g. "Deploys") must still resolve.
+    private JobLaneOptions? Lane =>
+        options.Value.EffectiveJobLanes.FirstOrDefault(l => string.Equals(l.Key, laneKey, StringComparison.OrdinalIgnoreCase));
 
     protected override bool Enabled => Lane?.Enabled == true;
     protected override TimeSpan Cadence => TimeSpan.FromSeconds(Lane?.RefreshSeconds ?? 300);

@@ -412,12 +412,12 @@ public sealed class GitHubOrgClient(
 
     // affectsAuthState gates whether this request drives the global auth-error
     // health signal. Primary endpoints (repos/workflows/runs) set it on a 401/403
-    // so /api/health reports a genuinely broken token. A success no longer clears
-    // it here: with up to MaxParallelRepos fetches in flight, a healthy repo's
-    // success used to race-clear a failing sibling's error, masking it. The health
-    // signal is instead reset once per refresh cycle by DashboardRefreshService and
-    // re-set by any auth failure during that cycle (sticky worst-of-cycle), so a
-    // per-repo failure can no longer be cleared by a concurrent success.
+    // so a worker-path failure between refresh cycles still surfaces on /api/health.
+    // A success no longer clears it here: with up to MaxParallelRepos fetches in
+    // flight, a healthy repo's success used to race-clear a failing sibling's error,
+    // masking it. For the refresh path the authoritative value is instead published
+    // once per cycle by DashboardRefreshService from that cycle's aggregated auth
+    // outcomes, so a per-repo failure can no longer be cleared by a concurrent success.
     // Best-effort PR endpoints pass false: a token missing only the
     // "Pull requests: Read" scope 403s there, and treating that as a global auth
     // error flipped /api/health to Degraded — a flap. Such a request still throws
