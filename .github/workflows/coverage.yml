@@ -16,6 +16,6 @@ permissions:
 
 jobs:
   coverage:
-    uses: FixPortal/fixportal-assets/.github/workflows/dotnet-coverage.yml@main
+    uses: FixPortal/fixportal-workflows/.github/workflows/dotnet-coverage.yml@main
     with:
       solution: FixPortal.Ci.Backend.slnx
