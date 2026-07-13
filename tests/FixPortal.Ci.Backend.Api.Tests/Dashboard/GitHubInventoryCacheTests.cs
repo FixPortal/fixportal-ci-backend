@@ -32,8 +32,23 @@ public sealed class GitHubInventoryCacheTests : IDisposable
     // matching the shapes ListRepositoriesAsync / ListWorkflowsAsync expect.
     private sealed class CountingHandler : HttpMessageHandler
     {
+        private readonly bool _blockRepoFetch;
+        private readonly TaskCompletionSource _repoFetchStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _allowRepoFetch = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int RepoCalls;
         private readonly Dictionary<string, int> _workflowCalls = new(StringComparer.OrdinalIgnoreCase);
+
+        public CountingHandler(bool blockRepoFetch = false)
+        {
+            _blockRepoFetch = blockRepoFetch;
+        }
+
+        public Task RepoFetchStarted => _repoFetchStarted.Task;
+
+        public void AllowRepoFetch()
+        {
+            _allowRepoFetch.TrySetResult();
+        }
 
         public int WorkflowCalls(string repo)
         {
@@ -45,12 +60,17 @@ public sealed class GitHubInventoryCacheTests : IDisposable
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            await Task.Delay(20, cancellationToken); // widen the window so the single-flight test really overlaps
             var path = request.RequestUri!.AbsolutePath;
             string json;
             if (path.EndsWith("/repos", StringComparison.Ordinal))
             {
                 _ = Interlocked.Increment(ref RepoCalls);
+                _repoFetchStarted.TrySetResult();
+                if (_blockRepoFetch)
+                {
+                    await _allowRepoFetch.Task.WaitAsync(cancellationToken);
+                }
+
                 json = """[{"name":"a","html_url":"https://github.com/FixPortal/a","private":false,"archived":false,"default_branch":"main"}]""";
             }
             else if (path.Contains("/actions/workflows", StringComparison.Ordinal))
@@ -83,7 +103,12 @@ public sealed class GitHubInventoryCacheTests : IDisposable
 
     private (GitHubInventoryCache Cache, CountingHandler Handler, MutableClock Clock) Build()
     {
-        var handler = new CountingHandler();
+        return Build(blockRepoFetch: false);
+    }
+
+    private (GitHubInventoryCache Cache, CountingHandler Handler, MutableClock Clock) Build(bool blockRepoFetch)
+    {
+        var handler = new CountingHandler(blockRepoFetch);
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         _clients.Add(http);
         var gitHub = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
@@ -134,10 +159,16 @@ public sealed class GitHubInventoryCacheTests : IDisposable
     [Fact]
     public async Task Concurrent_callers_collapse_into_a_single_fetch()
     {
-        var (cache, handler, _) = Build();
+        var (cache, handler, _) = Build(blockRepoFetch: true);
 
-        _ = await Task.WhenAll(Enumerable.Range(0, 20)
-            .Select(_ => cache.GetRepositoriesAsync(CancellationToken.None)));
+        var callers = Enumerable.Range(0, 20)
+            .Select(_ => cache.GetRepositoriesAsync(CancellationToken.None))
+            .ToArray();
+
+        await handler.RepoFetchStarted.WaitAsync(TestContext.Current.CancellationToken);
+        handler.AllowRepoFetch();
+
+        _ = await Task.WhenAll(callers);
 
         _ = handler.RepoCalls.Should().Be(1); // single-flight: 20 concurrent callers, one GitHub call
     }
