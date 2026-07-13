@@ -34,19 +34,19 @@ public class ProcessRunnerTests
         var stdoutClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var stderrClosed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        _ = Task.Run(async () =>
-        {
-            await Task.Delay(50, TestContext.Current.CancellationToken);
-            stdoutClosed.SetResult();
-            stderrClosed.SetResult();
-        }, TestContext.Current.CancellationToken);
-
-        await ProcessRunner.WaitForExitAndDrainAsync(
+        var wait = ProcessRunner.WaitForExitAndDrainAsync(
             Task.CompletedTask,
             stdoutClosed.Task,
             stderrClosed.Task,
             TimeSpan.FromMilliseconds(10),
             TestContext.Current.CancellationToken);
+
+        _ = wait.IsCompleted.Should().BeFalse();
+
+        stdoutClosed.SetResult();
+        stderrClosed.SetResult();
+
+        await wait;
 
         _ = stdoutClosed.Task.IsCompleted.Should().BeTrue();
         _ = stderrClosed.Task.IsCompleted.Should().BeTrue();
