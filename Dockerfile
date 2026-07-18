@@ -1,4 +1,3 @@
-# syntax=mirror.gcr.io/docker/dockerfile:1
 # Build stage: .NET SDK only (the UI is no longer served from this container;
 # ci.fixportal.org now redirects to www.fixportal.org/ci).
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
