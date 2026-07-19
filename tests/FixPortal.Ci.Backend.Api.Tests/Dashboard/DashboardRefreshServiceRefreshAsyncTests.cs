@@ -25,7 +25,6 @@ public class DashboardRefreshServiceRefreshAsyncTests
     // mid per-repo HTTP call) at any point during the refresh.
     private sealed class ConcurrencyProbeHandler : HttpMessageHandler
     {
-        public const string RateLimitedRepo = "repo-0";
         public const int RepoCount = 8;
 
         // MaxParallelRepos gate under test (DashboardRefreshService.cs:23).
@@ -33,6 +32,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
 
         private int _inFlight;
         private int _maxObserved;
+        private int _rateLimiterClaimed;
 
         // Completes when the cap is concurrently in flight, so the peak is observed
         // deterministically instead of depending on Task.Delay windows lining up.
@@ -56,7 +56,6 @@ public class DashboardRefreshServiceRefreshAsyncTests
                 path, @"^/repos/[^/]+/(?<repo>[^/]+)/actions/workflows$");
             if (match.Success)
             {
-                var repo = match.Groups["repo"].Value;
                 var current = Interlocked.Increment(ref _inFlight);
                 InterlockedMax(ref _maxObserved, current);
                 try
@@ -72,13 +71,16 @@ public class DashboardRefreshServiceRefreshAsyncTests
 
                     await _capReached.Task.WaitAsync(cancellationToken);
 
-                    if (repo == RateLimitedRepo)
+                    // Whichever admitted request wins this race emits the 429 that fires
+                    // the rate-limit cascade — it does not matter which repo, only that
+                    // one of the rendezvoused requests does it, so semaphore-admission
+                    // order can never leave the batch without a rate-limiter (no hang).
+                    if (Interlocked.Exchange(ref _rateLimiterClaimed, 1) == 0)
                     {
-                        // Fires the rate-limit cascade only once the cap has been proven.
                         return new HttpResponseMessage(HttpStatusCode.TooManyRequests);
                     }
 
-                    // Non-gated repos block until the cascade cancels them, so the
+                    // The rest block until the cascade cancels them, so the
                     // sibling-cancellation is event-driven rather than a raced delay.
                     await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
                     throw new OperationCanceledException(cancellationToken);
