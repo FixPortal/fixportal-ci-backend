@@ -467,4 +467,15 @@ public class DashboardRefreshServiceTests
 
         _ = result[0].LastMergedPr.Should().BeSameAs(cached);
     }
+
+    // CB-H6: pure predicate guarding an all-failed cold start from persisting garbage.
+    // Only the (anyFetchFailed: true, hasPrevious: false) combo must suppress persistence.
+    [Theory]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, true)]
+    public void ShouldPersist_persists_unless_every_repo_failed_with_no_prior_snapshot(
+        bool anyFetchFailed, bool hasPrevious, bool expected) =>
+        _ = DashboardRefreshService.ShouldPersist(anyFetchFailed, hasPrevious).Should().Be(expected);
 }
