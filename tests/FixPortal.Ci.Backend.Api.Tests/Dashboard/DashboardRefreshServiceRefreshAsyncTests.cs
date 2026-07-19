@@ -28,8 +28,15 @@ public class DashboardRefreshServiceRefreshAsyncTests
         public const string RateLimitedRepo = "repo-0";
         public const int RepoCount = 8;
 
+        // MaxParallelRepos gate under test (DashboardRefreshService.cs:23).
+        private const int MaxParallel = 6;
+
         private int _inFlight;
         private int _maxObserved;
+
+        // Completes when the cap is concurrently in flight, so the peak is observed
+        // deterministically instead of depending on Task.Delay windows lining up.
+        private readonly TaskCompletionSource _capReached = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public int MaxObserved => _maxObserved;
 
@@ -54,18 +61,27 @@ public class DashboardRefreshServiceRefreshAsyncTests
                 InterlockedMax(ref _maxObserved, current);
                 try
                 {
+                    // Rendezvous: every gate-holder parks here until the cap is
+                    // concurrently in flight. The semaphore admits at most MaxParallel,
+                    // so all of them park together and the peak is exactly the cap —
+                    // no reliance on the scheduler racing fixed delays.
+                    if (current >= MaxParallel)
+                    {
+                        _capReached.TrySetResult();
+                    }
+
+                    await _capReached.Task.WaitAsync(cancellationToken);
+
                     if (repo == RateLimitedRepo)
                     {
-                        // Resolves fast (relative to the other repos' delay below) so
-                        // it reliably triggers the rate-limit cascade while the other
-                        // gate-holders are still mid-flight, and while the queued
-                        // repos are still blocked on the semaphore.
-                        await Task.Delay(TimeSpan.FromMilliseconds(15), cancellationToken);
+                        // Fires the rate-limit cascade only once the cap has been proven.
                         return new HttpResponseMessage(HttpStatusCode.TooManyRequests);
                     }
 
-                    await Task.Delay(TimeSpan.FromMilliseconds(400), cancellationToken);
-                    return JsonOk("""{"workflows":[{"id":1,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}""");
+                    // Non-gated repos block until the cascade cancels them, so the
+                    // sibling-cancellation is event-driven rather than a raced delay.
+                    await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+                    throw new OperationCanceledException(cancellationToken);
                 }
                 finally
                 {

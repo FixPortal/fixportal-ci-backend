@@ -83,7 +83,13 @@ public class ProcessRunnerTests
         var captureDeadline = DateTime.UtcNow.AddMilliseconds(250);
         while (childId is null && DateTime.UtcNow < captureDeadline)
         {
-            var spawned = Process.GetProcessesByName(processName).Where(p => !before.Contains(p.Id)).ToList();
+            // A foreign ping/sleep could appear on a shared runner inside this window,
+            // so don't take an arbitrary new match: pick the most recently started one,
+            // which is the child RunAsync just launched.
+            var spawned = Process.GetProcessesByName(processName)
+                .Where(p => !before.Contains(p.Id))
+                .OrderByDescending(p => p.StartTime)
+                .ToList();
             if (spawned.Count > 0)
             {
                 childId = spawned[0].Id;
