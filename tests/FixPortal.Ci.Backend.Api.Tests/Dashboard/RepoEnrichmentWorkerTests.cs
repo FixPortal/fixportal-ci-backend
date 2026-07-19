@@ -1,10 +1,15 @@
+using System.Net;
+using System.Text;
 using AwesomeAssertions;
+using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NodaTime;
+using NodaTime.Testing;
 using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
@@ -88,5 +93,79 @@ public class RepoEnrichmentWorkerTests
         _ = worker.ExecuteTask!.IsCompletedSuccessfully.Should().BeTrue();
         _ = cache.TryGet("anything", out _).Should().BeFalse();
         await worker.StopAsync(CancellationToken.None);
+    }
+
+    // Handler backing a real GitHubInventoryCache for the ExecuteAsync-driving test
+    // below: ExecuteAsync's cold-start loop calls Inventory.GetRepositoriesAsync
+    // itself (unlike RunSweepAsync, which receives the repo list directly), so a
+    // real inventory over a fake HTTP handler is needed rather than null!.
+    private sealed class SingleRepoHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """[{"name":"a","html_url":"https://github.com/FixPortal/a","private":false,"archived":false,"default_branch":"main"}]""",
+                    Encoding.UTF8, "application/json"),
+            });
+    }
+
+    private static GitHubInventoryCache NewSingleRepoInventory()
+    {
+        var http = new HttpClient(new SingleRepoHandler()) { BaseAddress = new Uri("https://api.github.com/") };
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        return new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions);
+    }
+
+    private sealed class ExecuteAsyncFakeWorker(
+        GitHubInventoryCache inventory, PerRepoCache<RepoMetrics> cache, Func<GitHubRepoDto, RepoMetrics?> collect)
+        : RepoEnrichmentWorker<RepoMetrics>(null!, inventory, cache, NullLogger.Instance)
+    {
+        protected override bool Enabled => true;
+        protected override TimeSpan Cadence => TimeSpan.FromMilliseconds(1);
+        protected override string Name => "FakeExecuteAsync";
+        protected override Task<RepoMetrics?> CollectAsync(GitHubRepoDto repo, CancellationToken ct)
+            => Task.FromResult(collect(repo));
+    }
+
+    // CB-H8: drives the base class's real ExecuteAsync loop (not RunSweepAsync
+    // directly) so the cold-start retry guard itself is under test. On a failed
+    // cold-start sweep, ExecuteAsync must fall into its 5-minute retry delay rather
+    // than looping straight back into another sweep attempt — a regression here
+    // (e.g. the 5-minute Task.Delay replaced with a bare "continue") would drive
+    // CollectAsync into the hundreds/thousands of calls within this test's short
+    // observation window instead of staying at 1.
+    [Fact]
+    public async Task ExecuteAsync_should_not_hot_loop_after_a_failed_cold_start_sweep()
+    {
+        var cache = new PerRepoCache<RepoMetrics>();
+        var collectCount = 0;
+        var firstAttemptStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var worker = new ExecuteAsyncFakeWorker(NewSingleRepoInventory(), cache, repo =>
+        {
+            Interlocked.Increment(ref collectCount);
+            firstAttemptStarted.TrySetResult();
+            throw new InvalidOperationException("cold-start sweep failure");
+        });
+
+        await worker.StartAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            // ExecuteAsync jitters its very first sweep by 0-15s before the first
+            // attempt; wait for that attempt event-driven rather than guessing.
+            await firstAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+
+            // Observe over a bounded window well short of the 5-minute retry delay:
+            // a hot loop would blow this count up far past 1 within milliseconds; the
+            // correctly-guarded loop stays at exactly 1 throughout.
+            await Task.Delay(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
+            _ = Volatile.Read(ref collectCount).Should().Be(1);
+        }
+        finally
+        {
+            await worker.StopAsync(TestContext.Current.CancellationToken);
+        }
     }
 }
