@@ -32,7 +32,7 @@ jobs:
           shellcheck: true
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@26b0ec14cb23fa6904739307f278c14f94c95bf1 # v5
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 
@@ -72,7 +72,7 @@ jobs:
       # context, so the pinned SHAs are a deliberate supply-chain trust decision:
       # update them only by reviewing the target revision, never by bumping the tag.
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@5fe3b77775f1dd55595beb998036fe1f2cf47118 # v1
+        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
 
       - name: Log in to GHCR
         uses: docker/login-action@af1e73f918a031802d376d3c8bbc3fe56130a9b0 # v4.4.0
