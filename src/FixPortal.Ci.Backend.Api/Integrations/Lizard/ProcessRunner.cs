@@ -112,7 +112,7 @@ public static class ProcessRunner
         try
         {
             await WaitForExitAndDrainAsync(
-                process.WaitForExitAsync(),
+                process.WaitForExitAsync(ct),
                 stdoutClosed.Task,
                 stderrClosed.Task,
                 timeout,
@@ -144,7 +144,8 @@ public static class ProcessRunner
     private static void TryKill(Process process)
     {
         try
-        { if (!process.HasExited)
+        {
+            if (!process.HasExited)
             {
                 process.Kill(entireProcessTree: true);
             }

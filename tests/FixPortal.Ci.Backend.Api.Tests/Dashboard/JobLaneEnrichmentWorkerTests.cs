@@ -34,7 +34,7 @@ public class JobLaneEnrichmentWorkerTests
 
             if (path.EndsWith("/actions/workflows", StringComparison.Ordinal))
             {
-                var repo = Regex.Match(path, @"^/repos/[^/]+/(?<repo>[^/]+)/actions/workflows$").Groups["repo"].Value;
+                var repo = Regex.Match(path, "^/repos/[^/]+/(?<repo>[^/]+)/actions/workflows$").Groups["repo"].Value;
                 if (repo == FailWorkflowsForRepo)
                 {
                     return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));

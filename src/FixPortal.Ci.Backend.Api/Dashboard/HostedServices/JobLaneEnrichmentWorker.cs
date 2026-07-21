@@ -3,7 +3,6 @@ using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Options;
-using NodaTime;
 
 namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 
@@ -27,10 +26,10 @@ public sealed class JobLaneEnrichmentWorker(
 {
 
 
-    // Case-insensitive to match EffectiveJobLanes' OrdinalIgnoreCase de-dup: a
+    // Case-insensitive to match GetEffectiveJobLanes' OrdinalIgnoreCase de-dup: a
     // configured key differing only in casing (e.g. "Deploys") must still resolve.
     private JobLaneOptions? Lane =>
-        options.Value.EffectiveJobLanes.FirstOrDefault(l => string.Equals(l.Key, laneKey, StringComparison.OrdinalIgnoreCase));
+        options.Value.GetEffectiveJobLanes().FirstOrDefault(l => string.Equals(l.Key, laneKey, StringComparison.OrdinalIgnoreCase));
 
     protected override bool Enabled => Lane?.Enabled == true;
     protected override TimeSpan Cadence => TimeSpan.FromSeconds(Lane?.RefreshSeconds ?? 300);

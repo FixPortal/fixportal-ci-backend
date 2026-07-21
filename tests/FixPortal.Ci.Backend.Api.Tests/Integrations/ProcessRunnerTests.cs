@@ -63,6 +63,8 @@ public class ProcessRunnerTests
     [Fact]
     public async Task RunAsync_should_kill_a_genuinely_blocking_child_process_on_timeout()
     {
+        // Collection expressions have no target type inside these conditional tuple branches.
+        // ReSharper disable UseCollectionExpression
         var (fileName, arguments, processName) = OperatingSystem.IsWindows()
             ? ("ping", new[] { "-n", "60", "127.0.0.1" }, "ping")
             : ("sleep", new[] { "60" }, "sleep");

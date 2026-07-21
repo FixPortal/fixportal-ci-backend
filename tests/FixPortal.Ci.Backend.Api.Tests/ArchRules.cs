@@ -1,4 +1,3 @@
-using System;
 using System.Runtime.CompilerServices;
 using ArchUnitNET.Domain;
 using ArchUnitNET.Fluent;

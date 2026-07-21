@@ -1,5 +1,5 @@
-using Microsoft.Extensions.Caching.Memory;
 using System.Net.Http.Headers;
+using Microsoft.Extensions.Caching.Memory;
 
 namespace FixPortal.Ci.Backend.Api.Integrations.GitHub;
 

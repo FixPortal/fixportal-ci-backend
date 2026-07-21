@@ -1,12 +1,14 @@
+using System.Security.Cryptography;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using Microsoft.Extensions.Options;
-using System.Security.Cryptography;
 
 namespace FixPortal.Ci.Backend.Api.Dashboard.Endpoints;
 
 public static class DashboardEndpoints
 {
+    // Fluent endpoint-map return values are part of the conventional extension API even when this host does not chain it.
+    // ReSharper disable once UnusedMethodReturnValue.Global
     public static IEndpointRouteBuilder MapDashboardEndpoints(this IEndpointRouteBuilder endpoints)
     {
         // Served from the in-memory holder: no per-request disk I/O and no race
