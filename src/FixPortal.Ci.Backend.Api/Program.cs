@@ -43,7 +43,7 @@ builder.Services.AddOptions<AdminOptions>()
     // unconditionally when no key is configured. But a *set* key that is implausibly
     // short is almost certainly a truncated/typo'd secret — reject it at startup
     // rather than shipping a guessable admin key.
-    .Validate(o => o.AdminKey.Length is 0 or >= 16, "Admin:AdminKey, when set, must be at least 16 characters.")
+    .Validate(o => o.HasValidAdminKeyLength(), "Admin:AdminKey, when set, must be at least 16 characters.")
     .ValidateOnStart();
 
 // CORS so the FixPortal SPA (a separate origin) can read the public snapshot.

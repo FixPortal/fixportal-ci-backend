@@ -1,4 +1,5 @@
 using AwesomeAssertions;
+using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -19,6 +20,20 @@ public class AdminOptionsValidationTests
             // No background polling in tests; ValidateOnStart still runs at host start.
             _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
         }).CreateClient();
+    }
+
+    [Theory]
+    [InlineData("", true)]
+    [InlineData("short", false)]
+    [InlineData("123456789012345", false)]
+    [InlineData("1234567890123456", true)]
+    public void Admin_key_length_rule_accepts_only_empty_or_sufficiently_long_values(
+        string adminKey,
+        bool expected)
+    {
+        var options = new AdminOptions { AdminKey = adminKey };
+
+        _ = options.HasValidAdminKeyLength().Should().Be(expected);
     }
 
     [Fact]
