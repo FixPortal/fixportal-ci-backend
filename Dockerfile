@@ -7,7 +7,9 @@ COPY *.slnx ./
 COPY nuget.config ./
 COPY Directory.Build.props Directory.Packages.props ./
 COPY src/FixPortal.Ci.Backend.Api/FixPortal.Ci.Backend.Api.csproj src/FixPortal.Ci.Backend.Api/
-RUN dotnet restore src/FixPortal.Ci.Backend.Api/FixPortal.Ci.Backend.Api.csproj
+RUN --mount=type=secret,id=github-packages-token,required=true \
+    GITHUB_PACKAGES_TOKEN="$(cat /run/secrets/github-packages-token)" \
+    dotnet restore src/FixPortal.Ci.Backend.Api/FixPortal.Ci.Backend.Api.csproj
 COPY . .
 RUN dotnet publish src/FixPortal.Ci.Backend.Api/FixPortal.Ci.Backend.Api.csproj \
     --configuration Release --output /app --no-restore
