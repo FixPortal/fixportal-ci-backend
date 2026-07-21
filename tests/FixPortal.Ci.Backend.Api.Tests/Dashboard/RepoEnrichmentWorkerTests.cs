@@ -143,8 +143,10 @@ public class RepoEnrichmentWorkerTests
         var cache = new PerRepoCache<RepoMetrics>();
         var collectCount = 0;
         var firstAttemptStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var worker = new ExecuteAsyncFakeWorker(NewSingleRepoInventory(), cache, repo =>
+        var worker = new ExecuteAsyncFakeWorker(NewSingleRepoInventory(), cache, _ =>
         {
+            // The callback intentionally updates the observation read after the worker stops.
+            // ReSharper disable once AccessToModifiedClosure
             Interlocked.Increment(ref collectCount);
             firstAttemptStarted.TrySetResult();
             throw new InvalidOperationException("cold-start sweep failure");

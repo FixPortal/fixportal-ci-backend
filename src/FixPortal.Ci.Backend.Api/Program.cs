@@ -34,8 +34,8 @@ builder.Services.AddOptions<DashboardOptions>()
     .Validate(o => o.RefreshSeconds > 0, "Dashboard:RefreshSeconds must be greater than zero.")
     .Validate(o => o.MetricsRefreshSeconds > 0, "Dashboard:MetricsRefreshSeconds must be greater than zero.")
     .Validate(o => o.MergedPrRefreshSeconds > 0, "Dashboard:MergedPrRefreshSeconds must be greater than zero.")
-    .Validate(o => o.EffectiveJobLanes.All(l => l.RefreshSeconds > 0), "Dashboard:JobLanes:RefreshSeconds must be greater than zero.")
-    .Validate(o => o.EffectiveJobLanes.All(l => l.MaxRunsToScan > 0), "Dashboard:JobLanes:MaxRunsToScan must be greater than zero.")
+    .Validate(o => o.GetEffectiveJobLanes().All(l => l.RefreshSeconds > 0), "Dashboard:JobLanes:RefreshSeconds must be greater than zero.")
+    .Validate(o => o.GetEffectiveJobLanes().All(l => l.MaxRunsToScan > 0), "Dashboard:JobLanes:MaxRunsToScan must be greater than zero.")
     .ValidateOnStart();
 builder.Services.AddOptions<AdminOptions>()
     .Bind(builder.Configuration.GetSection("Admin"))
@@ -134,7 +134,7 @@ var dashboardOptions = app.Services.GetRequiredService<IOptions<DashboardOptions
 var registeredKeys = new HashSet<string>(["deploys", "packages"], StringComparer.OrdinalIgnoreCase);
 // Log the lanes actually in force (config binding is append-not-replace prone) so a
 // silently-ignored or mis-cadenced lane is visible at startup rather than a mystery.
-var effectiveLanes = dashboardOptions.EffectiveJobLanes;
+var effectiveLanes = dashboardOptions.GetEffectiveJobLanes();
 foreach (var lane in effectiveLanes)
 {
     app.Logger.LogInformation(
@@ -177,5 +177,7 @@ await app.RunAsync();
 // reference the entry point from the test project — not a utility class, so
 // S1118 (utility classes should not have a public constructor) does not apply.
 #pragma warning disable S1118
+// Referenced by WebApplicationFactory from the test assembly.
+// ReSharper disable once ClassNeverInstantiated.Global
 public partial class Program;
 #pragma warning restore S1118

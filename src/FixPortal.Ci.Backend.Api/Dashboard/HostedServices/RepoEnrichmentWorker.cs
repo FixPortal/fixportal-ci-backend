@@ -42,47 +42,12 @@ public abstract class RepoEnrichmentWorker<T>(
             return;
         }
 
-        // Stagger/jitter initial sweep: 0 to 15 seconds
-        var jitter = Random.Shared.Next(0, 15000);
-        try
-        {
-            await Task.Delay(jitter, stoppingToken);
-        }
-        catch (OperationCanceledException)
+        if (!await WaitForInitialJitterAsync(stoppingToken))
         {
             return;
         }
 
-        var firstSweepSuccessful = false;
-        while (!firstSweepSuccessful && !stoppingToken.IsCancellationRequested)
-        {
-            var success = await SweepSafelyAsync(stoppingToken);
-            if (success)
-            {
-                // A successful sweep ends cold-start even if it produced no cached
-                // values: an org with no matching repos legitimately yields an empty
-                // cache, and retrying every 5 minutes forever would never converge.
-                // The steady-state cadence picks up data once any repo emits it.
-                firstSweepSuccessful = true;
-                if (cache.IsEmpty)
-                {
-                    logger.LogInformation("{Name} cold-start sweep completed but produced no cached values (no matching repos?); switching to steady-state cadence.", Name);
-                }
-            }
-            else
-            {
-                logger.LogWarning("{Name} cold-start sweep failed; retrying in 5 minutes.", Name);
-                try
-                {
-                    await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
-                }
-                catch (OperationCanceledException)
-                {
-                    break;
-                }
-            }
-        }
-
+        await RunColdStartAsync(stoppingToken);
         if (!stoppingToken.IsCancellationRequested)
         {
             using var timer = new PeriodicTimer(Cadence);
@@ -93,8 +58,48 @@ public abstract class RepoEnrichmentWorker<T>(
         }
     }
 
+    private static async Task<bool> WaitForInitialJitterAsync(CancellationToken stoppingToken)
+    {
+        try
+        {
+            await Task.Delay(Random.Shared.Next(0, 15000), stoppingToken);
+            return true;
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+    }
+
+    private async Task RunColdStartAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            if (await SweepSafelyAsync(stoppingToken))
+            {
+                // An empty result is legitimate, so a successful sweep always ends cold-start.
+                if (cache.IsEmpty)
+                {
+                    logger.LogInformation("{Name} cold-start sweep completed but produced no cached values (no matching repos?); switching to steady-state cadence.", Name);
+                }
+
+                return;
+            }
+
+            logger.LogWarning("{Name} cold-start sweep failed; retrying in 5 minutes.", Name);
+            try
+            {
+                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+            }
+            catch (OperationCanceledException)
+            {
+                return;
+            }
+        }
+    }
+
     // Per-sweep tally used to decide whether a cold-start sweep genuinely succeeded.
-    protected readonly record struct SweepOutcome(int Total, int Written, int Failed);
+    protected readonly record struct SweepOutcome(int Total, int Failed);
 
     private async Task<bool> SweepSafelyAsync(CancellationToken ct)
     {
@@ -111,7 +116,7 @@ public abstract class RepoEnrichmentWorker<T>(
             // instead of throwing are not counted here — distinguishing a soft-fail null
             // from a legitimate no-data null (e.g. a repo with no merged PR) needs a
             // tri-state collect contract, out of scope for this guard.
-            return !(outcome.Total > 0 && outcome.Failed > 0);
+            return outcome is not { Total: > 0, Failed: > 0 };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -130,7 +135,6 @@ public abstract class RepoEnrichmentWorker<T>(
     // prior cached value when CollectAsync returns null. Returns the per-sweep tally.
     protected async Task<SweepOutcome> RunSweepAsync(IReadOnlyList<GitHubRepoDto> repos, CancellationToken ct)
     {
-        var written = 0;
         var failed = 0;
         foreach (var repo in repos)
         {
@@ -141,7 +145,6 @@ public abstract class RepoEnrichmentWorker<T>(
                 if (value is not null)
                 {
                     cache.Update(repo.Name, value);
-                    written++;
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -157,6 +160,6 @@ public abstract class RepoEnrichmentWorker<T>(
                 logger.LogWarning(ex, "Failed to collect enrichment for {Repo} during {Name} sweep; keeping prior cached value.", repo.Name, Name);
             }
         }
-        return new SweepOutcome(repos.Count, written, failed);
+        return new SweepOutcome(repos.Count, failed);
     }
 }

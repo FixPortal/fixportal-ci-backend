@@ -89,7 +89,7 @@ public class DashboardRefreshWorkerTests
         var worker = new DashboardRefreshWorker(refreshService, options, workerLogger);
 
         await worker.StartAsync(TestContext.Current.CancellationToken);
-        // Event-driven: wait for the exact moment the guard's catch(Exception) logged
+        // Event-driven: wait for the exact moment the guard logged
         // the failed cycle, rather than sleeping a guessed duration.
         await workerLogger.ErrorLogged.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
 

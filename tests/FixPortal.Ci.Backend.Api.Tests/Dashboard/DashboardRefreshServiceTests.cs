@@ -274,8 +274,8 @@ public class DashboardRefreshServiceTests
 
         var refreshed = DashboardRefreshService.BuildCiTrendForRefresh(
             [
-                (Repo("a"), true, Array.Empty<WorkflowRun>()),
-                (Repo("b", (SignalState.Success, "success")), false, new[] { RunAt(now - Duration.FromMinutes(20), "success") }),
+                (Repo("a"), true, []),
+                (Repo("b", (SignalState.Success, "success")), false, [RunAt(now - Duration.FromMinutes(20), "success")]),
             ],
             now,
             previous);
@@ -402,8 +402,8 @@ public class DashboardRefreshServiceTests
     public void InheritEnrichment_fills_cold_metrics_deploys_and_packages_from_previous_snapshot()
     {
         var priorMetrics = new RepoMetrics(1000, 2.0, 50, 1, Instant.MinValue);
-        IReadOnlyList<JobSignal> priorDeploys = [new JobSignal("CI", "Deploy", SignalState.Success, "u", Instant.MinValue)];
-        IReadOnlyList<JobSignal> priorPackages = [new JobSignal("CI", "Publish", SignalState.Success, "u", Instant.MinValue)];
+        IReadOnlyList<JobSignal> priorDeploys = [new("CI", "Deploy", SignalState.Success, "u", Instant.MinValue)];
+        IReadOnlyList<JobSignal> priorPackages = [new("CI", "Publish", SignalState.Success, "u", Instant.MinValue)];
         var previous = new DashboardSnapshot(Instant.MinValue, "FixPortal",
             [Repo("a") with { Metrics = priorMetrics, Deploys = priorDeploys, Packages = priorPackages }],
             [], null);
@@ -420,7 +420,7 @@ public class DashboardRefreshServiceTests
     public void InheritEnrichment_does_not_overwrite_fresh_enrichment()
     {
         var freshMetrics = new RepoMetrics(500, 1.5, 20, 0, Instant.MinValue);
-        IReadOnlyList<JobSignal> freshDeploys = [new JobSignal("CI", "Deploy", SignalState.Failure, "u", Instant.MinValue)];
+        IReadOnlyList<JobSignal> freshDeploys = [new("CI", "Deploy", SignalState.Failure, "u", Instant.MinValue)];
         var previous = new DashboardSnapshot(Instant.MinValue, "FixPortal",
             [Repo("a") with {
                 Metrics = new RepoMetrics(1000, 2.0, 50, 1, Instant.MinValue),

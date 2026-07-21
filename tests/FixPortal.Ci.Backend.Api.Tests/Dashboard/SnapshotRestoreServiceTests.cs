@@ -79,13 +79,14 @@ public class SnapshotRestoreServiceTests
     {
         using var cts = new CancellationTokenSource();
         await cts.CancelAsync();
+        var cancelledToken = cts.Token;
         var store = Substitute.For<IDashboardSnapshotStore>();
         _ = store.LoadAsync(Arg.Any<CancellationToken>())
-            .ThrowsAsync(_ => new OperationCanceledException(cts.Token));
+            .ThrowsAsync(_ => new OperationCanceledException(cancelledToken));
         var state = new DashboardSnapshotState();
         var sut = new SnapshotRestoreService(store, state, NullLogger<SnapshotRestoreService>.Instance);
 
-        var act = async () => await sut.StartingAsync(cts.Token);
+        var act = async () => await sut.StartingAsync(cancelledToken);
 
         _ = await act.Should().ThrowAsync<OperationCanceledException>();
     }

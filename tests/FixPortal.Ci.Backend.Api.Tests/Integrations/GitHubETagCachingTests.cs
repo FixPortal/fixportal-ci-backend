@@ -1,6 +1,9 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
+
+// Constant BaseAddress initialization is non-throwing here; using declarations keep the tests flat and dispose at scope exit.
+// ReSharper disable UsingStatementResourceInitialization
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
@@ -55,7 +58,10 @@ public class GitHubETagCachingTests
     {
         var store = new GitHubETagStore();
         var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Ok(PullBody(1, "one"), "W/\"abc\"")]));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
         var client = CreateClient(http, store);
 
         var prs = await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
@@ -74,7 +80,10 @@ public class GitHubETagCachingTests
             Ok(PullBody(1, "one"), "W/\"abc\""),
             new HttpResponseMessage(HttpStatusCode.NotModified),
         ]));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
         var client = CreateClient(http, store);
 
         _ = await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
@@ -93,7 +102,10 @@ public class GitHubETagCachingTests
             Ok(PullBody(1, "old"), "W/\"v1\""),
             Ok(PullBody(2, "new"), "W/\"v2\""),
         ]));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
         var client = CreateClient(http, store);
 
         _ = await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);

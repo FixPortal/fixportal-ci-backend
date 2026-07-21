@@ -1,5 +1,8 @@
 namespace FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 
+// Properties are populated by Microsoft.Extensions.Configuration binding.
+// ReSharper disable AutoPropertyCanBeMadeGetOnly.Global
+
 /// <summary>
 /// One configurable "job lane" — a named set of job-name patterns the lane worker
 /// matches inside each repo's workflows (e.g. deploys, packages). Decouples the

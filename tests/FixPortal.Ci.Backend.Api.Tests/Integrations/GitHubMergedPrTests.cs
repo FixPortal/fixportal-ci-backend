@@ -1,5 +1,8 @@
 using System.Net;
 using System.Text;
+
+// Constant BaseAddress initialization is non-throwing here; using declarations keep the tests flat and dispose at scope exit.
+// ReSharper disable UsingStatementResourceInitialization
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
@@ -126,7 +129,10 @@ public class GitHubMergedPrTests
             .Select(k => (Number: 100 + k, Merged: (long?)null, Updated: 3000L - k)).ToArray());
         var page2 = SearchPage((42, 2500L, 2980L));
         var handler = new RecordingHandler(page1, page2);
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
         var client = NewClient(http);
 
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);
@@ -150,7 +156,10 @@ public class GitHubMergedPrTests
             .Select(k => (Number: 200 + k, Merged: (long?)(k == 0 ? 4985L : null), Updated: 5000L - k)).ToArray());
         var unreachablePage2 = SearchPage((999, 4990L, 4980L));
         var handler = new RecordingHandler(page1, unreachablePage2);
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
         var client = NewClient(http);
 
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);
@@ -169,7 +178,10 @@ public class GitHubMergedPrTests
         // not the dominate-the-window termination.
         var page1 = SearchPage((7, 500L, 1000L));
         var handler = new RecordingHandler(page1, SearchPage((8, 2000L, 2000L)));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
         var client = NewClient(http);
 
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);

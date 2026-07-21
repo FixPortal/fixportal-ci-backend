@@ -121,8 +121,8 @@ public sealed class DashboardRefreshService(
                     GitHubOrgClient.ToSignalState(latest), latest));
             }
             // PRs are supplementary: listing them needs the "Pull requests: Read"
-            // PAT scope, which workflow/run reads (Actions: Read) do not. A missing
-            // PR scope, or a transient PR-endpoint error, must NOT degrade the repo;
+            // token scope, which workflow/run reads (Actions: Read) do not. Missing
+            // pull-request access, or a transient endpoint error, must not degrade the repo.
             // only rate limits propagate and abort the batch.
             var pullRequests = await TryListOpenPullRequestsAsync(repo.Name, rateLimitToken);
             _ = metrics.TryGet(repo.Name, out var repoMetrics);
@@ -163,12 +163,12 @@ public sealed class DashboardRefreshService(
         }
     }
 
-    // Best-effort: PRs are supplementary, so neither a missing "Pull requests: Read"
-    // scope nor a transient PR-endpoint error may degrade the repo — show no PRs and
-    // keep the freshly fetched workflow/run signals. A 401/403 on this endpoint
-    // surfaces as GitHubAuthException (SendAsync maps it before EnsureSuccessStatusCode);
-    // a 5xx or transport fault surfaces as HttpRequestException. Both return []. Rate
-    // limits (GitHubRateLimitException) deliberately propagate to abort the batch.
+    // Best-effort: pull requests are supplementary, so neither missing read access
+    // nor a transient endpoint error may degrade the repo — show no pull requests and
+    // keep the freshly fetched workflow/run signals. Authentication and authorization
+    // responses are mapped to the domain auth exception; server and transport faults
+    // use the standard HTTP exception. Both return an empty list. The domain rate-limit
+    // exception deliberately propagates to abort the batch.
     private async Task<IReadOnlyList<PullRequest>> TryListOpenPullRequestsAsync(
         string repo, CancellationToken rateLimitToken)
     {

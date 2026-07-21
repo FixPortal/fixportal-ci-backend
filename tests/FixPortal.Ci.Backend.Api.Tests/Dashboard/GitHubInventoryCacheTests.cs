@@ -30,18 +30,12 @@ public sealed class GitHubInventoryCacheTests : IDisposable
     // Counts requests per inventory endpoint so a test can assert the cache
     // collapsed N callers into one GitHub fetch. Returns canned snake_case JSON
     // matching the shapes ListRepositoriesAsync / ListWorkflowsAsync expect.
-    private sealed class CountingHandler : HttpMessageHandler
+    private sealed class CountingHandler(bool blockRepoFetch = false) : HttpMessageHandler
     {
-        private readonly bool _blockRepoFetch;
         private readonly TaskCompletionSource _repoFetchStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _allowRepoFetch = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int RepoCalls;
         private readonly Dictionary<string, int> _workflowCalls = new(StringComparer.OrdinalIgnoreCase);
-
-        public CountingHandler(bool blockRepoFetch = false)
-        {
-            _blockRepoFetch = blockRepoFetch;
-        }
 
         public Task RepoFetchStarted => _repoFetchStarted.Task;
 
@@ -66,7 +60,7 @@ public sealed class GitHubInventoryCacheTests : IDisposable
             {
                 _ = Interlocked.Increment(ref RepoCalls);
                 _repoFetchStarted.TrySetResult();
-                if (_blockRepoFetch)
+                if (blockRepoFetch)
                 {
                     await _allowRepoFetch.Task.WaitAsync(cancellationToken);
                 }
@@ -101,12 +95,7 @@ public sealed class GitHubInventoryCacheTests : IDisposable
         public Instant GetCurrentInstant() => Now;
     }
 
-    private (GitHubInventoryCache Cache, CountingHandler Handler, MutableClock Clock) Build()
-    {
-        return Build(blockRepoFetch: false);
-    }
-
-    private (GitHubInventoryCache Cache, CountingHandler Handler, MutableClock Clock) Build(bool blockRepoFetch)
+    private (GitHubInventoryCache Cache, CountingHandler Handler, MutableClock Clock) Build(bool blockRepoFetch = false)
     {
         var handler = new CountingHandler(blockRepoFetch);
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };

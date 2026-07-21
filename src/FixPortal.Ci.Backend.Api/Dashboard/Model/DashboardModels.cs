@@ -1,5 +1,8 @@
 using NodaTime;
 
+// Public snapshot members are serialized API-contract fields, including fields not read by this assembly.
+// ReSharper disable NotAccessedPositionalProperty.Global
+
 namespace FixPortal.Ci.Backend.Api.Dashboard.Model;
 
 public enum SignalState

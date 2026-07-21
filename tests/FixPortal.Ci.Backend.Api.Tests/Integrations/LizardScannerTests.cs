@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Text;
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
@@ -22,7 +21,7 @@ public class LizardScannerTests
         _ = string.Join(' ', arguments).Should().NotContain("super-secret-token");
         _ = arguments.Should().Contain("https://github.com/FixPortal/fixportal-ci-dashboard.git");
         _ = environment["GIT_CONFIG_KEY_0"].Should().Be("http.https://github.com/.extraheader");
-        _ = environment["GIT_CONFIG_VALUE_0"].Should().Be($"AUTHORIZATION: basic {Convert.ToBase64String(Encoding.UTF8.GetBytes("x-access-token:super-secret-token"))}");
+        _ = environment["GIT_CONFIG_VALUE_0"].Should().Be($"AUTHORIZATION: basic {Convert.ToBase64String("x-access-token:super-secret-token"u8)}");
     }
 
     private static LizardScanner NewScanner(string workRoot) =>

@@ -8,7 +8,7 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 // Guards the M2 fix: config-bound JobLanes must REPLACE, not be shadowed by, the
 // compiled defaults. The .NET configuration binder appends bound collection items
 // to a pre-populated list, so the defaults live in DefaultJobLanes (not the bound
-// property) and consumers read EffectiveJobLanes.
+// property) and consumers call GetEffectiveJobLanes().
 public class DashboardOptionsTests
 {
     [Fact]
@@ -17,8 +17,8 @@ public class DashboardOptionsTests
         var options = new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 30 };
 
         _ = options.JobLanes.Should().BeEmpty();
-        _ = options.EffectiveJobLanes.Should().BeEquivalentTo(DashboardOptions.DefaultJobLanes);
-        _ = options.EffectiveJobLanes.Select(l => l.Key).Should().Equal("deploys", "packages");
+        _ = options.GetEffectiveJobLanes().Should().BeEquivalentTo(DashboardOptions.DefaultJobLanes);
+        _ = options.GetEffectiveJobLanes().Select(l => l.Key).Should().Equal("deploys", "packages");
     }
 
     [Fact]
@@ -35,14 +35,14 @@ public class DashboardOptionsTests
             ],
         };
 
-        var deploys = options.EffectiveJobLanes.Single(l => l.Key == "deploys");
+        var deploys = options.GetEffectiveJobLanes().Single(l => l.Key == "deploys");
         _ = deploys.RefreshSeconds.Should().Be(150);
         _ = deploys.Label.Should().Be("New");
     }
 
     // The exact defect: the binder appends the configured lane after the compiled
     // default of the same Key, and a naive FirstOrDefault(Key) returns the dead
-    // default. EffectiveJobLanes must resolve the CONFIGURED cadence (150s), not 300s.
+    // default. GetEffectiveJobLanes must resolve the CONFIGURED cadence (150s), not 300s.
     [Fact]
     public void Configured_lane_cadence_wins_over_the_compiled_default_after_binding()
     {
@@ -60,7 +60,7 @@ public class DashboardOptionsTests
         var options = new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 30 };
         config.GetSection("Dashboard").Bind(options);
 
-        var deploys = options.EffectiveJobLanes.Single(l => l.Key == "deploys");
+        var deploys = options.GetEffectiveJobLanes().Single(l => l.Key == "deploys");
         _ = deploys.RefreshSeconds.Should().Be(150);
     }
 }

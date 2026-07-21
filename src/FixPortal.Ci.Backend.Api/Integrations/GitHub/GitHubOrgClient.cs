@@ -7,6 +7,10 @@ using Microsoft.Extensions.Options;
 using NodaTime;
 using NodaTime.Serialization.SystemTextJson;
 
+// GitHub response records are instantiated and populated by System.Text.Json.
+// ReSharper disable ClassNeverInstantiated.Global
+// ReSharper disable NotAccessedPositionalProperty.Global
+
 namespace FixPortal.Ci.Backend.Api.Integrations.GitHub;
 
 public sealed class GitHubRateLimitException(string message) : Exception(message);
@@ -56,7 +60,6 @@ public sealed class GitHubOrgClient(
     internal const int SearchPageSize = 20;
     private readonly GitHubOptions _gitHub = gitHub.Value;
     private readonly DashboardOptions _dashboard = dashboard.Value;
-    private readonly GitHubETagStore _etags = etags;
 
     public async Task<IReadOnlyList<GitHubRepoDto>> ListRepositoriesAsync(CancellationToken ct)
     {
@@ -107,18 +110,23 @@ public sealed class GitHubOrgClient(
     }
 
     private WorkflowRun ToWorkflowRun(GitHubRunItem run, string repo, GitHubWorkflowDto workflow) =>
-        new(run.Status, run.Conclusion,
-            string.IsNullOrWhiteSpace(run.HtmlUrl)
-                // No html_url on the run (rare): link to the specific run when we have
-                // its id, falling back to the workflow file only if the id is absent.
-                ? run.Id > 0
-                    ? $"https://github.com/{_gitHub.Owner}/{repo}/actions/runs/{run.Id}"
-                    : $"https://github.com/{_gitHub.Owner}/{repo}/actions/workflows/{FileName(workflow.Path)}"
-                : run.HtmlUrl,
+        new(run.Status, run.Conclusion, GetRunUrl(run, repo, workflow),
             string.IsNullOrWhiteSpace(run.DisplayTitle) ? workflow.Name : run.DisplayTitle,
             run.RunNumber, run.HeadBranch, run.Event, run.UpdatedAt,
             repo,
             FileName(workflow.Path));
+
+    private string GetRunUrl(GitHubRunItem run, string repo, GitHubWorkflowDto workflow)
+    {
+        if (!string.IsNullOrWhiteSpace(run.HtmlUrl))
+        {
+            return run.HtmlUrl;
+        }
+
+        return run.Id > 0
+            ? $"https://github.com/{_gitHub.Owner}/{repo}/actions/runs/{run.Id}"
+            : $"https://github.com/{_gitHub.Owner}/{repo}/actions/workflows/{FileName(workflow.Path)}";
+    }
 
     public async Task<IReadOnlyList<PullRequest>> ListOpenPullRequestsAsync(string repo, CancellationToken ct)
     {
@@ -175,19 +183,7 @@ public sealed class GitHubOrgClient(
                 break;
             }
 
-            var pageBest = items
-                .Where(i => i.PullRequest?.MergedAt is not null)
-                .MaxBy(i => i.PullRequest!.MergedAt!.Value);
-
-            if (pageBest is not null)
-            {
-                var pageMax = pageBest.PullRequest!.MergedAt!.Value;
-                if (maxMergedAt is null || pageMax > maxMergedAt.Value)
-                {
-                    maxMergedAt = pageMax;
-                    bestItem = pageBest;
-                }
-            }
+            UpdateLatestMerged(items, ref maxMergedAt, ref bestItem);
 
             var lastItem = items[^1];
             // Termination: since subsequent items have updated_at <= lastItem.UpdatedAt,
@@ -220,6 +216,27 @@ public sealed class GitHubOrgClient(
                 ? $"https://github.com/{_gitHub.Owner}/{repo}/pull/{bestItem.Number}"
                 : bestItem.HtmlUrl!,
             maxMergedAt!.Value);
+    }
+
+    private static void UpdateLatestMerged(
+        IReadOnlyList<GitHubSearchIssueDto> items,
+        ref Instant? maxMergedAt,
+        ref GitHubSearchIssueDto? bestItem)
+    {
+        var pageBest = items
+            .Where(i => i.PullRequest?.MergedAt is not null)
+            .MaxBy(i => i.PullRequest!.MergedAt!.Value);
+        if (pageBest is null)
+        {
+            return;
+        }
+
+        var pageMax = pageBest.PullRequest!.MergedAt!.Value;
+        if (maxMergedAt is null || pageMax > maxMergedAt.Value)
+        {
+            maxMergedAt = pageMax;
+            bestItem = pageBest;
+        }
     }
 
     public async Task<IReadOnlyList<GitHubRunSummary>> GetRecentDefaultBranchRunsAsync(
@@ -434,7 +451,7 @@ public sealed class GitHubOrgClient(
         // Conditional GET: a matching validator yields 304 Not Modified, which GitHub
         // serves without charging the primary rate limit. We then return the payload
         // decoded from the prior 200 rather than re-fetching it.
-        var cached = _etags.Get(url);
+        var cached = etags.Get(url);
         if (cached is not null)
         {
             request.Headers.IfNoneMatch.Add(cached.ETag);
@@ -476,7 +493,7 @@ public sealed class GitHubOrgClient(
         // the sibling parallel fetches. The header check only disambiguates a 403,
         // which is genuinely ambiguous between auth failure and rate limit.
         if (response.StatusCode == HttpStatusCode.TooManyRequests
-            || (response.StatusCode == HttpStatusCode.Forbidden && IsRateLimited(response)))
+            || response.StatusCode == HttpStatusCode.Forbidden && IsRateLimited(response))
         {
             throw new GitHubRateLimitException($"GitHub rate limit reached (HTTP {(int)response.StatusCode}) for {url}.");
         }
@@ -487,7 +504,7 @@ public sealed class GitHubOrgClient(
         // Remember the validator + payload so the next cycle can revalidate cheaply.
         if (response.Headers.ETag is { } etag)
         {
-            _etags.Set(url, etag, value);
+            etags.Set(url, etag, value);
         }
 
         return value;

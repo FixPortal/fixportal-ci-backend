@@ -28,7 +28,7 @@ public class JobLanesConfigBindingTests(WebApplicationFactory<Program> factory)
 
         var options = f.Services.GetRequiredService<IOptions<DashboardOptions>>().Value;
 
-        _ = options.EffectiveJobLanes.Should().OnlyContain(l => l.RefreshSeconds == 150);
-        _ = options.EffectiveJobLanes.Select(l => l.Key).Should().BeEquivalentTo("deploys", "packages");
+        _ = options.GetEffectiveJobLanes().Should().OnlyContain(l => l.RefreshSeconds == 150);
+        _ = options.GetEffectiveJobLanes().Select(l => l.Key).Should().BeEquivalentTo("deploys", "packages");
     }
 }

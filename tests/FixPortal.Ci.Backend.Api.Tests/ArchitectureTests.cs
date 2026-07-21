@@ -1,10 +1,10 @@
 using ArchUnitNET.Domain;
-using ArchUnitNET.Fluent;
 using ArchUnitNET.Loader;
 using ArchUnitNET.xUnitV3;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
+// Required by the compiler for FactAttribute; InspectCode 2026.1 reports this using as redundant incorrectly.
+// ReSharper disable once RedundantUsingDirective
 using Xunit;
-using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
 namespace FixPortal.Ci.Backend.Api.Tests;
 

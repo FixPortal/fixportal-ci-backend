@@ -86,7 +86,8 @@ public sealed class FileDashboardSnapshotStore(string snapshotPath) : IDashboard
 
     private static void TryDelete(string path)
     {
-        try { File.Delete(path); }
+        try
+        { File.Delete(path); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
         {
             /* Best-effort cleanup; a leftover temp file is overwritten next save. */
