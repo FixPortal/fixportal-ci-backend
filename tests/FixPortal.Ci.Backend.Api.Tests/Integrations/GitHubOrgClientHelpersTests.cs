@@ -11,8 +11,11 @@ public class GitHubOrgClientHelpersTests
 {
     private static readonly DashboardOptions DefaultOptions = new()
     {
-        SnapshotPath = "x", RefreshSeconds = 60, ExcludeArchived = true,
-        IncludeReusable = false, IncludeCodeQl = true
+        SnapshotPath = "x",
+        RefreshSeconds = 60,
+        ExcludeArchived = true,
+        IncludeReusable = false,
+        IncludeCodeQl = true,
     };
 
     [Fact]
@@ -54,14 +57,27 @@ public class GitHubOrgClientHelpersTests
     [Fact]
     public void IncludeWorkflow_codeql_excluded_when_toggled_off()
     {
-        var opts = new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 60, IncludeCodeQl = false };
+        var opts = new DashboardOptions
+        {
+            SnapshotPath = "x",
+            RefreshSeconds = 60,
+            IncludeCodeQl = false,
+        };
         _ = GitHubOrgClient.IncludeWorkflow("CodeQL", "dynamic/github-code-scanning/codeql", opts).Should().BeFalse();
     }
 
     [Fact]
     public void IncludeWorkflow_keeps_reusable_when_toggled_on()
     {
-        var opts = new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 60, IncludeReusable = true };
-        _ = GitHubOrgClient.IncludeWorkflow("_deploy (reusable)", ".github/workflows/_deploy.yml", opts).Should().BeTrue();
+        var opts = new DashboardOptions
+        {
+            SnapshotPath = "x",
+            RefreshSeconds = 60,
+            IncludeReusable = true,
+        };
+        _ = GitHubOrgClient
+            .IncludeWorkflow("_deploy (reusable)", ".github/workflows/_deploy.yml", opts)
+            .Should()
+            .BeTrue();
     }
 }

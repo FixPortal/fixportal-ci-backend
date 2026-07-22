@@ -38,7 +38,8 @@ public static class ProcessRunner
         IReadOnlyList<string> arguments,
         TimeSpan timeout,
         CancellationToken ct,
-        IReadOnlyDictionary<string, string>? environment = null)
+        IReadOnlyDictionary<string, string>? environment = null
+    )
     {
         var psi = new ProcessStartInfo(fileName)
         {
@@ -100,7 +101,9 @@ public static class ProcessRunner
             // Most commonly the executable is not installed / not on PATH. Surface a
             // clear, actionable message instead of a bare Win32 error code.
             throw new InvalidOperationException(
-                $"Failed to start process '{fileName}': {ex.Message}. Is it installed and on PATH?", ex);
+                $"Failed to start process '{fileName}': {ex.Message}. Is it installed and on PATH?",
+                ex
+            );
         }
         // Close the child's stdin immediately so processes that read from it
         // (pwsh in non-interactive CI, git prompting for credentials) get EOF
@@ -116,7 +119,8 @@ public static class ProcessRunner
                 stdoutClosed.Task,
                 stderrClosed.Task,
                 timeout,
-                ct);
+                ct
+            );
         }
         catch (OperationCanceledException)
         {
@@ -131,7 +135,8 @@ public static class ProcessRunner
         Task stdoutClosed,
         Task stderrClosed,
         TimeSpan timeout,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
         using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeoutCts.CancelAfter(timeout);
@@ -150,6 +155,8 @@ public static class ProcessRunner
                 process.Kill(entireProcessTree: true);
             }
         }
-        catch { /* best effort */ }
+        catch
+        { /* best effort */
+        }
     }
 }

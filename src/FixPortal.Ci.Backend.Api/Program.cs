@@ -24,20 +24,29 @@ builder.Services.AddOpenApi();
 builder.Services.AddSingleton<IClock>(SystemClock.Instance);
 
 // Fail fast on misconfiguration rather than polling forever with silent 401s / empty dashboards.
-builder.Services.AddOptions<GitHubOptions>()
+builder
+    .Services.AddOptions<GitHubOptions>()
     .Bind(builder.Configuration.GetSection("GitHub"))
     .Validate(o => !string.IsNullOrWhiteSpace(o.Owner), "GitHub:Owner must be configured (e.g. set GitHub__Owner).")
     .Validate(o => !string.IsNullOrWhiteSpace(o.Token), "GitHub:Token must be configured (e.g. set GitHub__Token).")
     .ValidateOnStart();
-builder.Services.AddOptions<DashboardOptions>()
+builder
+    .Services.AddOptions<DashboardOptions>()
     .Bind(builder.Configuration.GetSection("Dashboard"))
     .Validate(o => o.RefreshSeconds > 0, "Dashboard:RefreshSeconds must be greater than zero.")
     .Validate(o => o.MetricsRefreshSeconds > 0, "Dashboard:MetricsRefreshSeconds must be greater than zero.")
     .Validate(o => o.MergedPrRefreshSeconds > 0, "Dashboard:MergedPrRefreshSeconds must be greater than zero.")
-    .Validate(o => o.GetEffectiveJobLanes().All(l => l.RefreshSeconds > 0), "Dashboard:JobLanes:RefreshSeconds must be greater than zero.")
-    .Validate(o => o.GetEffectiveJobLanes().All(l => l.MaxRunsToScan > 0), "Dashboard:JobLanes:MaxRunsToScan must be greater than zero.")
+    .Validate(
+        o => o.GetEffectiveJobLanes().All(l => l.RefreshSeconds > 0),
+        "Dashboard:JobLanes:RefreshSeconds must be greater than zero."
+    )
+    .Validate(
+        o => o.GetEffectiveJobLanes().All(l => l.MaxRunsToScan > 0),
+        "Dashboard:JobLanes:MaxRunsToScan must be greater than zero."
+    )
     .ValidateOnStart();
-builder.Services.AddOptions<AdminOptions>()
+builder
+    .Services.AddOptions<AdminOptions>()
     .Bind(builder.Configuration.GetSection("Admin"))
     // An empty AdminKey is valid and fails closed: the admin endpoint returns 401
     // unconditionally when no key is configured. But a *set* key that is implausibly
@@ -52,32 +61,34 @@ builder.Services.AddOptions<AdminOptions>()
 var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("FixPortalSpa", policy =>
-        policy.WithOrigins(corsOrigins).WithMethods("GET").AllowAnyHeader());
+    options.AddPolicy("FixPortalSpa", policy => policy.WithOrigins(corsOrigins).WithMethods("GET").AllowAnyHeader());
 });
 
 // Singleton so the per-URL ETag cache outlives the transient typed-client instances
 // and persists across refresh cycles — conditional GETs (304s) are what keep the 20s
 // poll cadence within the GitHub PAT rate budget.
 builder.Services.AddSingleton<GitHubETagStore>();
-builder.Services.AddHttpClient<GitHubOrgClient>(client =>
-{
-    // GitHub's REST API root is a fixed, well-known absolute URI, not a
-    // deployment-specific path, so S1075 (no hardcoded URIs) does not apply.
+builder
+    .Services.AddHttpClient<GitHubOrgClient>(client =>
+    {
+        // GitHub's REST API root is a fixed, well-known absolute URI, not a
+        // deployment-specific path, so S1075 (no hardcoded URIs) does not apply.
 #pragma warning disable S1075
-    client.BaseAddress = new Uri("https://api.github.com/");
+        client.BaseAddress = new Uri("https://api.github.com/");
 #pragma warning restore S1075
-})
-.ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler
-{
-    // GitHubOrgClient is a typed client but it is captured by singletons
-    // (DashboardRefreshService, GitHubInventoryCache, the job-lane workers), so
-    // its HttpClient lives for the whole process and the factory's handler
-    // rotation never fires. PooledConnectionLifetime recycles pooled connections
-    // at the socket level regardless, so DNS changes for api.github.com are
-    // picked up on a long-running container instead of being pinned forever.
-    PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-});
+    })
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new SocketsHttpHandler
+        {
+            // GitHubOrgClient is a typed client but it is captured by singletons
+            // (DashboardRefreshService, GitHubInventoryCache, the job-lane workers), so
+            // its HttpClient lives for the whole process and the factory's handler
+            // rotation never fires. PooledConnectionLifetime recycles pooled connections
+            // at the socket level regardless, so DNS changes for api.github.com are
+            // picked up on a long-running container instead of being pinned forever.
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+        }
+    );
 builder.Services.AddSingleton<DashboardSnapshotState>();
 builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
 {
@@ -96,6 +107,7 @@ builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
 builder.Services.AddSingleton<GitHubInventoryCache>();
 builder.Services.AddSingleton<PerRepoCache<RepoMetrics>>();
 builder.Services.AddSingleton<PerRepoCache<MergedPullRequest>>();
+
 // Last-known-good, no TTL — consistent with the metrics and merged-PR caches above.
 // A max-age here was ineffective: InheritEnrichment re-inherits an expired lane
 // signal from the previous snapshot every cycle (needed for cold-start continuity),
@@ -103,10 +115,14 @@ builder.Services.AddSingleton<PerRepoCache<MergedPullRequest>>();
 // real behaviour explicit — a persistently-failing lane keeps its last chip, exactly
 // as a stale metric or merged-PR does — rather than documenting a stale-out the code
 // never delivered.
-builder.Services.AddKeyedSingleton<PerRepoCache<IReadOnlyList<JobSignal>>>("deploys",
-    (_, _) => new PerRepoCache<IReadOnlyList<JobSignal>>());
-builder.Services.AddKeyedSingleton<PerRepoCache<IReadOnlyList<JobSignal>>>("packages",
-    (_, _) => new PerRepoCache<IReadOnlyList<JobSignal>>());
+builder.Services.AddKeyedSingleton<PerRepoCache<IReadOnlyList<JobSignal>>>(
+    "deploys",
+    (_, _) => new PerRepoCache<IReadOnlyList<JobSignal>>()
+);
+builder.Services.AddKeyedSingleton<PerRepoCache<IReadOnlyList<JobSignal>>>(
+    "packages",
+    (_, _) => new PerRepoCache<IReadOnlyList<JobSignal>>()
+);
 builder.Services.AddSingleton<LizardScanner>();
 builder.Services.AddSingleton<DashboardRefreshService>();
 builder.Services.AddHostedService<SnapshotRestoreService>();
@@ -119,19 +135,22 @@ builder.Services.AddSingleton<IHostedService>(sp => new JobLaneEnrichmentWorker(
     sp.GetRequiredService<GitHubInventoryCache>(),
     sp.GetRequiredKeyedService<PerRepoCache<IReadOnlyList<JobSignal>>>("deploys"),
     sp.GetRequiredService<IOptions<DashboardOptions>>(),
-    sp.GetRequiredService<ILogger<JobLaneEnrichmentWorker>>()));
+    sp.GetRequiredService<ILogger<JobLaneEnrichmentWorker>>()
+));
 builder.Services.AddSingleton<IHostedService>(sp => new JobLaneEnrichmentWorker(
     "packages",
     sp.GetRequiredService<GitHubOrgClient>(),
     sp.GetRequiredService<GitHubInventoryCache>(),
     sp.GetRequiredKeyedService<PerRepoCache<IReadOnlyList<JobSignal>>>("packages"),
     sp.GetRequiredService<IOptions<DashboardOptions>>(),
-    sp.GetRequiredService<ILogger<JobLaneEnrichmentWorker>>()));
+    sp.GetRequiredService<ILogger<JobLaneEnrichmentWorker>>()
+));
 
 var app = builder.Build();
 
 var dashboardOptions = app.Services.GetRequiredService<IOptions<DashboardOptions>>().Value;
 var registeredKeys = new HashSet<string>(["deploys", "packages"], StringComparer.OrdinalIgnoreCase);
+
 // Log the lanes actually in force (config binding is append-not-replace prone) so a
 // silently-ignored or mis-cadenced lane is visible at startup rather than a mystery.
 var effectiveLanes = dashboardOptions.GetEffectiveJobLanes();
@@ -139,16 +158,25 @@ foreach (var lane in effectiveLanes)
 {
     app.Logger.LogInformation(
         "JobLane '{Key}' effective: enabled={Enabled}, refresh={Refresh}s, maxRuns={MaxRuns}.",
-        lane.Key, lane.Enabled, lane.RefreshSeconds, lane.MaxRunsToScan);
+        lane.Key,
+        lane.Enabled,
+        lane.RefreshSeconds,
+        lane.MaxRunsToScan
+    );
 }
 foreach (var lane in effectiveLanes.Where(l => !registeredKeys.Contains(l.Key)))
 {
-    app.Logger.LogWarning("Configured JobLane '{Key}' is unregistered; no worker or cache exists for it and it will be ignored.", lane.Key);
+    app.Logger.LogWarning(
+        "Configured JobLane '{Key}' is unregistered; no worker or cache exists for it and it will be ignored.",
+        lane.Key
+    );
 }
 
 if (corsOrigins.Length == 0)
 {
-    app.Logger.LogWarning("Cors:AllowedOrigins is not configured; all cross-origin requests will be blocked. Set Cors__AllowedOrigins__0 in deploy config to allow the frontend SPA.");
+    app.Logger.LogWarning(
+        "Cors:AllowedOrigins is not configured; all cross-origin requests will be blocked. Set Cors__AllowedOrigins__0 in deploy config to allow the frontend SPA."
+    );
 }
 
 // API docs are a development aid, not a public production surface.

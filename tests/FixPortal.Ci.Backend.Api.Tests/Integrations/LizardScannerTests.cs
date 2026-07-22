@@ -16,20 +16,35 @@ public class LizardScannerTests
     [Fact]
     public void BuildCloneCommand_keeps_the_token_out_of_git_arguments()
     {
-        var (arguments, environment) = LizardScanner.BuildCloneCommand("FixPortal", "fixportal-ci-dashboard", "super-secret-token", "C:\\temp\\repo");
+        var (arguments, environment) = LizardScanner.BuildCloneCommand(
+            "FixPortal",
+            "fixportal-ci-dashboard",
+            "super-secret-token",
+            "C:\\temp\\repo"
+        );
 
         _ = string.Join(' ', arguments).Should().NotContain("super-secret-token");
         _ = arguments.Should().Contain("https://github.com/FixPortal/fixportal-ci-dashboard.git");
         _ = environment["GIT_CONFIG_KEY_0"].Should().Be("http.https://github.com/.extraheader");
-        _ = environment["GIT_CONFIG_VALUE_0"].Should().Be($"AUTHORIZATION: basic {Convert.ToBase64String("x-access-token:super-secret-token"u8)}");
+        _ = environment["GIT_CONFIG_VALUE_0"]
+            .Should()
+            .Be($"AUTHORIZATION: basic {Convert.ToBase64String("x-access-token:super-secret-token"u8)}");
     }
 
     private static LizardScanner NewScanner(string workRoot) =>
         new(
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
-            Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60, MetricsWorkDirectory = workRoot }),
+            Options.Create(
+                new DashboardOptions
+                {
+                    SnapshotPath = "s.json",
+                    RefreshSeconds = 60,
+                    MetricsWorkDirectory = workRoot,
+                }
+            ),
             new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
-            NullLogger<LizardScanner>.Instance);
+            NullLogger<LizardScanner>.Instance
+        );
 
     // CB-C4: the guard must reject before any process spawn or delete when a repo
     // name (sourced from the semi-trusted GitHub API) is rooted. A null return alone
@@ -98,7 +113,8 @@ public class LizardScannerTests
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = token }),
             Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 }),
             new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
-            NullLogger<LizardScanner>.Instance);
+            NullLogger<LizardScanner>.Instance
+        );
         var scrub = typeof(LizardScanner).GetMethod("Scrub", BindingFlags.NonPublic | BindingFlags.Instance);
         _ = scrub.Should().NotBeNull("LizardScanner.Scrub must still exist as the redaction call site");
 

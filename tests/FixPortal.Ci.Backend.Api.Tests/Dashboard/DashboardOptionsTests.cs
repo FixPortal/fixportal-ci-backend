@@ -30,8 +30,18 @@ public class DashboardOptionsTests
             RefreshSeconds = 30,
             JobLanes =
             [
-                new JobLaneOptions { Key = "deploys", Label = "Old", RefreshSeconds = 300 },
-                new JobLaneOptions { Key = "deploys", Label = "New", RefreshSeconds = 150 },
+                new JobLaneOptions
+                {
+                    Key = "deploys",
+                    Label = "Old",
+                    RefreshSeconds = 300,
+                },
+                new JobLaneOptions
+                {
+                    Key = "deploys",
+                    Label = "New",
+                    RefreshSeconds = 150,
+                },
             ],
         };
 
@@ -47,14 +57,16 @@ public class DashboardOptionsTests
     public void Configured_lane_cadence_wins_over_the_compiled_default_after_binding()
     {
         var config = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Dashboard:SnapshotPath"] = "s.json",
-                ["Dashboard:RefreshSeconds"] = "30",
-                ["Dashboard:JobLanes:0:Key"] = "deploys",
-                ["Dashboard:JobLanes:0:Label"] = "Deploys",
-                ["Dashboard:JobLanes:0:RefreshSeconds"] = "150",
-            })
+            .AddInMemoryCollection(
+                new Dictionary<string, string?>
+                {
+                    ["Dashboard:SnapshotPath"] = "s.json",
+                    ["Dashboard:RefreshSeconds"] = "30",
+                    ["Dashboard:JobLanes:0:Key"] = "deploys",
+                    ["Dashboard:JobLanes:0:Label"] = "Deploys",
+                    ["Dashboard:JobLanes:0:RefreshSeconds"] = "150",
+                }
+            )
             .Build();
 
         var options = new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 30 };

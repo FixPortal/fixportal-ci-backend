@@ -14,7 +14,8 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 /// that window are treated as cache misses so a transient fetch error cannot
 /// strand a stale signal beyond one TTL window.
 /// </summary>
-public sealed class PerRepoCache<T> where T : class
+public sealed class PerRepoCache<T>
+    where T : class
 {
     private readonly record struct CacheEntry(T Value, Instant WrittenAt);
 

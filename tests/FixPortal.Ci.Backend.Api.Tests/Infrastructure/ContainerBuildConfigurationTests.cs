@@ -5,8 +5,9 @@ namespace FixPortal.Ci.Backend.Api.Tests.Infrastructure;
 
 public class ContainerBuildConfigurationTests
 {
-    private static readonly string RepositoryRoot =
-        Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
+    private static readonly string RepositoryRoot = Path.GetFullPath(
+        Path.Combine(AppContext.BaseDirectory, "../../../../..")
+    );
 
     [Fact]
     public void Private_package_token_is_mounted_only_for_container_restore()

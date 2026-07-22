@@ -18,16 +18,18 @@ public sealed class LizardScanner(
     IOptions<GitHubOptions> gitHub,
     IOptions<DashboardOptions> dashboard,
     IClock clock,
-    ILogger<LizardScanner> logger)
+    ILogger<LizardScanner> logger
+)
 {
     private static readonly TimeSpan CloneTimeout = TimeSpan.FromMinutes(5);
     private static readonly TimeSpan ScanTimeout = TimeSpan.FromMinutes(5);
     private readonly GitHubOptions _gitHub = gitHub.Value;
     private readonly DashboardOptions _dashboard = dashboard.Value;
 
-    public string WorkRoot => string.IsNullOrWhiteSpace(_dashboard.MetricsWorkDirectory)
-        ? Path.Combine(Path.GetTempPath(), "ci-dashboard-metrics")
-        : _dashboard.MetricsWorkDirectory;
+    public string WorkRoot =>
+        string.IsNullOrWhiteSpace(_dashboard.MetricsWorkDirectory)
+            ? Path.Combine(Path.GetTempPath(), "ci-dashboard-metrics")
+            : _dashboard.MetricsWorkDirectory;
 
     public async Task<RepoMetrics?> ScanAsync(string repo, CancellationToken ct)
     {
@@ -38,10 +40,15 @@ public sealed class LizardScanner(
         }
 
         var fullWorkRoot = Path.GetFullPath(WorkRoot);
-        var dir = Path.GetFullPath(Path.Combine(fullWorkRoot, repo.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar)));
+        var dir = Path.GetFullPath(
+            Path.Combine(fullWorkRoot, repo.TrimStart(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar))
+        );
         if (!dir.StartsWith(fullWorkRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
         {
-            logger.LogWarning("Path traversal attempt blocked: repository name '{Repo}' resolves outside WorkRoot.", repo);
+            logger.LogWarning(
+                "Path traversal attempt blocked: repository name '{Repo}' resolves outside WorkRoot.",
+                repo
+            );
             return null;
         }
 
@@ -53,23 +60,24 @@ public sealed class LizardScanner(
             TryDeleteDir(dir);
             _ = Directory.CreateDirectory(WorkRoot);
             var (cloneArguments, cloneEnvironment) = BuildCloneCommand(_gitHub.Owner, repo, _gitHub.Token, dir);
-            var clone = await ProcessRunner.RunAsync(
-                "git",
-                cloneArguments,
-                CloneTimeout,
-                ct,
-                cloneEnvironment);
+            var clone = await ProcessRunner.RunAsync("git", cloneArguments, CloneTimeout, ct, cloneEnvironment);
             if (clone.ExitCode != 0)
             {
-                logger.LogWarning("git clone failed for {Repo} (exit {Code}): {Err}",
-                    repo, clone.ExitCode, Scrub(clone.StdErr));
+                logger.LogWarning(
+                    "git clone failed for {Repo} (exit {Code}): {Err}",
+                    repo,
+                    clone.ExitCode,
+                    Scrub(clone.StdErr)
+                );
                 return null;
             }
 
             var scan = await ProcessRunner.RunAsync(
                 "lizard",
                 [dir, "-x", "*/node_modules/*", "-x", "*/bin/*", "-x", "*/obj/*", "-x", "*/dist/*"],
-                ScanTimeout, ct);
+                ScanTimeout,
+                ct
+            );
             // Lizard exits non-zero when complexity warnings exist; the summary is
             // still printed, so parse the output regardless of exit code.
             var metrics = ParseLizardSummary(scan.StdOut, clock.GetCurrentInstant());
@@ -77,8 +85,13 @@ public sealed class LizardScanner(
             {
                 var stdoutPrefix = scan.StdOut.Length > 200 ? scan.StdOut[..200] + "..." : scan.StdOut;
                 var stderrPrefix = scan.StdErr.Length > 200 ? scan.StdErr[..200] + "..." : scan.StdErr;
-                logger.LogWarning("lizard scan for {Repo} was unparseable (exit {ExitCode}). stdout: {Out}, stderr: {Err}",
-                    repo, scan.ExitCode, stdoutPrefix, Scrub(stderrPrefix));
+                logger.LogWarning(
+                    "lizard scan for {Repo} was unparseable (exit {ExitCode}). stdout: {Out}, stderr: {Err}",
+                    repo,
+                    scan.ExitCode,
+                    stdoutPrefix,
+                    Scrub(stderrPrefix)
+                );
             }
             return metrics;
         }
@@ -101,11 +114,11 @@ public sealed class LizardScanner(
         string owner,
         string repo,
         string token,
-        string dir)
+        string dir
+    )
     {
         var basic = Convert.ToBase64String(Encoding.UTF8.GetBytes($"x-access-token:{token}"));
-        return
-        (
+        return (
             ["clone", "--depth", "1", "--single-branch", $"https://github.com/{owner}/{repo}.git", dir],
             new Dictionary<string, string>
             {
@@ -131,8 +144,10 @@ public sealed class LizardScanner(
         var lines = stdout.Replace("\r\n", "\n").Split('\n');
         for (var i = 0; i < lines.Length; i++)
         {
-            if (!lines[i].Contains("Total nloc", StringComparison.OrdinalIgnoreCase)
-                || !lines[i].Contains("AvgCCN", StringComparison.OrdinalIgnoreCase))
+            if (
+                !lines[i].Contains("Total nloc", StringComparison.OrdinalIgnoreCase)
+                || !lines[i].Contains("AvgCCN", StringComparison.OrdinalIgnoreCase)
+            )
             {
                 continue;
             }
@@ -148,10 +163,12 @@ public sealed class LizardScanner(
                 return null;
             }
 
-            if (!int.TryParse(cols[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var nloc)
+            if (
+                !int.TryParse(cols[0], NumberStyles.Integer, CultureInfo.InvariantCulture, out var nloc)
                 || !double.TryParse(cols[2], NumberStyles.Float, CultureInfo.InvariantCulture, out var avgCcn)
                 || !int.TryParse(cols[4], NumberStyles.Integer, CultureInfo.InvariantCulture, out var funCnt)
-                || !int.TryParse(cols[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out var warnCnt))
+                || !int.TryParse(cols[5], NumberStyles.Integer, CultureInfo.InvariantCulture, out var warnCnt)
+            )
             {
                 return null;
             }

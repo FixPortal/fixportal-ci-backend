@@ -19,8 +19,8 @@ public sealed class MetricsEnrichmentWorker(
     LizardScanner scanner,
     PerRepoCache<RepoMetrics> cache,
     IOptions<DashboardOptions> options,
-    ILogger<MetricsEnrichmentWorker> logger)
-    : RepoEnrichmentWorker<RepoMetrics>(client, inventory, cache, logger)
+    ILogger<MetricsEnrichmentWorker> logger
+) : RepoEnrichmentWorker<RepoMetrics>(client, inventory, cache, logger)
 {
     protected override bool Enabled => options.Value.MetricsEnabled;
     protected override TimeSpan Cadence => TimeSpan.FromSeconds(options.Value.MetricsRefreshSeconds);
@@ -31,8 +31,13 @@ public sealed class MetricsEnrichmentWorker(
         var metrics = await scanner.ScanAsync(repo.Name, ct);
         if (metrics is not null)
         {
-            logger.LogInformation("Metrics for {Repo}: {Nloc} NLOC, avg CCN {Ccn:0.0}, {Fns} fns.",
-                repo.Name, metrics.Nloc, metrics.AvgComplexity, metrics.FunctionCount);
+            logger.LogInformation(
+                "Metrics for {Repo}: {Nloc} NLOC, avg CCN {Ccn:0.0}, {Fns} fns.",
+                repo.Name,
+                metrics.Nloc,
+                metrics.AvgComplexity,
+                metrics.FunctionCount
+            );
         }
 
         return metrics;

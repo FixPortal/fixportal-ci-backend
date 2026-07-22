@@ -18,7 +18,10 @@ public class GitHubErrorMappingTests
 {
     private sealed class StatusHandler(HttpStatusCode code, bool rateLimited = false) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             var response = new HttpResponseMessage(code)
             {
@@ -32,15 +35,23 @@ public class GitHubErrorMappingTests
         }
     }
 
-    private static GitHubOrgClient NewClient(HttpStatusCode code, bool rateLimited = false, DashboardSnapshotState? state = null)
+    private static GitHubOrgClient NewClient(
+        HttpStatusCode code,
+        bool rateLimited = false,
+        DashboardSnapshotState? state = null
+    )
     {
-        var http = new HttpClient(new StatusHandler(code, rateLimited)) { BaseAddress = new Uri("https://api.github.com/") };
+        var http = new HttpClient(new StatusHandler(code, rateLimited))
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
         return new GitHubOrgClient(
             http,
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
             Options.Create(new DashboardOptions { SnapshotPath = "snapshot.json", RefreshSeconds = 60 }),
             new GitHubETagStore(),
-            state);
+            state
+        );
     }
 
     [Theory]

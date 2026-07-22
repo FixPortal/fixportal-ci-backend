@@ -10,8 +10,14 @@ public class GitHubPullRequestTests
     [Fact]
     public void ToPullRequest_maps_fields()
     {
-        var dto = new GitHubPullDto(7, "Fix bug", new GitHubUserDto("alice"),
-            "https://github.com/FixPortal/repo/pull/7", true, Instant.FromUnixTimeSeconds(1000));
+        var dto = new GitHubPullDto(
+            7,
+            "Fix bug",
+            new GitHubUserDto("alice"),
+            "https://github.com/FixPortal/repo/pull/7",
+            true,
+            Instant.FromUnixTimeSeconds(1000)
+        );
         var pr = GitHubOrgClient.ToPullRequest(dto, "FixPortal", "repo");
         _ = pr.Number.Should().Be(7);
         _ = pr.Title.Should().Be("Fix bug");

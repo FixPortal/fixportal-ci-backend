@@ -23,7 +23,8 @@ public class ProcessRunnerTests
             arguments,
             TimeSpan.FromSeconds(10),
             TestContext.Current.CancellationToken,
-            new Dictionary<string, string> { ["FIXPORTAL_TEST_SECRET"] = "from-env" });
+            new Dictionary<string, string> { ["FIXPORTAL_TEST_SECRET"] = "from-env" }
+        );
 
         _ = result.ExitCode.Should().Be(0);
         _ = result.StdOut.Should().Contain("from-env");
@@ -40,7 +41,8 @@ public class ProcessRunnerTests
             stdoutClosed.Task,
             stderrClosed.Task,
             TimeSpan.FromMilliseconds(10),
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         _ = wait.IsCompleted.Should().BeFalse();
 
@@ -74,7 +76,8 @@ public class ProcessRunnerTests
             fileName,
             arguments,
             TimeSpan.FromMilliseconds(300),
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken
+        );
 
         // Capture the spawned child's PID early, while it is certainly still alive
         // (well inside the 300ms window before the timeout fires). Windows has no
@@ -88,7 +91,8 @@ public class ProcessRunnerTests
             // A foreign ping/sleep could appear on a shared runner inside this window,
             // so don't take an arbitrary new match: pick the most recently started one,
             // which is the child RunAsync just launched.
-            var spawned = Process.GetProcessesByName(processName)
+            var spawned = Process
+                .GetProcessesByName(processName)
                 .Where(p => !before.Contains(p.Id))
                 .OrderByDescending(p => p.StartTime)
                 .ToList();
@@ -101,7 +105,9 @@ public class ProcessRunnerTests
                 await Task.Delay(10, TestContext.Current.CancellationToken);
             }
         }
-        _ = childId.Should().NotBeNull("ProcessRunner should have spawned a new {0} process before the timeout fired", processName);
+        _ = childId
+            .Should()
+            .NotBeNull("ProcessRunner should have spawned a new {0} process before the timeout fired", processName);
 
         var act = async () => await runTask;
         _ = await act.Should().ThrowAsync<OperationCanceledException>();

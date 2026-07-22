@@ -7,7 +7,8 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 public sealed class DashboardRefreshWorker(
     DashboardRefreshService refreshService,
     IOptions<DashboardOptions> options,
-    ILogger<DashboardRefreshWorker> logger) : BackgroundService
+    ILogger<DashboardRefreshWorker> logger
+) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {

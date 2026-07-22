@@ -11,13 +11,21 @@ public class DashboardSnapshotStateTests
     private static readonly Instant T = Instant.FromUtc(2026, 5, 28, 12, 0);
 
     private static RepositorySnapshot Repo(string name, bool isPrivate, SignalState wfState) =>
-        new(name, $"https://github.com/FixPortal/{name}", isPrivate,
+        new(
+            name,
+            $"https://github.com/FixPortal/{name}",
+            isPrivate,
             [new WorkflowSnapshot("CI", "ci.yml", wfState, null)],
-            [], null, [], []);
+            [],
+            null,
+            [],
+            []
+        );
 
     private static DashboardSnapshot Snapshot(
-        IReadOnlyList<RepositorySnapshot> repos, IReadOnlyList<CiTrendBucket>? trend) =>
-        new(T, "FixPortal", repos, [], null, trend);
+        IReadOnlyList<RepositorySnapshot> repos,
+        IReadOnlyList<CiTrendBucket>? trend
+    ) => new(T, "FixPortal", repos, [], null, trend);
 
     [Fact]
     public void ComputePublicSnapshot_never_surfaces_a_Failing_bucket_on_cold_start()
@@ -27,19 +35,20 @@ public class DashboardSnapshotStateTests
         // cold-start trend must therefore never show Failing — even when a public
         // repo is currently failing — or a private repo's failure would leak.
         var full = Snapshot(
-            [Repo("priv", isPrivate: true, SignalState.Failure),
-             Repo("pub", isPrivate: false, SignalState.Failure)],
+            [Repo("priv", isPrivate: true, SignalState.Failure), Repo("pub", isPrivate: false, SignalState.Failure)],
             [
                 new CiTrendBucket(T, CiTrendState.Failing),
                 new CiTrendBucket(T.Plus(Duration.FromHours(1)), CiTrendState.Passing),
                 new CiTrendBucket(T.Plus(Duration.FromHours(2)), CiTrendState.NoData),
-            ]);
+            ]
+        );
 
         var pub = DashboardSnapshotState.ComputePublicSnapshot(full);
 
         _ = pub.CiTrend!.Should().NotContain(b => b.State == CiTrendState.Failing);
-        _ = pub.CiTrend!.Select(b => b.State).Should().Equal(
-            CiTrendState.Passing, CiTrendState.Passing, CiTrendState.NoData);
+        _ = pub.CiTrend!.Select(b => b.State)
+            .Should()
+            .Equal(CiTrendState.Passing, CiTrendState.Passing, CiTrendState.NoData);
     }
 
     [Fact]
@@ -47,7 +56,11 @@ public class DashboardSnapshotStateTests
     {
         var full = Snapshot(
             [Repo("priv", isPrivate: true, SignalState.Failure)],
-            [new CiTrendBucket(T, CiTrendState.Failing), new CiTrendBucket(T.Plus(Duration.FromHours(1)), CiTrendState.Passing)]);
+            [
+                new CiTrendBucket(T, CiTrendState.Failing),
+                new CiTrendBucket(T.Plus(Duration.FromHours(1)), CiTrendState.Passing),
+            ]
+        );
 
         var pub = DashboardSnapshotState.ComputePublicSnapshot(full);
 
@@ -64,7 +77,8 @@ public class DashboardSnapshotStateTests
         // and must survive, unlike the lossy fallback which reclassifies every Failing.
         var full = Snapshot(
             [Repo("pub", isPrivate: false, SignalState.Failure)],
-            [new CiTrendBucket(T, CiTrendState.Passing)]);
+            [new CiTrendBucket(T, CiTrendState.Passing)]
+        );
         var persistedPublic = new[]
         {
             new CiTrendBucket(T, CiTrendState.Failing),

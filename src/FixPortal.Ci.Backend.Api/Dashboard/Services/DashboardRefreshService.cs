@@ -18,7 +18,8 @@ public sealed class DashboardRefreshService(
     PerRepoCache<MergedPullRequest> mergedPrs,
     IOptions<GitHubOptions> gitHub,
     IClock clock,
-    ILogger<DashboardRefreshService> logger)
+    ILogger<DashboardRefreshService> logger
+)
 {
     private const int MaxParallelRepos = 6;
 
@@ -37,14 +38,15 @@ public sealed class DashboardRefreshService(
         // signal on success, so a healthy sibling cannot race-clear a failing repo's error
         // mid-cycle either. Single-writer: only the one DashboardRefreshWorker drives this.
         var authErrors = new ConcurrentQueue<string>();
-        var tasks = new List<Task<(RepositorySnapshot Snapshot, bool FetchFailed, IReadOnlyList<WorkflowRun> Runs)>>(repos.Count);
+        var tasks = new List<Task<(RepositorySnapshot Snapshot, bool FetchFailed, IReadOnlyList<WorkflowRun> Runs)>>(
+            repos.Count
+        );
         tasks.AddRange(repos.Select(repo => CollectRepoWithGateAsync(repo, gate, rateLimitCts, authErrors, ct)));
         var results = await Task.WhenAll(tasks);
         state.SetAuthError(authErrors.TryDequeue(out var authError) ? authError : null);
 
         var previous = state.Current;
-        var repositories = MergeWithPrevious(
-            results.Select(r => (r.Snapshot, r.FetchFailed)).ToList(), previous);
+        var repositories = MergeWithPrevious(results.Select(r => (r.Snapshot, r.FetchFailed)).ToList(), previous);
         repositories = InheritEnrichment(repositories, previous, mergedPrs);
         // Alphabetical by name; the public/private boards filter this list and a
         // filter preserves order, so one sort orders both groups ascending.
@@ -59,13 +61,25 @@ public sealed class DashboardRefreshService(
         var publicResults = results.Where(r => !r.Snapshot.Private).ToList();
         var publicCiTrend = BuildCiTrendForRefresh(publicResults, now, state.Public);
         var publicSnapshot = new DashboardSnapshot(
-            now, gitHub.Value.Owner, publicRepos, BuildSummary(publicRepos), publicLastMerged, publicCiTrend);
+            now,
+            gitHub.Value.Owner,
+            publicRepos,
+            BuildSummary(publicRepos),
+            publicLastMerged,
+            publicCiTrend
+        );
 
         // Persist the public trend on the full snapshot so a cold-start restore
         // surfaces the accurate public trend rather than the lossy reclassification.
         var snapshot = new DashboardSnapshot(
-            now, gitHub.Value.Owner, repositories, BuildSummary(repositories), lastMerged, ciTrend,
-            PublicCiTrend: publicCiTrend);
+            now,
+            gitHub.Value.Owner,
+            repositories,
+            BuildSummary(repositories),
+            lastMerged,
+            ciTrend,
+            PublicCiTrend: publicCiTrend
+        );
 
         await PersistAndPublishAsync(
             store,
@@ -74,15 +88,21 @@ public sealed class DashboardRefreshService(
             publicSnapshot,
             persist: ShouldPersist(results.Any(r => r.FetchFailed), previous is not null),
             logger,
-            ct);
+            ct
+        );
     }
 
-    private async Task<(RepositorySnapshot Snapshot, bool FetchFailed, IReadOnlyList<WorkflowRun> Runs)> CollectRepoWithGateAsync(
+    private async Task<(
+        RepositorySnapshot Snapshot,
+        bool FetchFailed,
+        IReadOnlyList<WorkflowRun> Runs
+    )> CollectRepoWithGateAsync(
         GitHubRepoDto repo,
         SemaphoreSlim gate,
         CancellationTokenSource rateLimitCts,
         ConcurrentQueue<string> authErrors,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
         var rateLimitToken = rateLimitCts.Token;
         try
@@ -104,8 +124,17 @@ public sealed class DashboardRefreshService(
         }
     }
 
-    private async Task<(RepositorySnapshot Snapshot, bool FetchFailed, IReadOnlyList<WorkflowRun> Runs)> CollectRepoAsync(
-        GitHubRepoDto repo, CancellationTokenSource rateLimitCts, ConcurrentQueue<string> authErrors, CancellationToken rateLimitToken, CancellationToken ct)
+    private async Task<(
+        RepositorySnapshot Snapshot,
+        bool FetchFailed,
+        IReadOnlyList<WorkflowRun> Runs
+    )> CollectRepoAsync(
+        GitHubRepoDto repo,
+        CancellationTokenSource rateLimitCts,
+        ConcurrentQueue<string> authErrors,
+        CancellationToken rateLimitToken,
+        CancellationToken ct
+    )
     {
         try
         {
@@ -117,8 +146,14 @@ public sealed class DashboardRefreshService(
                 var wfRuns = await client.GetRecentRunsAsync(repo.Name, wf, rateLimitToken);
                 runs.AddRange(wfRuns);
                 var latest = wfRuns.Count > 0 ? wfRuns[0] : null;
-                snaps.Add(new WorkflowSnapshot(wf.Name, GitHubOrgClient.FileName(wf.Path),
-                    GitHubOrgClient.ToSignalState(latest), latest));
+                snaps.Add(
+                    new WorkflowSnapshot(
+                        wf.Name,
+                        GitHubOrgClient.FileName(wf.Path),
+                        GitHubOrgClient.ToSignalState(latest),
+                        latest
+                    )
+                );
             }
             // PRs are supplementary: listing them needs the "Pull requests: Read"
             // token scope, which workflow/run reads (Actions: Read) do not. Missing
@@ -128,7 +163,20 @@ public sealed class DashboardRefreshService(
             _ = metrics.TryGet(repo.Name, out var repoMetrics);
             _ = deploys.TryGet(repo.Name, out var repoDeploys);
             _ = packages.TryGet(repo.Name, out var repoPackages);
-            return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, snaps, pullRequests, repoMetrics, repoDeploys, repoPackages), false, runs);
+            return (
+                new RepositorySnapshot(
+                    repo.Name,
+                    repo.HtmlUrl,
+                    repo.Private,
+                    snaps,
+                    pullRequests,
+                    repoMetrics,
+                    repoDeploys,
+                    repoPackages
+                ),
+                false,
+                runs
+            );
         }
         catch (GitHubRateLimitException ex)
         {
@@ -146,7 +194,11 @@ public sealed class DashboardRefreshService(
         // and abandon every sibling's freshly fetched signals.
         catch (GitHubAuthException ex)
         {
-            logger.LogWarning(ex, "GitHub auth failed for {Repo}; preserving last-known-good for this repo only.", repo.Name);
+            logger.LogWarning(
+                ex,
+                "GitHub auth failed for {Repo}; preserving last-known-good for this repo only.",
+                repo.Name
+            );
             // Record for the cycle-end health signal (published once in RefreshAsync).
             authErrors.Enqueue(ex.Message);
             return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, null, null), true, []);
@@ -154,9 +206,10 @@ public sealed class DashboardRefreshService(
         // Treat transport/deserialization failures (and HTTP timeouts, which surface
         // as TaskCanceledException with the request token still un-cancelled) as a
         // degraded repo. Let genuine host-shutdown cancellation (ct triggered) propagate.
-        catch (Exception ex) when (
-            ex is HttpRequestException or JsonException
-            || ex is OperationCanceledException && !ct.IsCancellationRequested)
+        catch (Exception ex)
+            when (ex is HttpRequestException or JsonException
+                || ex is OperationCanceledException && !ct.IsCancellationRequested
+            )
         {
             logger.LogWarning(ex, "Failed to collect signals for {Repo}; preserving last-known-good.", repo.Name);
             return (new RepositorySnapshot(repo.Name, repo.HtmlUrl, repo.Private, [], [], null, null, null), true, []);
@@ -170,7 +223,9 @@ public sealed class DashboardRefreshService(
     // use the standard HTTP exception. Both return an empty list. The domain rate-limit
     // exception deliberately propagates to abort the batch.
     private async Task<IReadOnlyList<PullRequest>> TryListOpenPullRequestsAsync(
-        string repo, CancellationToken rateLimitToken)
+        string repo,
+        CancellationToken rateLimitToken
+    )
     {
         try
         {
@@ -178,18 +233,29 @@ public sealed class DashboardRefreshService(
         }
         catch (GitHubAuthException ex)
         {
-            logger.LogWarning(ex, "Failed to list open PRs for {Repo} due to permissions; showing none (check the PAT's Pull requests: Read scope).", repo);
+            logger.LogWarning(
+                ex,
+                "Failed to list open PRs for {Repo} due to permissions; showing none (check the PAT's Pull requests: Read scope).",
+                repo
+            );
             return [];
         }
         catch (HttpRequestException ex)
         {
-            logger.LogWarning(ex, "Failed to list open PRs for {Repo} ({Status}); showing none for this cycle.", repo, ex.StatusCode);
+            logger.LogWarning(
+                ex,
+                "Failed to list open PRs for {Repo} ({Status}); showing none for this cycle.",
+                repo,
+                ex.StatusCode
+            );
             return [];
         }
     }
 
     public static IReadOnlyList<RepositorySnapshot> MergeWithPrevious(
-        IReadOnlyList<(RepositorySnapshot Snapshot, bool FetchFailed)> results, DashboardSnapshot? previous)
+        IReadOnlyList<(RepositorySnapshot Snapshot, bool FetchFailed)> results,
+        DashboardSnapshot? previous
+    )
     {
         if (previous is null)
         {
@@ -207,7 +273,10 @@ public sealed class DashboardRefreshService(
     // refresh would publish null/empty enrichment and overwrite the restored snapshot's good
     // data. Inherit from the previous snapshot wherever the current value is missing.
     public static IReadOnlyList<RepositorySnapshot> InheritEnrichment(
-        IReadOnlyList<RepositorySnapshot> current, DashboardSnapshot? previous, PerRepoCache<MergedPullRequest>? mergedPrs = null)
+        IReadOnlyList<RepositorySnapshot> current,
+        DashboardSnapshot? previous,
+        PerRepoCache<MergedPullRequest>? mergedPrs = null
+    )
     {
         mergedPrs ??= new PerRepoCache<MergedPullRequest>();
         if (previous is null)
@@ -218,33 +287,37 @@ public sealed class DashboardRefreshService(
                 return current;
             }
 
-            return current.Select(r =>
-            {
-                _ = mergedPrs.TryGet(r.Name, out var m);
-                return r with { LastMergedPr = m };
-            }).ToList();
+            return current
+                .Select(r =>
+                {
+                    _ = mergedPrs.TryGet(r.Name, out var m);
+                    return r with { LastMergedPr = m };
+                })
+                .ToList();
         }
 
         var prior = previous.Repositories.ToDictionary(r => r.Name, StringComparer.OrdinalIgnoreCase);
-        return current.Select(r =>
-        {
-            prior.TryGetValue(r.Name, out var p);
-
-            _ = mergedPrs.TryGet(r.Name, out var m);
-            var inheritedLastMerged = m ?? p?.LastMergedPr;
-
-            var inheritedMetrics = r.Metrics ?? p?.Metrics;
-            var inheritedDeploys = r.Deploys ?? p?.Deploys;
-            var inheritedPackages = r.Packages ?? p?.Packages;
-
-            return r with
+        return current
+            .Select(r =>
             {
-                Metrics = inheritedMetrics,
-                Deploys = inheritedDeploys,
-                Packages = inheritedPackages,
-                LastMergedPr = inheritedLastMerged
-            };
-        }).ToList();
+                prior.TryGetValue(r.Name, out var p);
+
+                _ = mergedPrs.TryGet(r.Name, out var m);
+                var inheritedLastMerged = m ?? p?.LastMergedPr;
+
+                var inheritedMetrics = r.Metrics ?? p?.Metrics;
+                var inheritedDeploys = r.Deploys ?? p?.Deploys;
+                var inheritedPackages = r.Packages ?? p?.Packages;
+
+                return r with
+                {
+                    Metrics = inheritedMetrics,
+                    Deploys = inheritedDeploys,
+                    Packages = inheritedPackages,
+                    LastMergedPr = inheritedLastMerged,
+                };
+            })
+            .ToList();
     }
 
     public static bool ShouldPersist(bool anyFetchFailed, bool hasPrevious) => !anyFetchFailed || hasPrevious;
@@ -255,7 +328,8 @@ public sealed class DashboardRefreshService(
     public static IReadOnlyList<CiTrendBucket> BuildCiTrendForRefresh(
         IReadOnlyList<(RepositorySnapshot Snapshot, bool FetchFailed, IReadOnlyList<WorkflowRun> Runs)> results,
         Instant now,
-        DashboardSnapshot? previous)
+        DashboardSnapshot? previous
+    )
     {
         var fresh = BuildCiTrend(results.SelectMany(r => r.Runs), now);
         if (previous?.CiTrend is null)
@@ -277,7 +351,8 @@ public sealed class DashboardRefreshService(
     // outage cannot chain it forward indefinitely across repeated degraded refreshes.
     public static IReadOnlyList<CiTrendBucket> MergeTrends(
         IReadOnlyList<CiTrendBucket> previous,
-        IReadOnlyList<CiTrendBucket> fresh)
+        IReadOnlyList<CiTrendBucket> fresh
+    )
     {
         var priorByHour = new Dictionary<Instant, CiTrendBucket>(previous.Count);
         foreach (var bucket in previous)
@@ -294,8 +369,11 @@ public sealed class DashboardRefreshService(
                 continue;
             }
 
-            if (priorByHour.TryGetValue(current.BucketStart, out var prior)
-                && prior.State != CiTrendState.NoData && !prior.IsBackfilled)
+            if (
+                priorByHour.TryGetValue(current.BucketStart, out var prior)
+                && prior.State != CiTrendState.NoData
+                && !prior.IsBackfilled
+            )
             {
                 result.Add(new CiTrendBucket(current.BucketStart, prior.State) { IsBackfilled = true });
             }
@@ -314,7 +392,8 @@ public sealed class DashboardRefreshService(
         DashboardSnapshot publicSnapshot,
         bool persist,
         ILogger logger,
-        CancellationToken ct)
+        CancellationToken ct
+    )
     {
         if (persist)
         {
@@ -333,7 +412,9 @@ public sealed class DashboardRefreshService(
         }
         else
         {
-            logger.LogWarning("Dashboard refresh degraded with no prior snapshot; serving partial data without persisting.");
+            logger.LogWarning(
+                "Dashboard refresh degraded with no prior snapshot; serving partial data without persisting."
+            );
         }
 
         state.Update(snapshot, publicSnapshot);
@@ -369,7 +450,7 @@ public sealed class DashboardRefreshService(
         {
             if (run.UpdatedAt > now)
             {
-                continue;           // future-dated (clock skew): drop
+                continue; // future-dated (clock skew): drop
             }
 
             var runHour = run.UpdatedAt.ToUnixTimeSeconds() / secondsPerHour;
@@ -379,7 +460,7 @@ public sealed class DashboardRefreshService(
             var idx = runHour - anchorHour + buckets;
             if (idx is < 0 or >= buckets)
             {
-                continue;         // outside the 24h window: drop
+                continue; // outside the 24h window: drop
             }
 
             anyRun[idx] = true;
@@ -414,14 +495,36 @@ public sealed class DashboardRefreshService(
             // deserializes PullRequests to null and can be reintroduced via
             // MergeWithPrevious for a degraded repo. Metrics is already guarded below.
             new SummaryCount("open-prs", repos.Sum(r => r.PullRequests is null ? 0 : r.PullRequests.Count)),
-            new SummaryCount("nloc-fixportal", repos.Where(r => r.Metrics is not null && !r.Name.Contains("quickfixn", StringComparison.OrdinalIgnoreCase)).Sum(r => r.Metrics!.Nloc)),
-            new SummaryCount("nloc-quickfixn", repos.Where(r => r.Metrics is not null && r.Name.Contains("quickfixn", StringComparison.OrdinalIgnoreCase)).Sum(r => r.Metrics!.Nloc)),
+            new SummaryCount(
+                "nloc-fixportal",
+                repos
+                    .Where(r =>
+                        r.Metrics is not null && !r.Name.Contains("quickfixn", StringComparison.OrdinalIgnoreCase)
+                    )
+                    .Sum(r => r.Metrics!.Nloc)
+            ),
+            new SummaryCount(
+                "nloc-quickfixn",
+                repos
+                    .Where(r =>
+                        r.Metrics is not null && r.Name.Contains("quickfixn", StringComparison.OrdinalIgnoreCase)
+                    )
+                    .Sum(r => r.Metrics!.Nloc)
+            ),
             new SummaryCount("deploys", repos.Sum(r => r.Deploys is null ? 0 : r.Deploys.Count)),
             new SummaryCount("packages", repos.Sum(r => r.Packages is null ? 0 : r.Packages.Count)),
-            new SummaryCount("deploys-failing", repos.Sum(r => r.Deploys is null ? 0 : r.Deploys.Count(d => d.State == SignalState.Failure))),
-            new SummaryCount("deploys-running", repos.Sum(r => r.Deploys is null ? 0 : r.Deploys.Count(d => d.State == SignalState.Running))),
-            new SummaryCount("packages-failing", repos.Sum(r => r.Packages is null ? 0 : r.Packages.Count(d => d.State == SignalState.Failure))),
+            new SummaryCount(
+                "deploys-failing",
+                repos.Sum(r => r.Deploys is null ? 0 : r.Deploys.Count(d => d.State == SignalState.Failure))
+            ),
+            new SummaryCount(
+                "deploys-running",
+                repos.Sum(r => r.Deploys is null ? 0 : r.Deploys.Count(d => d.State == SignalState.Running))
+            ),
+            new SummaryCount(
+                "packages-failing",
+                repos.Sum(r => r.Packages is null ? 0 : r.Packages.Count(d => d.State == SignalState.Failure))
+            ),
         ];
     }
-
 }

@@ -21,15 +21,15 @@ public sealed class JobLaneEnrichmentWorker(
     GitHubInventoryCache inventory,
     PerRepoCache<IReadOnlyList<JobSignal>> cache,
     IOptions<DashboardOptions> options,
-    ILogger<JobLaneEnrichmentWorker> logger)
-    : RepoEnrichmentWorker<IReadOnlyList<JobSignal>>(client, inventory, cache, logger)
+    ILogger<JobLaneEnrichmentWorker> logger
+) : RepoEnrichmentWorker<IReadOnlyList<JobSignal>>(client, inventory, cache, logger)
 {
-
-
     // Case-insensitive to match GetEffectiveJobLanes' OrdinalIgnoreCase de-dup: a
     // configured key differing only in casing (e.g. "Deploys") must still resolve.
     private JobLaneOptions? Lane =>
-        options.Value.GetEffectiveJobLanes().FirstOrDefault(l => string.Equals(l.Key, laneKey, StringComparison.OrdinalIgnoreCase));
+        options
+            .Value.GetEffectiveJobLanes()
+            .FirstOrDefault(l => string.Equals(l.Key, laneKey, StringComparison.OrdinalIgnoreCase));
 
     protected override bool Enabled => Lane?.Enabled == true;
     protected override TimeSpan Cadence => TimeSpan.FromSeconds(Lane?.RefreshSeconds ?? 300);
@@ -48,9 +48,10 @@ public sealed class JobLaneEnrichmentWorker(
                 signals.AddRange(await CollectWorkflowJobsAsync(repo, wf, branch, patterns, ct));
             }
         }
-        catch (Exception ex) when (
-            ex is HttpRequestException or GitHubRateLimitException
-            || ex is TaskCanceledException && !ct.IsCancellationRequested)
+        catch (Exception ex)
+            when (ex is HttpRequestException or GitHubRateLimitException
+                || ex is TaskCanceledException && !ct.IsCancellationRequested
+            )
         {
             logger.LogWarning(ex, "Failed to collect {Lane} for {Repo}; keeping last-known-good.", laneKey, repo.Name);
             return null; // keep the prior cached signals
@@ -65,7 +66,12 @@ public sealed class JobLaneEnrichmentWorker(
     // from shadowing prod's last real run. Stops scanning once every seen target has a
     // signal (or the workflow runs no matching job), bounding the extra jobs-API calls.
     private async Task<IReadOnlyList<JobSignal>> CollectWorkflowJobsAsync(
-        GitHubRepoDto repo, GitHubWorkflowDto wf, string branch, IReadOnlyList<string> patterns, CancellationToken ct)
+        GitHubRepoDto repo,
+        GitHubWorkflowDto wf,
+        string branch,
+        IReadOnlyList<string> patterns,
+        CancellationToken ct
+    )
     {
         var collected = new List<RunWithJobs>();
         var page = 1;

@@ -32,7 +32,9 @@ public sealed class GitHubInventoryCacheTests : IDisposable
     // matching the shapes ListRepositoriesAsync / ListWorkflowsAsync expect.
     private sealed class CountingHandler(bool blockRepoFetch = false) : HttpMessageHandler
     {
-        private readonly TaskCompletionSource _repoFetchStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _repoFetchStarted = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
         private readonly TaskCompletionSource _allowRepoFetch = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public int RepoCalls;
         private readonly Dictionary<string, int> _workflowCalls = new(StringComparer.OrdinalIgnoreCase);
@@ -52,7 +54,10 @@ public sealed class GitHubInventoryCacheTests : IDisposable
             }
         }
 
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             var path = request.RequestUri!.AbsolutePath;
             string json;
@@ -65,7 +70,8 @@ public sealed class GitHubInventoryCacheTests : IDisposable
                     await _allowRepoFetch.Task.WaitAsync(cancellationToken);
                 }
 
-                json = """[{"name":"a","html_url":"https://github.com/FixPortal/a","private":false,"archived":false,"default_branch":"main"}]""";
+                json =
+                    """[{"name":"a","html_url":"https://github.com/FixPortal/a","private":false,"archived":false,"default_branch":"main"}]""";
             }
             else if (path.Contains("/actions/workflows", StringComparison.Ordinal))
             {
@@ -92,6 +98,7 @@ public sealed class GitHubInventoryCacheTests : IDisposable
     private sealed class MutableClock(Instant start) : IClock
     {
         public Instant Now { get; set; } = start;
+
         public Instant GetCurrentInstant() => Now;
     }
 
@@ -101,7 +108,9 @@ public sealed class GitHubInventoryCacheTests : IDisposable
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         _clients.Add(http);
         var gitHub = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
-        var dashboard = Options.Create(new DashboardOptions { RefreshSeconds = TtlSeconds, SnapshotPath = "snapshot.json" });
+        var dashboard = Options.Create(
+            new DashboardOptions { RefreshSeconds = TtlSeconds, SnapshotPath = "snapshot.json" }
+        );
         var client = new GitHubOrgClient(http, gitHub, dashboard, new GitHubETagStore());
         var clock = new MutableClock(Instant.FromUtc(2026, 5, 31, 6, 0));
         return (new GitHubInventoryCache(client, clock, dashboard), handler, clock);
@@ -150,9 +159,7 @@ public sealed class GitHubInventoryCacheTests : IDisposable
     {
         var (cache, handler, _) = Build(blockRepoFetch: true);
 
-        var callers = Enumerable.Range(0, 20)
-            .Select(_ => cache.GetRepositoriesAsync(CancellationToken.None))
-            .ToArray();
+        var callers = Enumerable.Range(0, 20).Select(_ => cache.GetRepositoriesAsync(CancellationToken.None)).ToArray();
 
         await handler.RepoFetchStarted.WaitAsync(TestContext.Current.CancellationToken);
         handler.AllowRepoFetch();

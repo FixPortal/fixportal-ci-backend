@@ -14,35 +14,77 @@ using NodaTime.Serialization.SystemTextJson;
 namespace FixPortal.Ci.Backend.Api.Integrations.GitHub;
 
 public sealed class GitHubRateLimitException(string message) : Exception(message);
-public sealed class GitHubAuthException(string message, Exception? innerException = null) : Exception(message, innerException);
+
+public sealed class GitHubAuthException(string message, Exception? innerException = null)
+    : Exception(message, innerException);
 
 public sealed record GitHubRepoDto(string Name, string HtmlUrl, bool Private, bool Archived, string? DefaultBranch);
+
 public sealed record GitHubWorkflowDto(long Id, string Name, string Path, string State);
+
 public sealed record GitHubWorkflowsResponse(IReadOnlyList<GitHubWorkflowDto>? Workflows);
+
 public sealed record GitHubRunItem(
-    string? Status, string? Conclusion, string? HtmlUrl, string? DisplayTitle,
-    int RunNumber, string? HeadBranch, string? Event, Instant UpdatedAt, long Id = 0);
+    string? Status,
+    string? Conclusion,
+    string? HtmlUrl,
+    string? DisplayTitle,
+    int RunNumber,
+    string? HeadBranch,
+    string? Event,
+    Instant UpdatedAt,
+    long Id = 0
+);
+
 public sealed record GitHubRunsResponse(IReadOnlyList<GitHubRunItem>? WorkflowRuns);
+
 public sealed record GitHubUserDto(string? Login);
+
 public sealed record GitHubPullDto(
-    int Number, string? Title, GitHubUserDto? User, string? HtmlUrl, bool Draft, Instant CreatedAt, Instant? MergedAt = null);
+    int Number,
+    string? Title,
+    GitHubUserDto? User,
+    string? HtmlUrl,
+    bool Draft,
+    Instant CreatedAt,
+    Instant? MergedAt = null
+);
+
 public sealed record GitHubRunSummary(long Id, string? HtmlUrl, string? Status, string? Conclusion);
+
 public sealed record GitHubRunRawItem(long Id, string? HtmlUrl, string? Status, string? Conclusion);
+
 public sealed record GitHubRunsRawResponse(IReadOnlyList<GitHubRunRawItem>? WorkflowRuns);
+
 public sealed record GitHubJobDto(
-    string? Name, string? Status, string? Conclusion, string? HtmlUrl, Instant? StartedAt, Instant? CompletedAt);
+    string? Name,
+    string? Status,
+    string? Conclusion,
+    string? HtmlUrl,
+    Instant? StartedAt,
+    Instant? CompletedAt
+);
+
 public sealed record GitHubJobsResponse(IReadOnlyList<GitHubJobDto>? Jobs);
 
 // One scanned run paired with its jobs, fed to the lane selector newest-first.
 public sealed record RunWithJobs(GitHubRunSummary Run, IReadOnlyList<GitHubJobDto> Jobs);
+
 // Signals selected so far, plus whether older runs still need scanning.
 public sealed record LaneScanResult(IReadOnlyList<JobSignal> Signals, bool Complete);
 
 // Search API — issues/PRs endpoint returns a merged_at field nested under pull_request.
 public sealed record GitHubSearchPrInfo(Instant? MergedAt);
+
 public sealed record GitHubSearchIssueDto(
-    int Number, string? Title, GitHubUserDto? User, string? HtmlUrl,
-    GitHubSearchPrInfo? PullRequest, Instant UpdatedAt);
+    int Number,
+    string? Title,
+    GitHubUserDto? User,
+    string? HtmlUrl,
+    GitHubSearchPrInfo? PullRequest,
+    Instant UpdatedAt
+);
+
 public sealed record GitHubSearchResponse(IReadOnlyList<GitHubSearchIssueDto>? Items);
 
 public sealed class GitHubOrgClient(
@@ -51,7 +93,8 @@ public sealed class GitHubOrgClient(
     IOptions<DashboardOptions> dashboard,
     GitHubETagStore etags,
     DashboardSnapshotState? state = null,
-    ILogger<GitHubOrgClient>? logger = null)
+    ILogger<GitHubOrgClient>? logger = null
+)
 {
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
 
@@ -67,8 +110,8 @@ public sealed class GitHubOrgClient(
         var page = 1;
         while (true)
         {
-            var batch = await SendAsync<List<GitHubRepoDto>>(
-                $"orgs/{_gitHub.Owner}/repos?per_page=100&page={page}", ct) ?? [];
+            var batch =
+                await SendAsync<List<GitHubRepoDto>>($"orgs/{_gitHub.Owner}/repos?per_page=100&page={page}", ct) ?? [];
             all.AddRange(batch);
             if (batch.Count < 100)
             {
@@ -87,7 +130,9 @@ public sealed class GitHubOrgClient(
         while (true)
         {
             var response = await SendAsync<GitHubWorkflowsResponse>(
-                $"repos/{_gitHub.Owner}/{repo}/actions/workflows?per_page=100&page={page}", ct);
+                $"repos/{_gitHub.Owner}/{repo}/actions/workflows?per_page=100&page={page}",
+                ct
+            );
             var batch = response?.Workflows ?? [];
             all.AddRange(batch);
             if (batch.Count < 100)
@@ -100,21 +145,32 @@ public sealed class GitHubOrgClient(
         return all.Where(w => IncludeWorkflow(w.Name, w.Path, _dashboard)).ToList();
     }
 
-    public async Task<IReadOnlyList<WorkflowRun>> GetRecentRunsAsync(string repo, GitHubWorkflowDto workflow, CancellationToken ct)
+    public async Task<IReadOnlyList<WorkflowRun>> GetRecentRunsAsync(
+        string repo,
+        GitHubWorkflowDto workflow,
+        CancellationToken ct
+    )
     {
         var response = await SendAsync<GitHubRunsResponse>(
-            $"repos/{_gitHub.Owner}/{repo}/actions/workflows/{workflow.Id}/runs?per_page={_dashboard.RunHistoryPageSize}", ct);
-        return (response?.WorkflowRuns ?? [])
-            .Select(run => ToWorkflowRun(run, repo, workflow))
-            .ToList();
+            $"repos/{_gitHub.Owner}/{repo}/actions/workflows/{workflow.Id}/runs?per_page={_dashboard.RunHistoryPageSize}",
+            ct
+        );
+        return (response?.WorkflowRuns ?? []).Select(run => ToWorkflowRun(run, repo, workflow)).ToList();
     }
 
     private WorkflowRun ToWorkflowRun(GitHubRunItem run, string repo, GitHubWorkflowDto workflow) =>
-        new(run.Status, run.Conclusion, GetRunUrl(run, repo, workflow),
+        new(
+            run.Status,
+            run.Conclusion,
+            GetRunUrl(run, repo, workflow),
             string.IsNullOrWhiteSpace(run.DisplayTitle) ? workflow.Name : run.DisplayTitle,
-            run.RunNumber, run.HeadBranch, run.Event, run.UpdatedAt,
+            run.RunNumber,
+            run.HeadBranch,
+            run.Event,
+            run.UpdatedAt,
             repo,
-            FileName(workflow.Path));
+            FileName(workflow.Path)
+        );
 
     private string GetRunUrl(GitHubRunItem run, string repo, GitHubWorkflowDto workflow)
     {
@@ -134,9 +190,12 @@ public sealed class GitHubOrgClient(
         var page = 1;
         while (true)
         {
-            var batch = await SendAsync<List<GitHubPullDto>>(
-                $"repos/{_gitHub.Owner}/{repo}/pulls?state=open&per_page=100&page={page}", ct,
-                affectsAuthState: false) ?? [];
+            var batch =
+                await SendAsync<List<GitHubPullDto>>(
+                    $"repos/{_gitHub.Owner}/{repo}/pulls?state=open&per_page=100&page={page}",
+                    ct,
+                    affectsAuthState: false
+                ) ?? [];
             all.AddRange(batch);
             if (batch.Count < 100)
             {
@@ -149,14 +208,16 @@ public sealed class GitHubOrgClient(
     }
 
     public static PullRequest ToPullRequest(GitHubPullDto dto, string owner, string repo) =>
-        new(dto.Number,
+        new(
+            dto.Number,
             string.IsNullOrWhiteSpace(dto.Title) ? $"#{dto.Number}" : dto.Title,
             string.IsNullOrWhiteSpace(dto.User?.Login) ? "unknown" : dto.User!.Login!,
             string.IsNullOrWhiteSpace(dto.HtmlUrl)
                 ? $"https://github.com/{owner}/{repo}/pull/{dto.Number}"
                 : dto.HtmlUrl!,
             dto.Draft,
-            dto.CreatedAt);
+            dto.CreatedAt
+        );
 
     public async Task<MergedPullRequest?> GetLastMergedPullRequestAsync(string repo, CancellationToken ct)
     {
@@ -170,13 +231,18 @@ public sealed class GitHubOrgClient(
         {
             if (page > 50)
             {
-                logger?.LogWarning("Search PR pagination reached the 1000-result (50 pages) cap for repo {Repo}; stopping early.", repo);
+                logger?.LogWarning(
+                    "Search PR pagination reached the 1000-result (50 pages) cap for repo {Repo}; stopping early.",
+                    repo
+                );
                 break;
             }
 
             var response = await SendAsync<GitHubSearchResponse>(
-                $"search/issues?q={q}&sort=updated&order=desc&per_page={perPage}&page={page}", ct,
-                affectsAuthState: false);
+                $"search/issues?q={q}&sort=updated&order=desc&per_page={perPage}&page={page}",
+                ct,
+                affectsAuthState: false
+            );
             var items = response?.Items ?? [];
             if (items.Count == 0)
             {
@@ -215,17 +281,17 @@ public sealed class GitHubOrgClient(
             string.IsNullOrWhiteSpace(bestItem.HtmlUrl)
                 ? $"https://github.com/{_gitHub.Owner}/{repo}/pull/{bestItem.Number}"
                 : bestItem.HtmlUrl!,
-            maxMergedAt!.Value);
+            maxMergedAt!.Value
+        );
     }
 
     private static void UpdateLatestMerged(
         IReadOnlyList<GitHubSearchIssueDto> items,
         ref Instant? maxMergedAt,
-        ref GitHubSearchIssueDto? bestItem)
+        ref GitHubSearchIssueDto? bestItem
+    )
     {
-        var pageBest = items
-            .Where(i => i.PullRequest?.MergedAt is not null)
-            .MaxBy(i => i.PullRequest!.MergedAt!.Value);
+        var pageBest = items.Where(i => i.PullRequest?.MergedAt is not null).MaxBy(i => i.PullRequest!.MergedAt!.Value);
         if (pageBest is null)
         {
             return;
@@ -240,10 +306,18 @@ public sealed class GitHubOrgClient(
     }
 
     public async Task<IReadOnlyList<GitHubRunSummary>> GetRecentDefaultBranchRunsAsync(
-        string repo, long workflowId, string branch, int count, int page, CancellationToken ct)
+        string repo,
+        long workflowId,
+        string branch,
+        int count,
+        int page,
+        CancellationToken ct
+    )
     {
         var response = await SendAsync<GitHubRunsRawResponse>(
-            $"repos/{_gitHub.Owner}/{repo}/actions/workflows/{workflowId}/runs?branch={Uri.EscapeDataString(branch)}&per_page={count}&page={page}", ct);
+            $"repos/{_gitHub.Owner}/{repo}/actions/workflows/{workflowId}/runs?branch={Uri.EscapeDataString(branch)}&per_page={count}&page={page}",
+            ct
+        );
         return (response?.WorkflowRuns ?? [])
             .Select(r => new GitHubRunSummary(r.Id, r.HtmlUrl, r.Status, r.Conclusion))
             .ToList();
@@ -256,7 +330,9 @@ public sealed class GitHubOrgClient(
         while (true)
         {
             var response = await SendAsync<GitHubJobsResponse>(
-                $"repos/{_gitHub.Owner}/{repo}/actions/runs/{runId}/jobs?per_page=100&page={page}", ct);
+                $"repos/{_gitHub.Owner}/{repo}/actions/runs/{runId}/jobs?per_page=100&page={page}",
+                ct
+            );
             var batch = response?.Jobs ?? [];
             all.AddRange(batch);
             if (batch.Count < 100)
@@ -280,8 +356,9 @@ public sealed class GitHubOrgClient(
     public static string CanonicalJobTarget(string name)
     {
         var parts = name.Split(" / ");
-        var canonical = parts.Where((part, index) =>
-            index == 0 || !string.Equals(parts[index - 1], part, StringComparison.Ordinal));
+        var canonical = parts.Where(
+            (part, index) => index == 0 || !string.Equals(parts[index - 1], part, StringComparison.Ordinal)
+        );
         return string.Join(" / ", canonical);
     }
 
@@ -293,16 +370,21 @@ public sealed class GitHubOrgClient(
     // fetching older runs once every seen target has a signal (or the workflow runs no
     // matching job at all), bounding the extra jobs-API calls.
     public static LaneScanResult SelectLaneSignals(
-        string workflowName, string repoFallbackUrl,
-        IReadOnlyList<RunWithJobs> runsNewestFirst, IReadOnlyList<string> patterns)
+        string workflowName,
+        string repoFallbackUrl,
+        IReadOnlyList<RunWithJobs> runsNewestFirst,
+        IReadOnlyList<string> patterns
+    )
     {
-        var order = new List<string>();                 // canonical target keys, first-seen order
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // O(1) dedup
+        var order = new List<string>(); // canonical target keys, first-seen order
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase); // O(1) dedup
         var signals = new Dictionary<string, JobSignal>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var rwj in runsNewestFirst)
         {
-            foreach (var job in rwj.Jobs.Where(j => !string.IsNullOrWhiteSpace(j.Name) && IsJobMatch(j.Name!, patterns)))
+            foreach (
+                var job in rwj.Jobs.Where(j => !string.IsNullOrWhiteSpace(j.Name) && IsJobMatch(j.Name!, patterns))
+            )
             {
                 RecordJob(job, rwj.Run, workflowName, repoFallbackUrl, order, seen, signals);
             }
@@ -316,13 +398,19 @@ public sealed class GitHubOrgClient(
     // target in first-seen order; keeps the first (newest, scan is newest-first) definite
     // state per target and ignores Unknown (skipped / neutral / not-yet-run).
     private static void RecordJob(
-        GitHubJobDto job, GitHubRunSummary run, string workflowName, string repoFallbackUrl,
-        List<string> order, HashSet<string> seen, Dictionary<string, JobSignal> signals)
+        GitHubJobDto job,
+        GitHubRunSummary run,
+        string workflowName,
+        string repoFallbackUrl,
+        List<string> order,
+        HashSet<string> seen,
+        Dictionary<string, JobSignal> signals
+    )
     {
         var key = CanonicalJobTarget(job.Name!);
         if (seen.Add(key))
         {
-            order.Add(key);  // HashSet.Add returns true on first insert
+            order.Add(key); // HashSet.Add returns true on first insert
         }
 
         var state = ToSignalState(job.Status, job.Conclusion);
@@ -332,9 +420,12 @@ public sealed class GitHubOrgClient(
         }
 
         signals[key] = new JobSignal(
-            workflowName, job.Name!, state,
+            workflowName,
+            job.Name!,
+            state,
             JobUrl(job, run, repoFallbackUrl),
-            job.CompletedAt ?? job.StartedAt ?? Instant.MinValue);
+            job.CompletedAt ?? job.StartedAt ?? Instant.MinValue
+        );
     }
 
     private static string JobUrl(GitHubJobDto job, GitHubRunSummary run, string repoFallbackUrl)
@@ -362,7 +453,10 @@ public sealed class GitHubOrgClient(
     // endpoint revalidates as a 304 via the ETag cache, which GitHub does not charge
     // against the rate budget. The bound is MaxRunsToScan.
     private static bool IsScanComplete(
-        IReadOnlyList<RunWithJobs> runsNewestFirst, List<string> order, Dictionary<string, JobSignal> signals)
+        IReadOnlyList<RunWithJobs> runsNewestFirst,
+        List<string> order,
+        Dictionary<string, JobSignal> signals
+    )
     {
         if (order.Count == 0)
         {
@@ -389,13 +483,14 @@ public sealed class GitHubOrgClient(
         if (conclusion is null)
         {
             return status is "in_progress" or "queued" or "requested" or "waiting" or "pending"
-                ? SignalState.Running : SignalState.Unknown;
+                ? SignalState.Running
+                : SignalState.Unknown;
         }
         return conclusion switch
         {
             "success" => SignalState.Success,
             "failure" or "timed_out" or "startup_failure" => SignalState.Failure,
-            _ => SignalState.Unknown
+            _ => SignalState.Unknown,
         };
     }
 
@@ -415,7 +510,8 @@ public sealed class GitHubOrgClient(
             return false;
         }
 
-        var isCodeQl = path.Contains("github-code-scanning", StringComparison.OrdinalIgnoreCase)
+        var isCodeQl =
+            path.Contains("github-code-scanning", StringComparison.OrdinalIgnoreCase)
             || name.Equals("CodeQL", StringComparison.OrdinalIgnoreCase);
         if (isCodeQl && !options.IncludeCodeQl)
         {
@@ -470,7 +566,8 @@ public sealed class GitHubOrgClient(
 
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
-            var err = $"GitHub authentication failed (HTTP 401 Unauthorized) for {url}. Verify the configured PAT token.";
+            var err =
+                $"GitHub authentication failed (HTTP 401 Unauthorized) for {url}. Verify the configured PAT token.";
             if (affectsAuthState)
             {
                 state?.SetAuthError(err);
@@ -492,10 +589,14 @@ public sealed class GitHubOrgClient(
         // otherwise it fell through to a plain HttpRequestException and did not abort
         // the sibling parallel fetches. The header check only disambiguates a 403,
         // which is genuinely ambiguous between auth failure and rate limit.
-        if (response.StatusCode == HttpStatusCode.TooManyRequests
-            || response.StatusCode == HttpStatusCode.Forbidden && IsRateLimited(response))
+        if (
+            response.StatusCode == HttpStatusCode.TooManyRequests
+            || response.StatusCode == HttpStatusCode.Forbidden && IsRateLimited(response)
+        )
         {
-            throw new GitHubRateLimitException($"GitHub rate limit reached (HTTP {(int)response.StatusCode}) for {url}.");
+            throw new GitHubRateLimitException(
+                $"GitHub rate limit reached (HTTP {(int)response.StatusCode}) for {url}."
+            );
         }
         _ = response.EnsureSuccessStatusCode();
 
@@ -512,8 +613,11 @@ public sealed class GitHubOrgClient(
 
     private static bool IsRateLimited(HttpResponseMessage response)
     {
-        if (response.Headers.TryGetValues("X-RateLimit-Remaining", out var remaining)
-            && int.TryParse(remaining.FirstOrDefault()?.Trim(), out var left) && left == 0)
+        if (
+            response.Headers.TryGetValues("X-RateLimit-Remaining", out var remaining)
+            && int.TryParse(remaining.FirstOrDefault()?.Trim(), out var left)
+            && left == 0
+        )
         {
             return true;
         }
