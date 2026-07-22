@@ -36,6 +36,12 @@ jobs:
         with:
           dotnet-version: '10.0.x'
 
+      - name: Restore tools
+        run: dotnet tool restore
+
+      - name: Check C# formatting
+        run: dotnet csharpier check .
+
       - name: Restore
         run: dotnet restore FixPortal.Ci.Backend.slnx
         env:
