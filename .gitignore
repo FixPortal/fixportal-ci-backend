@@ -1,5 +1,6 @@
 # Superpowers scratch
 .superpowers/
+.worktrees/
 
 # .NET build output
 [Bb]in/
