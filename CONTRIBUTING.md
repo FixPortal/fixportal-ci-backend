@@ -18,11 +18,11 @@ Prerequisites: **.NET 10 SDK** and a fine-grained read-only GitHub PAT (see
 
 ```bash
 git clone https://github.com/FixPortal/fixportal-ci-backend.git
-cd fixportal-ci-backend/src/FixPortal.Ci.Backend.Api
-dotnet user-secrets init
-dotnet user-secrets set "GitHub:Token" "<your-read-only-PAT>"
-dotnet user-secrets set "GitHub:Owner" "<your-org>"
-dotnet run           # API on http://localhost:5049
+cd fixportal-ci-backend
+dotnet user-secrets init --project src/FixPortal.Ci.Backend.Api
+dotnet user-secrets set "GitHub:Token" "<your-read-only-PAT>" --project src/FixPortal.Ci.Backend.Api
+dotnet user-secrets set "GitHub:Owner" "<your-org>" --project src/FixPortal.Ci.Backend.Api
+dotnet run --project src/FixPortal.Ci.Backend.Api # API on http://localhost:5049
 ```
 
 ## Before you open a PR
