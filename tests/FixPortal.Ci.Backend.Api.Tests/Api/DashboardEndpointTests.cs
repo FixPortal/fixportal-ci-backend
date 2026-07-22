@@ -16,32 +16,33 @@ namespace FixPortal.Ci.Backend.Api.Tests.Api;
 public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     : IClassFixture<WebApplicationFactory<Program>>
 {
-    private HttpClient CreateClient(DashboardSnapshot? seed) =>
-        CreateClient(seed, adminKey: null);
+    private HttpClient CreateClient(DashboardSnapshot? seed) => CreateClient(seed, adminKey: null);
 
     private HttpClient CreateClient(DashboardSnapshot? seed, string? adminKey) =>
-        factory.WithWebHostBuilder(builder =>
-        {
-            // Satisfy GitHub token ValidateOnStart so the test host can start.
-            _ = builder.UseSetting("GitHub:Token", "test-token");
-            if (adminKey is not null)
+        factory
+            .WithWebHostBuilder(builder =>
             {
-                _ = builder.UseSetting("Admin:AdminKey", adminKey);
-            }
-            _ = builder.ConfigureServices(services =>
-            {
-                // No background polling in tests; seed the in-memory holder the
-                // endpoint reads from.
-                _ = services.RemoveAll<IHostedService>();
-                _ = services.RemoveAll<DashboardSnapshotState>();
-                var state = new DashboardSnapshotState();
-                if (seed is not null)
+                // Satisfy GitHub token ValidateOnStart so the test host can start.
+                _ = builder.UseSetting("GitHub:Token", "test-token");
+                if (adminKey is not null)
                 {
-                    state.Update(seed, DashboardSnapshotState.ComputePublicSnapshot(seed));
+                    _ = builder.UseSetting("Admin:AdminKey", adminKey);
                 }
-                _ = services.AddSingleton(state);
-            });
-        }).CreateClient();
+                _ = builder.ConfigureServices(services =>
+                {
+                    // No background polling in tests; seed the in-memory holder the
+                    // endpoint reads from.
+                    _ = services.RemoveAll<IHostedService>();
+                    _ = services.RemoveAll<DashboardSnapshotState>();
+                    var state = new DashboardSnapshotState();
+                    if (seed is not null)
+                    {
+                        state.Update(seed, DashboardSnapshotState.ComputePublicSnapshot(seed));
+                    }
+                    _ = services.AddSingleton(state);
+                });
+            })
+            .CreateClient();
 
     [Fact]
     public async Task Get_snapshot_should_return_latest_dashboard_snapshot()
@@ -55,21 +56,33 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                     "repo",
                     "https://github.com/FixPortal/repo",
                     false, // public: the endpoint under test strips private repos, so a
-                           // private seed here would make repositories[0] never exist.
+                    // private seed here would make repositories[0] never exist.
                     [
                         new WorkflowSnapshot(
                             "CI",
                             "ci.yml",
                             SignalState.Success,
-                            new WorkflowRun("completed", "success", "https://x", "t", 1, "main", "push", Instant.FromUtc(2026, 5, 28, 17, 0)))
+                            new WorkflowRun(
+                                "completed",
+                                "success",
+                                "https://x",
+                                "t",
+                                1,
+                                "main",
+                                "push",
+                                Instant.FromUtc(2026, 5, 28, 17, 0)
+                            )
+                        ),
                     ],
                     [],
                     null,
                     [],
-                    [])
+                    []
+                ),
             ],
             [new SummaryCount("success", 1)],
-            null);
+            null
+        );
         var client = CreateClient(snapshot);
 
         var response = await client.GetAsync("/api/dashboard/snapshot", TestContext.Current.CancellationToken);
@@ -83,7 +96,11 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         using var doc = JsonDocument.Parse(body);
         _ = doc.RootElement.GetProperty("org").GetString().Should().Be("FixPortal");
-        _ = doc.RootElement.GetProperty("refreshedAt").GetString().Should().Be(InstantPattern.ExtendedIso.Format(refreshedAt));
+        _ = doc
+            .RootElement.GetProperty("refreshedAt")
+            .GetString()
+            .Should()
+            .Be(InstantPattern.ExtendedIso.Format(refreshedAt));
         var repo0 = doc.RootElement.GetProperty("repositories")[0];
         _ = repo0.GetProperty("name").GetString().Should().Be("repo");
         _ = repo0.GetProperty("workflows")[0].GetProperty("state").GetString().Should().Be("success");
@@ -112,15 +129,18 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                             "CI",
                             "ci.yml",
                             SignalState.Failure,
-                            new WorkflowRun("completed", "failure", "https://x", "t", 1, "main", "push", runInstant))
+                            new WorkflowRun("completed", "failure", "https://x", "t", 1, "main", "push", runInstant)
+                        ),
                     ],
                     [],
                     null,
                     [],
-                    [])
+                    []
+                ),
             ],
             [],
-            null);
+            null
+        );
         var client = CreateClient(snapshot);
 
         var response = await client.GetAsync("/api/dashboard/snapshot", TestContext.Current.CancellationToken);
@@ -166,11 +186,30 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             Instant.FromUtc(2026, 6, 1, 0, 0),
             "FixPortal",
             [
-                new RepositorySnapshot("public-repo", "https://github.com/FixPortal/public-repo", false, [], [], null, [], []),
-                new RepositorySnapshot("private-repo", "https://github.com/FixPortal/private-repo", true, [], [], null, [], [])
+                new RepositorySnapshot(
+                    "public-repo",
+                    "https://github.com/FixPortal/public-repo",
+                    false,
+                    [],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+                new RepositorySnapshot(
+                    "private-repo",
+                    "https://github.com/FixPortal/private-repo",
+                    true,
+                    [],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
             ],
             [],
-            null);
+            null
+        );
         var client = CreateClient(snapshot);
 
         var response = await client.GetAsync("/api/dashboard/snapshot", TestContext.Current.CancellationToken);
@@ -190,11 +229,30 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             Instant.FromUtc(2026, 6, 1, 0, 0),
             "FixPortal",
             [
-                new RepositorySnapshot("private-repo-1", "https://github.com/FixPortal/private-repo-1", true, [], [], null, [], []),
-                new RepositorySnapshot("private-repo-2", "https://github.com/FixPortal/private-repo-2", true, [], [], null, [], [])
+                new RepositorySnapshot(
+                    "private-repo-1",
+                    "https://github.com/FixPortal/private-repo-1",
+                    true,
+                    [],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+                new RepositorySnapshot(
+                    "private-repo-2",
+                    "https://github.com/FixPortal/private-repo-2",
+                    true,
+                    [],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
             ],
             [],
-            null);
+            null
+        );
         var client = CreateClient(snapshot);
 
         var response = await client.GetAsync("/api/dashboard/snapshot", TestContext.Current.CancellationToken);
@@ -212,11 +270,30 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             Instant.FromUtc(2026, 6, 1, 0, 0),
             "FixPortal",
             [
-                new RepositorySnapshot("public-repo-1", "https://github.com/FixPortal/public-repo-1", false, [], [], null, [], []),
-                new RepositorySnapshot("public-repo-2", "https://github.com/FixPortal/public-repo-2", false, [], [], null, [], [])
+                new RepositorySnapshot(
+                    "public-repo-1",
+                    "https://github.com/FixPortal/public-repo-1",
+                    false,
+                    [],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+                new RepositorySnapshot(
+                    "public-repo-2",
+                    "https://github.com/FixPortal/public-repo-2",
+                    false,
+                    [],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
             ],
             [],
-            null);
+            null
+        );
         var client = CreateClient(snapshot);
 
         var response = await client.GetAsync("/api/dashboard/snapshot", TestContext.Current.CancellationToken);
@@ -233,40 +310,43 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     [Fact]
     public async Task Snapshot_should_allow_cross_origin_get_from_configured_origin()
     {
-        var client = factory.WithWebHostBuilder(b =>
-        {
-            _ = b.UseSetting("GitHub:Token", "test-token");
-            _ = b.UseSetting("Cors:AllowedOrigins:0", "https://app.fixportal.org");
-            _ = b.ConfigureServices(s =>
+        var client = factory
+            .WithWebHostBuilder(b =>
             {
-                _ = s.RemoveAll<IHostedService>();
-                _ = s.RemoveAll<DashboardSnapshotState>();
-                _ = s.AddSingleton(new DashboardSnapshotState());
-            });
-        }).CreateClient();
+                _ = b.UseSetting("GitHub:Token", "test-token");
+                _ = b.UseSetting("Cors:AllowedOrigins:0", "https://app.fixportal.org");
+                _ = b.ConfigureServices(s =>
+                {
+                    _ = s.RemoveAll<IHostedService>();
+                    _ = s.RemoveAll<DashboardSnapshotState>();
+                    _ = s.AddSingleton(new DashboardSnapshotState());
+                });
+            })
+            .CreateClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/dashboard/snapshot");
         request.Headers.Add("Origin", "https://app.fixportal.org");
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
-        _ = response.Headers.GetValues("Access-Control-Allow-Origin")
-            .Should().Contain("https://app.fixportal.org");
+        _ = response.Headers.GetValues("Access-Control-Allow-Origin").Should().Contain("https://app.fixportal.org");
     }
 
     [Fact]
     public async Task Snapshot_should_not_emit_cors_header_for_unconfigured_origin()
     {
-        var client = factory.WithWebHostBuilder(b =>
-        {
-            _ = b.UseSetting("GitHub:Token", "test-token");
-            _ = b.UseSetting("Cors:AllowedOrigins:0", "https://app.fixportal.org");
-            _ = b.ConfigureServices(s =>
+        var client = factory
+            .WithWebHostBuilder(b =>
             {
-                _ = s.RemoveAll<IHostedService>();
-                _ = s.RemoveAll<DashboardSnapshotState>();
-                _ = s.AddSingleton(new DashboardSnapshotState());
-            });
-        }).CreateClient();
+                _ = b.UseSetting("GitHub:Token", "test-token");
+                _ = b.UseSetting("Cors:AllowedOrigins:0", "https://app.fixportal.org");
+                _ = b.ConfigureServices(s =>
+                {
+                    _ = s.RemoveAll<IHostedService>();
+                    _ = s.RemoveAll<DashboardSnapshotState>();
+                    _ = s.AddSingleton(new DashboardSnapshotState());
+                });
+            })
+            .CreateClient();
 
         using var request = new HttpRequestMessage(HttpMethod.Get, "/api/dashboard/snapshot");
         request.Headers.Add("Origin", "https://evil.example.com");
@@ -281,15 +361,35 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     // all 401; only the correct key gets the full (private-inclusive) snapshot.
     private const string AdminKey = "a-valid-admin-key-1234";
 
-    private static DashboardSnapshot SnapshotWithPrivateRepo() => new(
-        Instant.FromUtc(2026, 6, 1, 0, 0),
-        "FixPortal",
-        [
-            new RepositorySnapshot("public-repo", "https://github.com/FixPortal/public-repo", false, [], [], null, [], []),
-            new RepositorySnapshot("private-repo", "https://github.com/FixPortal/private-repo", true, [], [], null, [], [])
-        ],
-        [],
-        null);
+    private static DashboardSnapshot SnapshotWithPrivateRepo() =>
+        new(
+            Instant.FromUtc(2026, 6, 1, 0, 0),
+            "FixPortal",
+            [
+                new RepositorySnapshot(
+                    "public-repo",
+                    "https://github.com/FixPortal/public-repo",
+                    false,
+                    [],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+                new RepositorySnapshot(
+                    "private-repo",
+                    "https://github.com/FixPortal/private-repo",
+                    true,
+                    [],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+            ],
+            [],
+            null
+        );
 
     [Fact]
     public async Task Admin_snapshot_should_return_401_when_no_key_header_is_present()
@@ -339,8 +439,11 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         _ = response.StatusCode.Should().Be(HttpStatusCode.OK);
         var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         using var doc = JsonDocument.Parse(body);
-        var names = doc.RootElement.GetProperty("repositories").EnumerateArray()
-            .Select(r => r.GetProperty("name").GetString()).ToList();
+        var names = doc
+            .RootElement.GetProperty("repositories")
+            .EnumerateArray()
+            .Select(r => r.GetProperty("name").GetString())
+            .ToList();
         _ = names.Should().Contain("public-repo");
         _ = names.Should().Contain("private-repo");
     }
@@ -353,19 +456,22 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     public async Task Health_should_return_503_degraded_without_leaking_the_raw_auth_error()
     {
         const string sentinelPrivateRepoName = "SENTINEL-PRIVATE-REPO-MUST-NOT-LEAK";
-        var client = factory.WithWebHostBuilder(builder =>
-        {
-            _ = builder.UseSetting("GitHub:Token", "test-token");
-            _ = builder.ConfigureServices(services =>
+        var client = factory
+            .WithWebHostBuilder(builder =>
             {
-                _ = services.RemoveAll<IHostedService>();
-                _ = services.RemoveAll<DashboardSnapshotState>();
-                var state = new DashboardSnapshotState();
-                state.SetAuthError(
-                    $"GitHub authentication failed (HTTP 401 Unauthorized) for repos/FixPortal/{sentinelPrivateRepoName}/actions/workflows. Verify the configured PAT token.");
-                _ = services.AddSingleton(state);
-            });
-        }).CreateClient();
+                _ = builder.UseSetting("GitHub:Token", "test-token");
+                _ = builder.ConfigureServices(services =>
+                {
+                    _ = services.RemoveAll<IHostedService>();
+                    _ = services.RemoveAll<DashboardSnapshotState>();
+                    var state = new DashboardSnapshotState();
+                    state.SetAuthError(
+                        $"GitHub authentication failed (HTTP 401 Unauthorized) for repos/FixPortal/{sentinelPrivateRepoName}/actions/workflows. Verify the configured PAT token."
+                    );
+                    _ = services.AddSingleton(state);
+                });
+            })
+            .CreateClient();
 
         var response = await client.GetAsync("/api/health", TestContext.Current.CancellationToken);
 
@@ -379,16 +485,18 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     [Fact]
     public async Task Health_should_return_200_healthy_when_no_auth_error_is_set()
     {
-        var client = factory.WithWebHostBuilder(builder =>
-        {
-            _ = builder.UseSetting("GitHub:Token", "test-token");
-            _ = builder.ConfigureServices(services =>
+        var client = factory
+            .WithWebHostBuilder(builder =>
             {
-                _ = services.RemoveAll<IHostedService>();
-                _ = services.RemoveAll<DashboardSnapshotState>();
-                _ = services.AddSingleton(new DashboardSnapshotState());
-            });
-        }).CreateClient();
+                _ = builder.UseSetting("GitHub:Token", "test-token");
+                _ = builder.ConfigureServices(services =>
+                {
+                    _ = services.RemoveAll<IHostedService>();
+                    _ = services.RemoveAll<DashboardSnapshotState>();
+                    _ = services.AddSingleton(new DashboardSnapshotState());
+                });
+            })
+            .CreateClient();
 
         var response = await client.GetAsync("/api/health", TestContext.Current.CancellationToken);
 

@@ -29,12 +29,18 @@ public class DashboardRefreshWorkerTests
     {
         public TaskCompletionSource ErrorLogged { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull => null;
 
         public bool IsEnabled(LogLevel logLevel) => true;
 
-        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
-            Func<TState, Exception?, string> formatter)
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter
+        )
         {
             if (logLevel == LogLevel.Error)
             {
@@ -49,11 +55,16 @@ public class DashboardRefreshWorkerTests
     // non-cancellation failure the worker's guard exists to absorb.
     private sealed class BrokenReposHandler : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent("not valid json", Encoding.UTF8, "application/json"),
-            });
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) =>
+            Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("not valid json", Encoding.UTF8, "application/json"),
+                }
+            );
     }
 
     private static DashboardRefreshService NewBrokenRefreshService(HttpMessageHandler handler)
@@ -75,7 +86,8 @@ public class DashboardRefreshWorkerTests
             new PerRepoCache<MergedPullRequest>(),
             gitHubOptions,
             clock,
-            NullLoggerFor<DashboardRefreshService>());
+            NullLoggerFor<DashboardRefreshService>()
+        );
     }
 
     private static ILogger<T> NullLoggerFor<T>() => Microsoft.Extensions.Logging.Abstractions.NullLogger<T>.Instance;
@@ -100,7 +112,9 @@ public class DashboardRefreshWorkerTests
         _ = worker.ExecuteTask.IsCompleted.Should().BeFalse();
 
         // Stops on shutdown: StopAsync must unwind the loop without the task faulting.
-        await worker.StopAsync(TestContext.Current.CancellationToken).WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await worker
+            .StopAsync(TestContext.Current.CancellationToken)
+            .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         _ = worker.ExecuteTask.IsCompleted.Should().BeTrue();
         _ = worker.ExecuteTask.IsFaulted.Should().BeFalse();
     }

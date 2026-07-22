@@ -13,12 +13,7 @@ public class FileDashboardSnapshotStoreTests
     {
         var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
         var sut = new FileDashboardSnapshotStore(path);
-        var snapshot = new DashboardSnapshot(
-            Instant.FromUtc(2026, 5, 28, 18, 0),
-            "FixPortal",
-            [],
-            [],
-            null);
+        var snapshot = new DashboardSnapshot(Instant.FromUtc(2026, 5, 28, 18, 0), "FixPortal", [], [], null);
 
         try
         {
@@ -46,13 +41,7 @@ public class FileDashboardSnapshotStoreTests
             new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 0), CiTrendState.Passing),
             new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 17, 0), CiTrendState.Failing),
         };
-        var snapshot = new DashboardSnapshot(
-            Instant.FromUtc(2026, 5, 28, 18, 0),
-            "FixPortal",
-            [],
-            [],
-            null,
-            ciTrend);
+        var snapshot = new DashboardSnapshot(Instant.FromUtc(2026, 5, 28, 18, 0), "FixPortal", [], [], null, ciTrend);
 
         try
         {
@@ -73,14 +62,8 @@ public class FileDashboardSnapshotStoreTests
         // cold-start restore surfaces it accurately. It must survive the round trip.
         var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
         var sut = new FileDashboardSnapshotStore(path);
-        var ciTrend = new[]
-        {
-            new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 0), CiTrendState.Failing),
-        };
-        var publicCiTrend = new[]
-        {
-            new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 0), CiTrendState.Passing),
-        };
+        var ciTrend = new[] { new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 0), CiTrendState.Failing) };
+        var publicCiTrend = new[] { new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 0), CiTrendState.Passing) };
         var snapshot = new DashboardSnapshot(
             Instant.FromUtc(2026, 5, 28, 18, 0),
             "FixPortal",
@@ -88,7 +71,8 @@ public class FileDashboardSnapshotStoreTests
             [],
             null,
             ciTrend,
-            publicCiTrend);
+            publicCiTrend
+        );
 
         try
         {
@@ -112,12 +96,15 @@ public class FileDashboardSnapshotStoreTests
         // must reject it and force a clean rebuild.
         var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
         var sut = new FileDashboardSnapshotStore(path);
-        var staleTrend = new[]
-        {
-            new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 30), CiTrendState.Passing),
-        };
+        var staleTrend = new[] { new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 30), CiTrendState.Passing) };
         var snapshot = new DashboardSnapshot(
-            Instant.FromUtc(2026, 5, 28, 18, 0), "FixPortal", [], [], null, staleTrend);
+            Instant.FromUtc(2026, 5, 28, 18, 0),
+            "FixPortal",
+            [],
+            [],
+            null,
+            staleTrend
+        );
 
         try
         {

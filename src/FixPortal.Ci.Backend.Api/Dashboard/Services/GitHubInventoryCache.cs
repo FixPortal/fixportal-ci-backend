@@ -25,10 +25,7 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 /// propagates, leaving the prior entry in place; every call site already degrades to
 /// last-known-good on transport/rate-limit faults.
 /// </summary>
-public sealed class GitHubInventoryCache(
-    GitHubOrgClient client,
-    IClock clock,
-    IOptions<DashboardOptions> options)
+public sealed class GitHubInventoryCache(GitHubOrgClient client, IClock clock, IOptions<DashboardOptions> options)
 {
     private sealed record Entry<T>(Instant FetchedAt, T Value);
 
@@ -58,12 +55,22 @@ public sealed class GitHubInventoryCache(
     public Task<IReadOnlyList<GitHubWorkflowDto>> GetWorkflowsAsync(string repo, CancellationToken ct)
     {
         var slot = _workflows.GetOrAdd(repo, _ => new WorkflowSlot());
-        return GetOrFetchAsync(slot.Gate, () => slot.Entry, e => slot.Entry = e,
-            () => client.ListWorkflowsAsync(repo, ct), ct);
+        return GetOrFetchAsync(
+            slot.Gate,
+            () => slot.Entry,
+            e => slot.Entry = e,
+            () => client.ListWorkflowsAsync(repo, ct),
+            ct
+        );
     }
 
     private async Task<T> GetOrFetchAsync<T>(
-        SemaphoreSlim gate, Func<Entry<T>?> read, Action<Entry<T>> write, Func<Task<T>> fetch, CancellationToken ct)
+        SemaphoreSlim gate,
+        Func<Entry<T>?> read,
+        Action<Entry<T>> write,
+        Func<Task<T>> fetch,
+        CancellationToken ct
+    )
     {
         if (TryFresh(read(), out var cached))
         {

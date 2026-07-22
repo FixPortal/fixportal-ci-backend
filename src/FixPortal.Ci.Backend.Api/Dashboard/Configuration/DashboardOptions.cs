@@ -13,7 +13,7 @@ public sealed class DashboardOptions
     public int RunHistoryPageSize { get; init; } = 30;
     public bool MetricsEnabled { get; init; } = true;
     public int MetricsRefreshSeconds { get; init; } = 43_200; // 12h
-    public string MetricsWorkDirectory { get; init; } = "";    // "" -> temp subdir
+    public string MetricsWorkDirectory { get; init; } = ""; // "" -> temp subdir
     public bool MergedPrEnabled { get; init; } = true;
     public int MergedPrRefreshSeconds { get; init; } = 300;
 
@@ -25,10 +25,16 @@ public sealed class DashboardOptions
     // (FirstOrDefault(Key) returns the default first). Consume GetEffectiveJobLanes().
     public static readonly IReadOnlyList<JobLaneOptions> DefaultJobLanes =
     [
-        new() { Key = "deploys", Label = "Deploys", Patterns = ["deploy"] },
         new()
         {
-            Key = "packages", Label = "Packages",
+            Key = "deploys",
+            Label = "Deploys",
+            Patterns = ["deploy"],
+        },
+        new()
+        {
+            Key = "packages",
+            Label = "Packages",
             Patterns = ["publish", "package", "docker", "image", "release", "ghcr"],
         },
     ];
@@ -43,7 +49,5 @@ public sealed class DashboardOptions
     public IReadOnlyList<JobLaneOptions> GetEffectiveJobLanes() =>
         JobLanes.Count == 0
             ? DefaultJobLanes
-            : JobLanes.GroupBy(l => l.Key, StringComparer.OrdinalIgnoreCase)
-                      .Select(g => g.Last())
-                      .ToList();
+            : JobLanes.GroupBy(l => l.Key, StringComparer.OrdinalIgnoreCase).Select(g => g.Last()).ToList();
 }

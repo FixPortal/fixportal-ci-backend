@@ -11,7 +11,14 @@ public class GitHubDeployJobTests
     private static readonly string[] DefaultPatterns = ["deploy"];
 
     private static GitHubJobDto Job(string name, string status, string? conclusion) =>
-        new(name, status, conclusion, $"https://github.com/job/{name}", Instant.FromUnixTimeSeconds(1), Instant.FromUnixTimeSeconds(2));
+        new(
+            name,
+            status,
+            conclusion,
+            $"https://github.com/job/{name}",
+            Instant.FromUnixTimeSeconds(1),
+            Instant.FromUnixTimeSeconds(2)
+        );
 
     private static RunWithJobs Run(long id, string status, params GitHubJobDto[] jobs) =>
         new(new GitHubRunSummary(id, $"https://github.com/run/{id}", status, null), jobs);
@@ -70,16 +77,26 @@ public class GitHubDeployJobTests
     public void SelectLaneSignals_surfaces_gated_prod_from_an_older_run_not_just_latest_dev()
     {
         var signals = Select(
-            Run(170, "completed",
+            Run(
+                170,
+                "completed",
                 Job("Backend (.NET)", "completed", "success"),
                 Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
-                Job("Deploy (fixportal-prod)", "completed", "skipped")),
-            Run(167, "completed",
+                Job("Deploy (fixportal-prod)", "completed", "skipped")
+            ),
+            Run(
+                167,
+                "completed",
                 Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
-                Job("Deploy (fixportal-prod)", "completed", "skipped")),
-            Run(164, "completed",
+                Job("Deploy (fixportal-prod)", "completed", "skipped")
+            ),
+            Run(
+                164,
+                "completed",
                 Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
-                Job("Deploy (fixportal-prod) / Deploy (fixportal-prod)", "completed", "success")));
+                Job("Deploy (fixportal-prod) / Deploy (fixportal-prod)", "completed", "success")
+            )
+        );
 
         _ = signals.Should().HaveCount(2);
         _ = signals.Should().Contain(s => s.Name.Contains("centerprise-dev") && s.State == SignalState.Success);
@@ -91,7 +108,8 @@ public class GitHubDeployJobTests
     {
         var signals = Select(
             Run(170, "completed", Job("Deploy (fixportal-prod) / Deploy (fixportal-prod)", "completed", "failure")),
-            Run(164, "completed", Job("Deploy (fixportal-prod) / Deploy (fixportal-prod)", "completed", "success")));
+            Run(164, "completed", Job("Deploy (fixportal-prod) / Deploy (fixportal-prod)", "completed", "success"))
+        );
 
         _ = signals.Should().ContainSingle().Which.State.Should().Be(SignalState.Failure);
     }
@@ -107,11 +125,18 @@ public class GitHubDeployJobTests
     public void SelectLaneSignals_completes_once_every_seen_target_has_a_signal()
     {
         var result = GitHubOrgClient.SelectLaneSignals(
-            "CI", "https://github.com/FixPortal/repo",
-            [Run(170, "completed",
-                Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
-                Job("Deploy (fixportal-prod) / Deploy (fixportal-prod)", "completed", "success"))],
-            DefaultPatterns);
+            "CI",
+            "https://github.com/FixPortal/repo",
+            [
+                Run(
+                    170,
+                    "completed",
+                    Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
+                    Job("Deploy (fixportal-prod) / Deploy (fixportal-prod)", "completed", "success")
+                ),
+            ],
+            DefaultPatterns
+        );
 
         _ = result.Complete.Should().BeTrue();
     }
@@ -120,11 +145,18 @@ public class GitHubDeployJobTests
     public void SelectLaneSignals_not_complete_while_a_seen_target_is_still_skipped()
     {
         var result = GitHubOrgClient.SelectLaneSignals(
-            "CI", "https://github.com/FixPortal/repo",
-            [Run(170, "completed",
-                Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
-                Job("Deploy (fixportal-prod)", "completed", "skipped"))],
-            DefaultPatterns);
+            "CI",
+            "https://github.com/FixPortal/repo",
+            [
+                Run(
+                    170,
+                    "completed",
+                    Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
+                    Job("Deploy (fixportal-prod)", "completed", "skipped")
+                ),
+            ],
+            DefaultPatterns
+        );
 
         _ = result.Complete.Should().BeFalse();
     }
@@ -133,9 +165,13 @@ public class GitHubDeployJobTests
     public void SelectLaneSignals_completes_on_a_completed_non_deploy_run_but_not_an_in_progress_one()
     {
         var noJobs = new[] { Job("Backend (.NET)", "completed", "success") };
-        _ = GitHubOrgClient.SelectLaneSignals("CI", "u", [Run(1, "completed", noJobs)], DefaultPatterns)
-            .Complete.Should().BeTrue();
-        _ = GitHubOrgClient.SelectLaneSignals("CI", "u", [Run(1, "in_progress", noJobs)], DefaultPatterns)
-            .Complete.Should().BeFalse();
+        _ = GitHubOrgClient
+            .SelectLaneSignals("CI", "u", [Run(1, "completed", noJobs)], DefaultPatterns)
+            .Complete.Should()
+            .BeTrue();
+        _ = GitHubOrgClient
+            .SelectLaneSignals("CI", "u", [Run(1, "in_progress", noJobs)], DefaultPatterns)
+            .Complete.Should()
+            .BeFalse();
     }
 }

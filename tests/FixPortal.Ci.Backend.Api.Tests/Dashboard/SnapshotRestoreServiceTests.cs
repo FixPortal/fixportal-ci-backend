@@ -16,15 +16,35 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 // RemoveAll<IHostedService>() and seed DashboardSnapshotState directly instead).
 public class SnapshotRestoreServiceTests
 {
-    private static DashboardSnapshot SnapshotWithPrivateRepo() => new(
-        Instant.FromUtc(2026, 6, 1, 0, 0),
-        "FixPortal",
-        [
-            new RepositorySnapshot("public-repo", "https://github.com/FixPortal/public-repo", false, [], [], null, [], []),
-            new RepositorySnapshot("private-repo", "https://github.com/FixPortal/private-repo", true, [], [], null, [], [])
-        ],
-        [],
-        null);
+    private static DashboardSnapshot SnapshotWithPrivateRepo() =>
+        new(
+            Instant.FromUtc(2026, 6, 1, 0, 0),
+            "FixPortal",
+            [
+                new RepositorySnapshot(
+                    "public-repo",
+                    "https://github.com/FixPortal/public-repo",
+                    false,
+                    [],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+                new RepositorySnapshot(
+                    "private-repo",
+                    "https://github.com/FixPortal/private-repo",
+                    true,
+                    [],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+            ],
+            [],
+            null
+        );
 
     [Fact]
     public async Task StartingAsync_should_re_derive_the_public_view_and_exclude_private_repos()
@@ -81,7 +101,8 @@ public class SnapshotRestoreServiceTests
         await cts.CancelAsync();
         var cancelledToken = cts.Token;
         var store = Substitute.For<IDashboardSnapshotStore>();
-        _ = store.LoadAsync(Arg.Any<CancellationToken>())
+        _ = store
+            .LoadAsync(Arg.Any<CancellationToken>())
             .ThrowsAsync(_ => new OperationCanceledException(cancelledToken));
         var state = new DashboardSnapshotState();
         var sut = new SnapshotRestoreService(store, state, NullLogger<SnapshotRestoreService>.Instance);

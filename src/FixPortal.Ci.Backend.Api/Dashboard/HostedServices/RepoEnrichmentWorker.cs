@@ -15,7 +15,9 @@ public abstract class RepoEnrichmentWorker<T>(
     GitHubOrgClient client,
     GitHubInventoryCache inventory,
     PerRepoCache<T> cache,
-    ILogger logger) : BackgroundService where T : class
+    ILogger logger
+) : BackgroundService
+    where T : class
 {
     // Exposed to subclasses so they reuse this one instance for their per-repo
     // collect rather than capturing their own copy of the injected client (which
@@ -80,7 +82,10 @@ public abstract class RepoEnrichmentWorker<T>(
                 // An empty result is legitimate, so a successful sweep always ends cold-start.
                 if (cache.IsEmpty)
                 {
-                    logger.LogInformation("{Name} cold-start sweep completed but produced no cached values (no matching repos?); switching to steady-state cadence.", Name);
+                    logger.LogInformation(
+                        "{Name} cold-start sweep completed but produced no cached values (no matching repos?); switching to steady-state cadence.",
+                        Name
+                    );
                 }
 
                 return;
@@ -157,7 +162,12 @@ public abstract class RepoEnrichmentWorker<T>(
             catch (Exception ex)
             {
                 failed++;
-                logger.LogWarning(ex, "Failed to collect enrichment for {Repo} during {Name} sweep; keeping prior cached value.", repo.Name, Name);
+                logger.LogWarning(
+                    ex,
+                    "Failed to collect enrichment for {Repo} during {Name} sweep; keeping prior cached value.",
+                    repo.Name,
+                    Name
+                );
             }
         }
         return new SweepOutcome(repos.Count, failed);

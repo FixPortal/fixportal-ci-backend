@@ -35,7 +35,10 @@ public sealed class DashboardSnapshotState
     public void Update(DashboardSnapshot current, DashboardSnapshot publicSnap) =>
         _snapshots = new Snapshots(current, publicSnap);
 
-    public static DashboardSnapshot ComputePublicSnapshot(DashboardSnapshot full, IReadOnlyList<CiTrendBucket>? publicCiTrend = null)
+    public static DashboardSnapshot ComputePublicSnapshot(
+        DashboardSnapshot full,
+        IReadOnlyList<CiTrendBucket>? publicCiTrend = null
+    )
     {
         var publicRepos = full.Repositories.Where(r => !r.Private).ToList();
         var lastMerged = DashboardRefreshService.PickLatestMerged(publicRepos.Select(r => r.LastMergedPr));
@@ -62,7 +65,8 @@ public sealed class DashboardSnapshotState
     // public trend accurately from fresh public-only runs and replaces this.
     private static IReadOnlyList<CiTrendBucket>? BuildPublicCiTrendFromSnapshot(
         DashboardSnapshot full,
-        IReadOnlyList<RepositorySnapshot> publicRepos)
+        IReadOnlyList<RepositorySnapshot> publicRepos
+    )
     {
         if (full.CiTrend is null)
         {
@@ -74,8 +78,10 @@ public sealed class DashboardSnapshotState
             return full.CiTrend.Select(b => new CiTrendBucket(b.BucketStart, CiTrendState.NoData)).ToList();
         }
 
-        return full.CiTrend.Select(b => b.State == CiTrendState.Failing
-            ? new CiTrendBucket(b.BucketStart, CiTrendState.Passing)
-            : b).ToList();
+        return full
+            .CiTrend.Select(b =>
+                b.State == CiTrendState.Failing ? new CiTrendBucket(b.BucketStart, CiTrendState.Passing) : b
+            )
+            .ToList();
     }
 }

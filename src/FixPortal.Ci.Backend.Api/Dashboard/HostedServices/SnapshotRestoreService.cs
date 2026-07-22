@@ -12,7 +12,8 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 public sealed class SnapshotRestoreService(
     IDashboardSnapshotStore store,
     DashboardSnapshotState state,
-    ILogger<SnapshotRestoreService> logger) : IHostedLifecycleService
+    ILogger<SnapshotRestoreService> logger
+) : IHostedLifecycleService
 {
     public async Task StartingAsync(CancellationToken cancellationToken)
     {
@@ -37,8 +38,12 @@ public sealed class SnapshotRestoreService(
     }
 
     public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
     public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
     public Task StoppingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
     public Task StoppedAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }

@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
-
 // Constant BaseAddress initialization is non-throwing here; using declarations keep the tests flat and dispose at scope exit.
 // ReSharper disable UsingStatementResourceInitialization
 using AwesomeAssertions;
@@ -26,7 +25,10 @@ public class GitHubETagCachingTests
     {
         public List<HttpRequestMessage> Requests { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             Requests.Add(request);
             return Task.FromResult(responses.Dequeue());
@@ -58,10 +60,7 @@ public class GitHubETagCachingTests
     {
         var store = new GitHubETagStore();
         var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Ok(PullBody(1, "one"), "W/\"abc\"")]));
-        using var http = new HttpClient(handler)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         var client = CreateClient(http, store);
 
         var prs = await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
@@ -75,15 +74,13 @@ public class GitHubETagCachingTests
     public async Task Second_request_revalidates_with_if_none_match_and_serves_cache_on_304()
     {
         var store = new GitHubETagStore();
-        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>(
-        [
-            Ok(PullBody(1, "one"), "W/\"abc\""),
-            new HttpResponseMessage(HttpStatusCode.NotModified),
-        ]));
-        using var http = new HttpClient(handler)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([
+                Ok(PullBody(1, "one"), "W/\"abc\""),
+                new HttpResponseMessage(HttpStatusCode.NotModified),
+            ])
+        );
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         var client = CreateClient(http, store);
 
         _ = await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
@@ -97,15 +94,10 @@ public class GitHubETagCachingTests
     public async Task Changed_resource_returns_fresh_body_and_updates_the_stored_etag()
     {
         var store = new GitHubETagStore();
-        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>(
-        [
-            Ok(PullBody(1, "old"), "W/\"v1\""),
-            Ok(PullBody(2, "new"), "W/\"v2\""),
-        ]));
-        using var http = new HttpClient(handler)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([Ok(PullBody(1, "old"), "W/\"v1\""), Ok(PullBody(2, "new"), "W/\"v2\"")])
+        );
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         var client = CreateClient(http, store);
 
         _ = await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);

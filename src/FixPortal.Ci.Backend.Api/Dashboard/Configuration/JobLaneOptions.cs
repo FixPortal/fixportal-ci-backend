@@ -10,8 +10,8 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 /// </summary>
 public sealed class JobLaneOptions
 {
-    public required string Key { get; init; }        // stable id + DI key, e.g. "deploys"
-    public required string Label { get; init; }      // display label, e.g. "Deploys"
+    public required string Key { get; init; } // stable id + DI key, e.g. "deploys"
+    public required string Label { get; init; } // display label, e.g. "Deploys"
     public bool Enabled { get; init; } = true;
     public int RefreshSeconds { get; init; } = 300;
     public IReadOnlyList<string> Patterns { get; init; } = [];

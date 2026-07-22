@@ -16,19 +16,23 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 
 public class RepoEnrichmentWorkerTests
 {
-    private static GitHubRepoDto Repo(string name) => new(name, $"https://github.com/FixPortal/{name}", false, false, "main");
+    private static GitHubRepoDto Repo(string name) =>
+        new(name, $"https://github.com/FixPortal/{name}", false, false, "main");
 
     // Fake subclass over an in-memory cache. Passes client/inventory: null! —
     // RunSweepAsync never touches them (it receives the repo list directly).
     private sealed class FakeEnrichmentWorker(
-        PerRepoCache<RepoMetrics> cache, Func<GitHubRepoDto, RepoMetrics?> collect, bool enabled = true)
-        : RepoEnrichmentWorker<RepoMetrics>(null!, null!, cache, NullLogger.Instance)
+        PerRepoCache<RepoMetrics> cache,
+        Func<GitHubRepoDto, RepoMetrics?> collect,
+        bool enabled = true
+    ) : RepoEnrichmentWorker<RepoMetrics>(null!, null!, cache, NullLogger.Instance)
     {
         protected override bool Enabled => enabled;
         protected override TimeSpan Cadence => TimeSpan.FromMilliseconds(1);
         protected override string Name => "Fake";
-        protected override Task<RepoMetrics?> CollectAsync(GitHubRepoDto repo, CancellationToken ct)
-            => Task.FromResult(collect(repo));
+
+        protected override Task<RepoMetrics?> CollectAsync(GitHubRepoDto repo, CancellationToken ct) =>
+            Task.FromResult(collect(repo));
 
         public Task Sweep(IReadOnlyList<GitHubRepoDto> repos, CancellationToken ct) => RunSweepAsync(repos, ct);
     }
@@ -54,8 +58,10 @@ public class RepoEnrichmentWorkerTests
         // and leave every repo's signal stale for the cycle.
         var cache = new PerRepoCache<RepoMetrics>();
         var value = new RepoMetrics(10, 1.0, 1, 0, Instant.FromUnixTimeSeconds(1));
-        var worker = new FakeEnrichmentWorker(cache, repo =>
-            repo.Name == "denied" ? throw new GitHubAuthException("403") : value);
+        var worker = new FakeEnrichmentWorker(
+            cache,
+            repo => repo.Name == "denied" ? throw new GitHubAuthException("403") : value
+        );
 
         await worker.Sweep([Repo("a"), Repo("denied"), Repo("c")], CancellationToken.None);
 
@@ -82,7 +88,11 @@ public class RepoEnrichmentWorkerTests
     public async Task Disabled_worker_returns_without_sweeping()
     {
         var cache = new PerRepoCache<RepoMetrics>();
-        var worker = new FakeEnrichmentWorker(cache, _ => throw new InvalidOperationException("collect must not run"), enabled: false);
+        var worker = new FakeEnrichmentWorker(
+            cache,
+            _ => throw new InvalidOperationException("collect must not run"),
+            enabled: false
+        );
 
         await worker.StartAsync(CancellationToken.None);
         // Disabled => ExecuteAsync returns immediately, so its task completes promptly.
@@ -101,13 +111,20 @@ public class RepoEnrichmentWorkerTests
     // real inventory over a fake HTTP handler is needed rather than null!.
     private sealed class SingleRepoHandler : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(
-                    """[{"name":"a","html_url":"https://github.com/FixPortal/a","private":false,"archived":false,"default_branch":"main"}]""",
-                    Encoding.UTF8, "application/json"),
-            });
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) =>
+            Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """[{"name":"a","html_url":"https://github.com/FixPortal/a","private":false,"archived":false,"default_branch":"main"}]""",
+                        Encoding.UTF8,
+                        "application/json"
+                    ),
+                }
+            );
     }
 
     private static GitHubInventoryCache NewSingleRepoInventory()
@@ -120,14 +137,17 @@ public class RepoEnrichmentWorkerTests
     }
 
     private sealed class ExecuteAsyncFakeWorker(
-        GitHubInventoryCache inventory, PerRepoCache<RepoMetrics> cache, Func<GitHubRepoDto, RepoMetrics?> collect)
-        : RepoEnrichmentWorker<RepoMetrics>(null!, inventory, cache, NullLogger.Instance)
+        GitHubInventoryCache inventory,
+        PerRepoCache<RepoMetrics> cache,
+        Func<GitHubRepoDto, RepoMetrics?> collect
+    ) : RepoEnrichmentWorker<RepoMetrics>(null!, inventory, cache, NullLogger.Instance)
     {
         protected override bool Enabled => true;
         protected override TimeSpan Cadence => TimeSpan.FromMilliseconds(1);
         protected override string Name => "FakeExecuteAsync";
-        protected override Task<RepoMetrics?> CollectAsync(GitHubRepoDto repo, CancellationToken ct)
-            => Task.FromResult(collect(repo));
+
+        protected override Task<RepoMetrics?> CollectAsync(GitHubRepoDto repo, CancellationToken ct) =>
+            Task.FromResult(collect(repo));
     }
 
     // CB-H8: drives the base class's real ExecuteAsync loop (not RunSweepAsync
@@ -143,14 +163,18 @@ public class RepoEnrichmentWorkerTests
         var cache = new PerRepoCache<RepoMetrics>();
         var collectCount = 0;
         var firstAttemptStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var worker = new ExecuteAsyncFakeWorker(NewSingleRepoInventory(), cache, _ =>
-        {
-            // The callback intentionally updates the observation read after the worker stops.
-            // ReSharper disable once AccessToModifiedClosure
-            Interlocked.Increment(ref collectCount);
-            firstAttemptStarted.TrySetResult();
-            throw new InvalidOperationException("cold-start sweep failure");
-        });
+        var worker = new ExecuteAsyncFakeWorker(
+            NewSingleRepoInventory(),
+            cache,
+            _ =>
+            {
+                // The callback intentionally updates the observation read after the worker stops.
+                // ReSharper disable once AccessToModifiedClosure
+                Interlocked.Increment(ref collectCount);
+                firstAttemptStarted.TrySetResult();
+                throw new InvalidOperationException("cold-start sweep failure");
+            }
+        );
 
         await worker.StartAsync(TestContext.Current.CancellationToken);
         try

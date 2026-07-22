@@ -19,8 +19,8 @@ public sealed class MergedPrEnrichmentWorker(
     GitHubInventoryCache inventory,
     PerRepoCache<MergedPullRequest> cache,
     IOptions<DashboardOptions> options,
-    ILogger<MergedPrEnrichmentWorker> logger)
-    : RepoEnrichmentWorker<MergedPullRequest>(client, inventory, cache, logger)
+    ILogger<MergedPrEnrichmentWorker> logger
+) : RepoEnrichmentWorker<MergedPullRequest>(client, inventory, cache, logger)
 {
     protected override bool Enabled => options.Value.MergedPrEnabled;
     protected override TimeSpan Cadence => TimeSpan.FromSeconds(options.Value.MergedPrRefreshSeconds);
@@ -32,9 +32,10 @@ public sealed class MergedPrEnrichmentWorker(
         {
             return await Client.GetLastMergedPullRequestAsync(repo.Name, ct);
         }
-        catch (Exception ex) when (
-            ex is HttpRequestException or GitHubRateLimitException
-            || ex is TaskCanceledException && !ct.IsCancellationRequested)
+        catch (Exception ex)
+            when (ex is HttpRequestException or GitHubRateLimitException
+                || ex is TaskCanceledException && !ct.IsCancellationRequested
+            )
         {
             logger.LogWarning(ex, "Failed to fetch last merged PR for {Repo}; keeping last-known-good.", repo.Name);
             return null;

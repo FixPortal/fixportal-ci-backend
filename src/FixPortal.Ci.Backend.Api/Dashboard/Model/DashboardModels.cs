@@ -10,7 +10,7 @@ public enum SignalState
     Success,
     Failure,
     Running,
-    Unknown
+    Unknown,
 }
 
 // One workflow run, normalized from GitHub. Conclusion is null while running.
@@ -24,13 +24,10 @@ public sealed record WorkflowRun(
     string? Event,
     Instant UpdatedAt,
     string? Repository = null,
-    string? WorkflowFile = null);
+    string? WorkflowFile = null
+);
 
-public sealed record WorkflowSnapshot(
-    string Name,
-    string File,
-    SignalState State,
-    WorkflowRun? LastRun);
+public sealed record WorkflowSnapshot(string Name, string File, SignalState State, WorkflowRun? LastRun);
 
 public sealed record PullRequest(
     int Number,
@@ -38,7 +35,8 @@ public sealed record PullRequest(
     string Author,
     string HtmlUrl,
     bool IsDraft,
-    Instant CreatedAt);
+    Instant CreatedAt
+);
 
 public sealed record MergedPullRequest(
     int Number,
@@ -46,21 +44,18 @@ public sealed record MergedPullRequest(
     string Author,
     string Repo,
     string HtmlUrl,
-    Instant MergedAt);
+    Instant MergedAt
+);
 
 public sealed record RepoMetrics(
     int Nloc,
     double AvgComplexity,
     int FunctionCount,
     int HighComplexityCount,
-    Instant ComputedAt);
+    Instant ComputedAt
+);
 
-public sealed record JobSignal(
-    string Workflow,
-    string Name,
-    SignalState State,
-    string HtmlUrl,
-    Instant UpdatedAt);
+public sealed record JobSignal(string Workflow, string Name, SignalState State, string HtmlUrl, Instant UpdatedAt);
 
 public sealed record RepositorySnapshot(
     string Name,
@@ -71,14 +66,20 @@ public sealed record RepositorySnapshot(
     RepoMetrics? Metrics,
     IReadOnlyList<JobSignal>? Deploys,
     IReadOnlyList<JobSignal>? Packages,
-    MergedPullRequest? LastMergedPr = null);
+    MergedPullRequest? LastMergedPr = null
+);
 
 public sealed record SummaryCount(string Key, int Count);
 
 // One hour of org-wide CI health. NoData means no runs that hour and nothing to
 // carry forward (only at the leading edge). Passing means at least one run and
 // none failed. Failing means any run failed (worst state across repos).
-public enum CiTrendState { NoData, Passing, Failing }
+public enum CiTrendState
+{
+    NoData,
+    Passing,
+    Failing,
+}
 
 public sealed record CiTrendBucket(Instant BucketStart, CiTrendState State)
 {
@@ -106,4 +107,5 @@ public sealed record DashboardSnapshot(
     IReadOnlyList<SummaryCount> Summary,
     MergedPullRequest? LastMergedPr,
     IReadOnlyList<CiTrendBucket>? CiTrend = null,
-    IReadOnlyList<CiTrendBucket>? PublicCiTrend = null);
+    IReadOnlyList<CiTrendBucket>? PublicCiTrend = null
+);

@@ -10,9 +10,9 @@ public sealed class FileDashboardSnapshotStore(string snapshotPath) : IDashboard
     // The snapshot carries NodaTime Instants, which default System.Text.Json
     // cannot round-trip. Configure the serializer for NodaTime at this I/O
     // boundary so persisted snapshots reload faithfully.
-    private static readonly JsonSerializerOptions SerializerOptions =
-        new JsonSerializerOptions(JsonSerializerDefaults.Web)
-            .ConfigureForNodaTime(DateTimeZoneProviders.Tzdb);
+    private static readonly JsonSerializerOptions SerializerOptions = new JsonSerializerOptions(
+        JsonSerializerDefaults.Web
+    ).ConfigureForNodaTime(DateTimeZoneProviders.Tzdb);
 
     public async Task<DashboardSnapshot?> LoadAsync(CancellationToken cancellationToken)
     {
@@ -31,15 +31,17 @@ public sealed class FileDashboardSnapshotStore(string snapshotPath) : IDashboard
         await using (stream)
         {
             var snapshot = await JsonSerializer.DeserializeAsync<DashboardSnapshot>(
-                stream, SerializerOptions, cancellationToken);
+                stream,
+                SerializerOptions,
+                cancellationToken
+            );
 
             // Trend buckets have been clock-hour-anchored since the CI-trend rewrite.
             // A snapshot from before that change carries buckets anchored to an
             // arbitrary refresh instant, which no longer key-match in MergeTrends — so
             // a degraded first refresh after deploy would silently drop the history.
             // Discard such a stale-format snapshot and rebuild from fresh data instead.
-            if (snapshot?.CiTrend is { Count: > 0 } trend
-                && trend[0].BucketStart.ToUnixTimeSeconds() % 3600 != 0)
+            if (snapshot?.CiTrend is { Count: > 0 } trend && trend[0].BucketStart.ToUnixTimeSeconds() % 3600 != 0)
             {
                 return null;
             }
@@ -63,8 +65,7 @@ public sealed class FileDashboardSnapshotStore(string snapshotPath) : IDashboard
         var tempPath = snapshotPath + ".tmp";
         try
         {
-            await using (var stream = new FileStream(
-                tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            await using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
             {
                 await JsonSerializer.SerializeAsync(stream, snapshot, SerializerOptions, cancellationToken);
                 await stream.FlushAsync(cancellationToken);
@@ -87,8 +88,11 @@ public sealed class FileDashboardSnapshotStore(string snapshotPath) : IDashboard
     private static void TryDelete(string path)
     {
         try
-        { File.Delete(path); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
+        {
+            File.Delete(path);
+        }
+        catch (Exception ex)
+            when (ex is IOException or UnauthorizedAccessException or NotSupportedException or ArgumentException)
         {
             /* Best-effort cleanup; a leftover temp file is overwritten next save. */
         }

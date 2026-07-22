@@ -11,10 +11,7 @@ namespace FixPortal.Ci.Backend.Api.Integrations.GitHub;
 // cache outlives the transient typed-client instances and persists across cycles.
 public sealed class GitHubETagStore : IDisposable
 {
-    private readonly MemoryCache _cache = new(new MemoryCacheOptions
-    {
-        SizeLimit = 2000
-    });
+    private readonly MemoryCache _cache = new(new MemoryCacheOptions { SizeLimit = 2000 });
 
     public sealed record Entry(EntityTagHeaderValue ETag, object? Payload);
 
@@ -23,10 +20,7 @@ public sealed class GitHubETagStore : IDisposable
     public void Set(string url, EntityTagHeaderValue etag, object? payload)
     {
         var entry = new Entry(etag, payload);
-        var options = new MemoryCacheEntryOptions
-        {
-            Size = 1
-        };
+        var options = new MemoryCacheEntryOptions { Size = 1 };
         _ = _cache.Set(url, entry, options);
     }
 

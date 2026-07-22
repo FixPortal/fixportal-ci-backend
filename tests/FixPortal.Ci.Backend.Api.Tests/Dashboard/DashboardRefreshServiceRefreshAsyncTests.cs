@@ -40,10 +40,22 @@ public class DashboardRefreshServiceRefreshAsyncTests
 
         public int MaxObserved => _maxObserved;
 
-        private static string ReposJson => "[" + string.Join(",", Enumerable.Range(0, RepoCount).Select(i =>
-            $$"""{"name":"repo-{{i}}","html_url":"https://github.com/FixPortal/repo-{{i}}","private":false,"archived":false,"default_branch":"main"}""")) + "]";
+        private static string ReposJson =>
+            "["
+            + string.Join(
+                ",",
+                Enumerable
+                    .Range(0, RepoCount)
+                    .Select(i =>
+                        $$"""{"name":"repo-{{i}}","html_url":"https://github.com/FixPortal/repo-{{i}}","private":false,"archived":false,"default_branch":"main"}"""
+                    )
+            )
+            + "]";
 
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             var path = request.RequestUri!.AbsolutePath;
 
@@ -53,7 +65,9 @@ public class DashboardRefreshServiceRefreshAsyncTests
             }
 
             var match = System.Text.RegularExpressions.Regex.Match(
-                path, "^/repos/[^/]+/(?<repo>[^/]+)/actions/workflows$");
+                path,
+                "^/repos/[^/]+/(?<repo>[^/]+)/actions/workflows$"
+            );
             if (match.Success)
             {
                 var current = Interlocked.Increment(ref _inFlight);
@@ -91,7 +105,10 @@ public class DashboardRefreshServiceRefreshAsyncTests
                 }
             }
 
-            if (path.Contains("/actions/workflows/", StringComparison.Ordinal) && path.EndsWith("/runs", StringComparison.Ordinal))
+            if (
+                path.Contains("/actions/workflows/", StringComparison.Ordinal)
+                && path.EndsWith("/runs", StringComparison.Ordinal)
+            )
             {
                 return JsonOk("""{"workflow_runs":[]}""");
             }
@@ -117,10 +134,8 @@ public class DashboardRefreshServiceRefreshAsyncTests
             } while (Interlocked.CompareExchange(ref target, value, initial) != initial);
         }
 
-        private static HttpResponseMessage JsonOk(string json) => new(HttpStatusCode.OK)
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json"),
-        };
+        private static HttpResponseMessage JsonOk(string json) =>
+            new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
     }
 
     [Fact]
@@ -145,7 +160,8 @@ public class DashboardRefreshServiceRefreshAsyncTests
             new PerRepoCache<MergedPullRequest>(),
             gitHubOptions,
             clock,
-            NullLogger<DashboardRefreshService>.Instance);
+            NullLogger<DashboardRefreshService>.Instance
+        );
 
         await sut.RefreshAsync(TestContext.Current.CancellationToken);
 

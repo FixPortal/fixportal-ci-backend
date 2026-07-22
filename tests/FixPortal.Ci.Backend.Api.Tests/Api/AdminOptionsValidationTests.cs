@@ -12,14 +12,16 @@ public class AdminOptionsValidationTests
     private static void Start(string adminKey)
     {
         using var factory = new WebApplicationFactory<Program>();
-        using var client = factory.WithWebHostBuilder(builder =>
-        {
-            _ = builder.UseSetting("GitHub:Token", "test-token");
-            _ = builder.UseSetting("GitHub:Owner", "FixPortal");
-            _ = builder.UseSetting("Admin:AdminKey", adminKey);
-            // No background polling in tests; ValidateOnStart still runs at host start.
-            _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
-        }).CreateClient();
+        using var client = factory
+            .WithWebHostBuilder(builder =>
+            {
+                _ = builder.UseSetting("GitHub:Token", "test-token");
+                _ = builder.UseSetting("GitHub:Owner", "FixPortal");
+                _ = builder.UseSetting("Admin:AdminKey", adminKey);
+                // No background polling in tests; ValidateOnStart still runs at host start.
+                _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
+            })
+            .CreateClient();
     }
 
     [Theory]
@@ -27,9 +29,7 @@ public class AdminOptionsValidationTests
     [InlineData("short", false)]
     [InlineData("123456789012345", false)]
     [InlineData("1234567890123456", true)]
-    public void Admin_key_length_rule_accepts_only_empty_or_sufficiently_long_values(
-        string adminKey,
-        bool expected)
+    public void Admin_key_length_rule_accepts_only_empty_or_sufficiently_long_values(string adminKey, bool expected)
     {
         var options = new AdminOptions { AdminKey = adminKey };
 
@@ -39,7 +39,7 @@ public class AdminOptionsValidationTests
     [Fact]
     public void A_set_but_implausibly_short_admin_key_is_rejected_at_startup()
     {
-        var act = () => Start("short");   // 5 chars, below the 16-char floor
+        var act = () => Start("short"); // 5 chars, below the 16-char floor
         _ = act.Should().Throw<Exception>();
     }
 

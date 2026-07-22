@@ -28,7 +28,10 @@ public class JobLaneEnrichmentWorkerTests
         public int JobsCallCount;
         public string? FailWorkflowsForRepo;
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             var path = request.RequestUri!.AbsolutePath;
 
@@ -40,17 +43,29 @@ public class JobLaneEnrichmentWorkerTests
                     return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
                 }
 
-                return Task.FromResult(JsonOk(
-                    """{"workflows":[{"id":1,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}"""));
+                return Task.FromResult(
+                    JsonOk(
+                        """{"workflows":[{"id":1,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}"""
+                    )
+                );
             }
 
-            if (path.Contains("/actions/workflows/", StringComparison.Ordinal) && path.EndsWith("/runs", StringComparison.Ordinal))
+            if (
+                path.Contains("/actions/workflows/", StringComparison.Ordinal)
+                && path.EndsWith("/runs", StringComparison.Ordinal)
+            )
             {
                 // Always a full page of 10 completed-but-unmatched runs, so pagination
                 // continues purely on the MaxRunsToScan bound rather than exhausting
                 // (page.Count < pageSize) or completing early (a matching job signal).
-                var runs = string.Join(",", Enumerable.Range(0, 10).Select(i =>
-                    $$"""{"id":{{i + 1}},"html_url":"https://x/{{i}}","status":"completed","conclusion":"success"}"""));
+                var runs = string.Join(
+                    ",",
+                    Enumerable
+                        .Range(0, 10)
+                        .Select(i =>
+                            $$"""{"id":{{i + 1}},"html_url":"https://x/{{i}}","status":"completed","conclusion":"success"}"""
+                        )
+                );
                 return Task.FromResult(JsonOk($$"""{"workflow_runs":[{{runs}}]}"""));
             }
 
@@ -65,32 +80,54 @@ public class JobLaneEnrichmentWorkerTests
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
         }
 
-        private static HttpResponseMessage JsonOk(string json) => new(HttpStatusCode.OK)
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json"),
-        };
+        private static HttpResponseMessage JsonOk(string json) =>
+            new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
     }
 
     private static JobLaneEnrichmentWorker NewWorker(LaneScanHandler handler, int maxRunsToScan)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
-        var laneOptions = Options.Create(new DashboardOptions
-        {
-            SnapshotPath = "s.json",
-            RefreshSeconds = 60,
-            JobLanes = [new JobLaneOptions { Key = "deploys", Label = "Deploys", Patterns = ["deploy"], MaxRunsToScan = maxRunsToScan }],
-        });
+        var laneOptions = Options.Create(
+            new DashboardOptions
+            {
+                SnapshotPath = "s.json",
+                RefreshSeconds = 60,
+                JobLanes =
+                [
+                    new JobLaneOptions
+                    {
+                        Key = "deploys",
+                        Label = "Deploys",
+                        Patterns = ["deploy"],
+                        MaxRunsToScan = maxRunsToScan,
+                    },
+                ],
+            }
+        );
         var client = new GitHubOrgClient(http, gitHubOptions, laneOptions, new GitHubETagStore());
         var inventory = new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), laneOptions);
         var cache = new PerRepoCache<IReadOnlyList<JobSignal>>();
-        return new JobLaneEnrichmentWorker("deploys", client, inventory, cache, laneOptions, NullLogger<JobLaneEnrichmentWorker>.Instance);
+        return new JobLaneEnrichmentWorker(
+            "deploys",
+            client,
+            inventory,
+            cache,
+            laneOptions,
+            NullLogger<JobLaneEnrichmentWorker>.Instance
+        );
     }
 
     private static Task<IReadOnlyList<JobSignal>?> InvokeCollectAsync(
-        JobLaneEnrichmentWorker worker, GitHubRepoDto repo, CancellationToken ct)
+        JobLaneEnrichmentWorker worker,
+        GitHubRepoDto repo,
+        CancellationToken ct
+    )
     {
-        var method = typeof(JobLaneEnrichmentWorker).GetMethod("CollectAsync", BindingFlags.NonPublic | BindingFlags.Instance);
+        var method = typeof(JobLaneEnrichmentWorker).GetMethod(
+            "CollectAsync",
+            BindingFlags.NonPublic | BindingFlags.Instance
+        );
         method.Should().NotBeNull("CollectAsync must still exist as JobLaneEnrichmentWorker's collection entry point");
         return (Task<IReadOnlyList<JobSignal>?>)method!.Invoke(worker, [repo, ct])!;
     }
