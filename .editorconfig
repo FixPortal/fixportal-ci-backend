@@ -30,6 +30,11 @@ end_of_line = crlf
 indent_size = 4
 indent_style = space
 tab_width = 4
+max_line_length = 120
+
+# CSharpier owns C# whitespace and wrapping. Keep this local override until
+# FixPortal.CodeStyle publishes the same setting in its global config.
+dotnet_diagnostic.IDE0055.severity = none
 
 # dotnet format 10.0.204 requires these preferences in a hierarchical
 # .editorconfig to activate the IDE0011 and IDE0049 fixers. The package remains
