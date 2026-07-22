@@ -35,16 +35,11 @@ public class GitHubErrorMappingTests
         }
     }
 
-    private static GitHubOrgClient NewClient(
-        HttpStatusCode code,
-        bool rateLimited = false,
-        DashboardSnapshotState? state = null
-    )
+    private static HttpClient NewHttpClient(HttpStatusCode code, bool rateLimited = false) =>
+        new(new StatusHandler(code, rateLimited)) { BaseAddress = new Uri("https://api.github.com/") };
+
+    private static GitHubOrgClient NewClient(HttpClient http, DashboardSnapshotState? state = null)
     {
-        var http = new HttpClient(new StatusHandler(code, rateLimited))
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
         return new GitHubOrgClient(
             http,
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
@@ -59,7 +54,8 @@ public class GitHubErrorMappingTests
     [InlineData(HttpStatusCode.Forbidden)]
     public async Task ListOpenPullRequests_maps_auth_failures_to_GitHubAuthException(HttpStatusCode code)
     {
-        var client = NewClient(code);
+        using var http = NewHttpClient(code);
+        var client = NewClient(http);
         var act = async () => await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
         _ = await act.Should().ThrowAsync<GitHubAuthException>();
     }
@@ -67,7 +63,8 @@ public class GitHubErrorMappingTests
     [Fact]
     public async Task ListOpenPullRequests_maps_a_5xx_to_HttpRequestException()
     {
-        var client = NewClient(HttpStatusCode.InternalServerError);
+        using var http = NewHttpClient(HttpStatusCode.InternalServerError);
+        var client = NewClient(http);
         var act = async () => await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
         _ = await act.Should().ThrowAsync<HttpRequestException>();
     }
@@ -75,7 +72,8 @@ public class GitHubErrorMappingTests
     [Fact]
     public async Task ListOpenPullRequests_maps_a_rate_limited_403_to_GitHubRateLimitException()
     {
-        var client = NewClient(HttpStatusCode.Forbidden, rateLimited: true);
+        using var http = NewHttpClient(HttpStatusCode.Forbidden, rateLimited: true);
+        var client = NewClient(http);
         var act = async () => await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
         _ = await act.Should().ThrowAsync<GitHubRateLimitException>();
     }
@@ -86,7 +84,8 @@ public class GitHubErrorMappingTests
     [Fact]
     public async Task A_429_without_rate_limit_headers_still_maps_to_GitHubRateLimitException()
     {
-        var client = NewClient(HttpStatusCode.TooManyRequests, rateLimited: false);
+        using var http = NewHttpClient(HttpStatusCode.TooManyRequests);
+        var client = NewClient(http);
         var act = async () => await client.ListRepositoriesAsync(CancellationToken.None);
         _ = await act.Should().ThrowAsync<GitHubRateLimitException>();
     }
@@ -101,7 +100,8 @@ public class GitHubErrorMappingTests
     public async Task PR_endpoint_auth_failure_does_not_set_global_auth_state(HttpStatusCode code)
     {
         var state = new DashboardSnapshotState();
-        var client = NewClient(code, state: state);
+        using var http = NewHttpClient(code);
+        var client = NewClient(http, state);
 
         var listPrs = async () => await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
         var lastMerged = async () => await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);
@@ -117,7 +117,8 @@ public class GitHubErrorMappingTests
     public async Task Primary_endpoint_auth_failure_sets_global_auth_state()
     {
         var state = new DashboardSnapshotState();
-        var client = NewClient(HttpStatusCode.Forbidden, state: state);
+        using var http = NewHttpClient(HttpStatusCode.Forbidden);
+        var client = NewClient(http, state);
 
         var act = async () => await client.ListRepositoriesAsync(CancellationToken.None);
 
