@@ -27,12 +27,19 @@ dotnet run           # API on http://localhost:5049
 
 ## Before you open a PR
 
-Run the full local check — CI runs the same and must pass before a merge:
+Restore the repository-pinned tools, format C#, then run the same build and test
+checks required by CI:
 
 ```bash
-dotnet build
-dotnet test          # xUnit
+dotnet tool restore
+dotnet csharpier format .
+dotnet build FixPortal.Ci.Backend.slnx --configuration Release
+dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build
 ```
+
+CI uses `dotnet csharpier check .` so it rejects unformatted C# without rewriting
+files. Format-on-save through a CSharpier editor extension is recommended but
+optional.
 
 ## Branches and commits
 
