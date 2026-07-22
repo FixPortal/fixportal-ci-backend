@@ -2,8 +2,8 @@ name: mutation
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
+  schedule:
+    - cron: '45 2 * * *'
 
 concurrency:
   group: mutation-${{ github.ref }}
@@ -15,7 +15,6 @@ permissions:
 jobs:
   stryker:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    continue-on-error: true
     permissions:
       contents: read
       packages: read
@@ -42,9 +41,6 @@ jobs:
         run: dotnet tool restore
 
       - name: Run Stryker
-        # Only the mutation run itself is allowed to "fail" green (a low score is not a
-        # gate); restore / tool-restore failures above must surface as a red run.
-        continue-on-error: true
         run: dotnet stryker --config-file stryker-config.json
 
       - name: Summarize mutation report
@@ -71,3 +67,4 @@ jobs:
         with:
           name: mutation-report
           path: StrykerOutput/**
+          if-no-files-found: error
