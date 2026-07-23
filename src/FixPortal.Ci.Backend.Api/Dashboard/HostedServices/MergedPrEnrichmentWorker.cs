@@ -19,8 +19,9 @@ public sealed class MergedPrEnrichmentWorker(
     GitHubInventoryCache inventory,
     PerRepoCache<MergedPullRequest> cache,
     IOptions<DashboardOptions> options,
+    TimeProvider timeProvider,
     ILogger<MergedPrEnrichmentWorker> logger
-) : RepoEnrichmentWorker<MergedPullRequest>(client, inventory, cache, logger)
+) : RepoEnrichmentWorker<MergedPullRequest>(client, inventory, cache, timeProvider, logger)
 {
     protected override bool Enabled => options.Value.MergedPrEnabled;
     protected override TimeSpan Cadence => TimeSpan.FromSeconds(options.Value.MergedPrRefreshSeconds);

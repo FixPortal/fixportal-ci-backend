@@ -15,6 +15,7 @@ public abstract class RepoEnrichmentWorker<T>(
     GitHubOrgClient client,
     GitHubInventoryCache inventory,
     PerRepoCache<T> cache,
+    TimeProvider timeProvider,
     ILogger logger
 ) : BackgroundService
     where T : class
@@ -52,7 +53,7 @@ public abstract class RepoEnrichmentWorker<T>(
         await RunColdStartAsync(stoppingToken);
         if (!stoppingToken.IsCancellationRequested)
         {
-            using var timer = new PeriodicTimer(Cadence);
+            using var timer = new PeriodicTimer(Cadence, timeProvider);
             while (await timer.WaitForNextTickAsync(stoppingToken))
             {
                 await SweepSafelyAsync(stoppingToken);
@@ -60,11 +61,11 @@ public abstract class RepoEnrichmentWorker<T>(
         }
     }
 
-    private static async Task<bool> WaitForInitialJitterAsync(CancellationToken stoppingToken)
+    private async Task<bool> WaitForInitialJitterAsync(CancellationToken stoppingToken)
     {
         try
         {
-            await Task.Delay(Random.Shared.Next(0, 15000), stoppingToken);
+            await Task.Delay(TimeSpan.FromMilliseconds(Random.Shared.Next(0, 15000)), timeProvider, stoppingToken);
             return true;
         }
         catch (OperationCanceledException)
@@ -94,7 +95,7 @@ public abstract class RepoEnrichmentWorker<T>(
             logger.LogWarning("{Name} cold-start sweep failed; retrying in 5 minutes.", Name);
             try
             {
-                await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken);
+                await Task.Delay(TimeSpan.FromMinutes(5), timeProvider, stoppingToken);
             }
             catch (OperationCanceledException)
             {

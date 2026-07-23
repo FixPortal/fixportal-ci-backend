@@ -21,8 +21,9 @@ public sealed class JobLaneEnrichmentWorker(
     GitHubInventoryCache inventory,
     PerRepoCache<IReadOnlyList<JobSignal>> cache,
     IOptions<DashboardOptions> options,
+    TimeProvider timeProvider,
     ILogger<JobLaneEnrichmentWorker> logger
-) : RepoEnrichmentWorker<IReadOnlyList<JobSignal>>(client, inventory, cache, logger)
+) : RepoEnrichmentWorker<IReadOnlyList<JobSignal>>(client, inventory, cache, timeProvider, logger)
 {
     // Case-insensitive to match GetEffectiveJobLanes' OrdinalIgnoreCase de-dup: a
     // configured key differing only in casing (e.g. "Deploys") must still resolve.

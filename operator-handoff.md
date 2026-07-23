@@ -129,10 +129,10 @@ To resolve this:
 ## Deploying to Azure
 
 The app runs on **Azure Container Apps** (ACA). A push to `main` (or a manual
-run of the CI workflow) builds the app into a container image with `az acr
-build`, pushes it to an existing Azure Container Registry, and deploys it as a
-container app into an existing Container Apps managed environment via
-`deploy/bicep/main.bicep`.
+run of the CI workflow from `main`) builds the app once on Blacksmith, pushes a
+commit-tagged image to GHCR, imports that exact image into an existing Azure
+Container Registry, and deploys it into an existing Container Apps managed
+environment via `deploy/bicep/main.bicep`.
 
 ACA is used rather than App Service because a fresh subscription ships with **0
 App Service compute quota** (which even the Free tier counts against), whereas
@@ -164,7 +164,7 @@ domain is a plain **Variable**. Set them once per deployment:
 | `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | *(GUIDs)* | OIDC login for the deploy identity (set by the bootstrap script). |
 | `DASHBOARD_GH_TOKEN` | *(PAT)* | Read-only PAT, written into the container-app secret on each deploy (set by the bootstrap script). |
 | `AZURE_RESOURCE_GROUP` | `rg-myapp-prod` | Resource group the container app is deployed into. |
-| `ACR_NAME` | `myregistry` | Registry name for the server-side `az acr build`. |
+| `ACR_NAME` | `myregistry` | Registry that receives the image imported from GHCR. |
 | `ACR_LOGIN_SERVER` | `myregistry.azurecr.io` | Login server the image is pulled from. |
 | `ACA_ENVIRONMENT_ID` | `/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.App/managedEnvironments/<env>` | Existing managed environment that hosts the app. |
 | `PULL_IDENTITY_ID` | `/subscriptions/<sub>/.../userAssignedIdentities/<id>` | User-assigned identity holding AcrPull. |

@@ -4,7 +4,7 @@
   </PropertyGroup>
   <ItemGroup>
     <!-- House code style -->
-    <PackageVersion Include="FixPortal.CodeStyle" Version="0.1.10" />
+    <PackageVersion Include="FixPortal.CodeStyle" Version="0.1.11" />
     <!-- Testing -->
     <PackageVersion Include="AwesomeAssertions" Version="9.5.0" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
@@ -21,7 +21,7 @@
     <PackageVersion Include="NodaTime.Serialization.SystemTextJson" Version="1.4.0" />
     <PackageVersion Include="NodaTime.Testing" Version="3.3.3" />
     <!-- Scalar -->
-    <PackageVersion Include="Scalar.AspNetCore" Version="2.16.15" />
+    <PackageVersion Include="Scalar.AspNetCore" Version="2.16.16" />
     <!-- OpenApi vuln override -->
     <PackageVersion Include="Microsoft.OpenApi" Version="2.11.0" />
   </ItemGroup>

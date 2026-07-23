@@ -8,6 +8,7 @@ using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using NodaTime;
 using NodaTime.Testing;
 using Xunit;
@@ -25,7 +26,7 @@ public class RepoEnrichmentWorkerTests
         PerRepoCache<RepoMetrics> cache,
         Func<GitHubRepoDto, RepoMetrics?> collect,
         bool enabled = true
-    ) : RepoEnrichmentWorker<RepoMetrics>(null!, null!, cache, NullLogger.Instance)
+    ) : RepoEnrichmentWorker<RepoMetrics>(null!, null!, cache, TimeProvider.System, NullLogger.Instance)
     {
         protected override bool Enabled => enabled;
         protected override TimeSpan Cadence => TimeSpan.FromMilliseconds(1);
@@ -139,8 +140,9 @@ public class RepoEnrichmentWorkerTests
     private sealed class ExecuteAsyncFakeWorker(
         GitHubInventoryCache inventory,
         PerRepoCache<RepoMetrics> cache,
+        TimeProvider timeProvider,
         Func<GitHubRepoDto, RepoMetrics?> collect
-    ) : RepoEnrichmentWorker<RepoMetrics>(null!, inventory, cache, NullLogger.Instance)
+    ) : RepoEnrichmentWorker<RepoMetrics>(null!, inventory, cache, timeProvider, NullLogger.Instance)
     {
         protected override bool Enabled => true;
         protected override TimeSpan Cadence => TimeSpan.FromMilliseconds(1);
@@ -150,28 +152,59 @@ public class RepoEnrichmentWorkerTests
             Task.FromResult(collect(repo));
     }
 
+    private sealed class TrackingFakeTimeProvider : FakeTimeProvider
+    {
+        public TaskCompletionSource InitialDelayScheduled { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource RetryDelayScheduled { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            if (dueTime < TimeSpan.FromSeconds(15))
+            {
+                InitialDelayScheduled.TrySetResult();
+            }
+            else if (dueTime == TimeSpan.FromMinutes(5))
+            {
+                RetryDelayScheduled.TrySetResult();
+            }
+
+            return timer;
+        }
+    }
+
     // CB-H8: drives the base class's real ExecuteAsync loop (not RunSweepAsync
     // directly) so the cold-start retry guard itself is under test. On a failed
-    // cold-start sweep, ExecuteAsync must fall into its 5-minute retry delay rather
-    // than looping straight back into another sweep attempt — a regression here
-    // (e.g. the 5-minute Task.Delay replaced with a bare "continue") would drive
-    // CollectAsync into the hundreds/thousands of calls within this test's short
-    // observation window instead of staying at 1.
+    // cold-start sweep, ExecuteAsync must wait five minutes before trying again.
     [Fact]
     public async Task ExecuteAsync_should_not_hot_loop_after_a_failed_cold_start_sweep()
     {
         var cache = new PerRepoCache<RepoMetrics>();
+        var timeProvider = new TrackingFakeTimeProvider();
         var collectCount = 0;
         var firstAttemptStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondAttemptStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var worker = new ExecuteAsyncFakeWorker(
             NewSingleRepoInventory(),
             cache,
+            timeProvider,
             _ =>
             {
                 // The callback intentionally updates the observation read after the worker stops.
                 // ReSharper disable once AccessToModifiedClosure
-                Interlocked.Increment(ref collectCount);
-                firstAttemptStarted.TrySetResult();
+                var attempt = Interlocked.Increment(ref collectCount);
+                if (attempt == 1)
+                {
+                    firstAttemptStarted.TrySetResult();
+                }
+                else if (attempt == 2)
+                {
+                    secondAttemptStarted.TrySetResult();
+                }
+
                 throw new InvalidOperationException("cold-start sweep failure");
             }
         );
@@ -179,15 +212,25 @@ public class RepoEnrichmentWorkerTests
         await worker.StartAsync(TestContext.Current.CancellationToken);
         try
         {
-            // ExecuteAsync jitters its very first sweep by 0-15s before the first
-            // attempt; wait for that attempt event-driven rather than guessing.
-            await firstAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+            var initialState = await Task.WhenAny(firstAttemptStarted.Task, timeProvider.InitialDelayScheduled.Task)
+                .WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+            if (initialState == timeProvider.InitialDelayScheduled.Task)
+            {
+                timeProvider.Advance(TimeSpan.FromSeconds(15));
+            }
 
-            // Observe over a bounded window well short of the 5-minute retry delay:
-            // a hot loop would blow this count up far past 1 within milliseconds; the
-            // correctly-guarded loop stays at exactly 1 throughout.
-            await Task.Delay(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
+            await firstAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+            await timeProvider.RetryDelayScheduled.Task.WaitAsync(
+                TimeSpan.FromSeconds(1),
+                TestContext.Current.CancellationToken
+            );
+
+            timeProvider.Advance(TimeSpan.FromMinutes(5) - TimeSpan.FromSeconds(1));
             _ = Volatile.Read(ref collectCount).Should().Be(1);
+
+            timeProvider.Advance(TimeSpan.FromSeconds(1));
+            await secondAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+            _ = Volatile.Read(ref collectCount).Should().Be(2);
         }
         finally
         {

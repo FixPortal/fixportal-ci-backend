@@ -78,7 +78,7 @@ graph LR
 | API | .NET 10, ASP.NET Core **minimal API**, NodaTime, OpenAPI + Scalar (dev only) |
 | Metrics | Lizard (`1.22.2`), run against shallow clones |
 | Host | Azure Container Apps (single always-on replica) |
-| CI | GitHub Actions — .NET build/test, Stryker mutation testing, CodeQL, Dependabot |
+| CI | GitHub Actions — .NET build/test, scheduled Stryker mutation testing, CodeQL, Dependabot |
 
 ## Compatibility
 
@@ -140,8 +140,10 @@ documented in **[operator-handoff.md](operator-handoff.md#configuration-model)**
 
 ## Deployment
 
-CI deploys to **Azure Container Apps** on every push to `main`: `az acr build`
-produces the image, then `deploy/bicep/main.bicep` ships it. The Bicep template
+CI deploys to **Azure Container Apps** on every push to `main`. The publish job
+builds the image once on Blacksmith, pushes `sha-<full commit SHA>` to GHCR, and
+the deploy job imports that exact image into ACR before
+`deploy/bicep/main.bicep` ships it. The Bicep template
 and workflow carry **no** subscription, registry, or resource identifiers — those
 come from GitHub Actions **repository Secrets** (kept as secrets so they are
 masked in the public Actions logs), so the template is reusable as-is. One-time
@@ -155,7 +157,10 @@ are required.
 ## Testing
 
 ```
-dotnet test FixPortal.Ci.Backend.sln          # xUnit
+dotnet tool restore
+dotnet csharpier check .
+dotnet build FixPortal.Ci.Backend.slnx --configuration Release
+dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build
 ```
 
 ## Troubleshooting
@@ -171,12 +176,14 @@ dotnet test FixPortal.Ci.Backend.sln          # xUnit
 
 ## Contributing
 
-PRs welcome. Branch from `main`; CI runs build, xUnit tests, Stryker mutation
-tests, and CodeQL on every PR.
+PRs welcome. Branch from `main`; CI runs formatting, build, xUnit tests, and
+CodeQL on every PR. Stryker runs nightly and on manual dispatch.
 
 ```
-dotnet build FixPortal.Ci.Backend.sln
-dotnet test FixPortal.Ci.Backend.sln
+dotnet tool restore
+dotnet csharpier format .
+dotnet build FixPortal.Ci.Backend.slnx --configuration Release
+dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build
 ```
 
 Merge style is **rebase-merge** — squash and merge commits are not used.
@@ -189,8 +196,8 @@ Merge style is **rebase-merge** — squash and merge commits are not used.
 
 ### Container images
 
-Both images publish to GHCR on every push to `main`, tagged `:latest` and the
-short commit SHA.
+The backend image publishes to GHCR on every push to `main`, tagged `:latest`
+and `:sha-<full commit SHA>`.
 
 | Image | Pull command |
 |---|---|

@@ -1,6 +1,18 @@
-# Formatter keys. Analyzer/style rules come from FixPortal.CodeStyle, except for
-# documented formatter compatibility entries. Add other local overrides only for
-# genuine project-specific needs, with a comment why.
+# Thin, formatter-only .editorconfig for new .NET projects scaffolded via scaffold-dotnet.
+#
+# Analyzer rules and severities belong to the FixPortal.CodeStyle NuGet package's global
+# AnalyzerConfig. CSharpier reads the C# layout inputs here. This file also carries the documented
+# compatibility preferences whose Roslyn fixers are not activated from a packaged global
+# config alone. A bare whitespace/layout key (indent_size,
+# charset, end_of_line, max_line_length) carries no diagnostic ID at all — CSharpier,
+# dotnet format, and the IDE read it only from a
+# real .editorconfig on disk, so no NuGet package can deliver it. Compatibility preferences
+# repeat package-owned values only; they do not make this file a second rule source.
+#
+# This is a filtered subset of the FULL house style at ~/.claude/resources/.editorconfig
+# (which predates FixPortal.CodeStyle and is not a stub — see the scaffold-dotnet skill's
+# Resource Files section). When the full file's non-severity keys change, mirror the change
+# here; when its severity-suffixed keys change, that goes into the package instead.
 
 root = true
 
@@ -24,7 +36,7 @@ indent_size = 2
 # markdown line breaks are two trailing spaces — don't trim them
 trim_trailing_whitespace = false
 
-#### C# files (formatter keys only) ####
+#### C# files ####
 [*.cs]
 end_of_line = crlf
 indent_size = 4
@@ -32,58 +44,11 @@ indent_style = space
 tab_width = 4
 max_line_length = 120
 
-# CSharpier owns C# whitespace and wrapping. Keep this local override until
-# FixPortal.CodeStyle publishes the same setting in its global config.
-dotnet_diagnostic.IDE0055.severity = none
+#### C# Formatting Rules ####
 
-# dotnet format 10.0.204 requires these preferences in a hierarchical
-# .editorconfig to activate the IDE0011 and IDE0049 fixers. The package remains
-# the rule source of truth.
+# Roslyn formatter compatibility. The package owns these rules and severities, but
+# dotnet format 10.0.204 needs the preferences in a hierarchical .editorconfig to
+# activate the IDE0011 and IDE0049 fixers.
 csharp_prefer_braces = true:error
 dotnet_style_predefined_type_for_locals_parameters_members = true:error
 dotnet_style_predefined_type_for_member_access = true:error
-
-# New line preferences
-csharp_new_line_before_catch = true
-csharp_new_line_before_else = true
-csharp_new_line_before_finally = true
-csharp_new_line_before_members_in_anonymous_types = false
-csharp_new_line_before_members_in_object_initializers = false
-csharp_new_line_before_open_brace = all
-csharp_new_line_between_query_expression_clauses = true
-
-# Indentation preferences
-csharp_indent_block_contents = true
-csharp_indent_braces = false
-csharp_indent_case_contents = true
-csharp_indent_case_contents_when_block = true
-csharp_indent_labels = one_less_than_current
-csharp_indent_switch_labels = true
-
-# Space preferences
-csharp_space_after_cast = false
-csharp_space_after_colon_in_inheritance_clause = true
-csharp_space_after_comma = true
-csharp_space_after_dot = false
-csharp_space_after_keywords_in_control_flow_statements = true
-csharp_space_after_semicolon_in_for_statement = true
-csharp_space_around_binary_operators = before_and_after
-csharp_space_around_declaration_statements = false
-csharp_space_before_colon_in_inheritance_clause = true
-csharp_space_before_comma = false
-csharp_space_before_dot = false
-csharp_space_before_open_square_brackets = false
-csharp_space_before_semicolon_in_for_statement = false
-csharp_space_between_empty_square_brackets = false
-csharp_space_between_method_call_empty_parameter_list_parentheses = false
-csharp_space_between_method_call_name_and_opening_parenthesis = false
-csharp_space_between_method_call_parameter_list_parentheses = false
-csharp_space_between_method_declaration_empty_parameter_list_parentheses = false
-csharp_space_between_method_declaration_name_and_open_parenthesis = false
-csharp_space_between_method_declaration_parameter_list_parentheses = false
-csharp_space_between_parentheses = false
-csharp_space_between_square_brackets = false
-
-# Wrapping preferences
-csharp_preserve_single_line_blocks = true
-csharp_preserve_single_line_statements = false
