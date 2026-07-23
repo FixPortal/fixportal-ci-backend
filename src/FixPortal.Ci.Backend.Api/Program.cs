@@ -22,6 +22,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 builder.Services.AddOpenApi();
 builder.Services.AddSingleton<IClock>(SystemClock.Instance);
+builder.Services.AddSingleton(TimeProvider.System);
 
 // Fail fast on misconfiguration rather than polling forever with silent 401s / empty dashboards.
 builder
@@ -135,6 +136,7 @@ builder.Services.AddSingleton<IHostedService>(sp => new JobLaneEnrichmentWorker(
     sp.GetRequiredService<GitHubInventoryCache>(),
     sp.GetRequiredKeyedService<PerRepoCache<IReadOnlyList<JobSignal>>>("deploys"),
     sp.GetRequiredService<IOptions<DashboardOptions>>(),
+    sp.GetRequiredService<TimeProvider>(),
     sp.GetRequiredService<ILogger<JobLaneEnrichmentWorker>>()
 ));
 builder.Services.AddSingleton<IHostedService>(sp => new JobLaneEnrichmentWorker(
@@ -143,6 +145,7 @@ builder.Services.AddSingleton<IHostedService>(sp => new JobLaneEnrichmentWorker(
     sp.GetRequiredService<GitHubInventoryCache>(),
     sp.GetRequiredKeyedService<PerRepoCache<IReadOnlyList<JobSignal>>>("packages"),
     sp.GetRequiredService<IOptions<DashboardOptions>>(),
+    sp.GetRequiredService<TimeProvider>(),
     sp.GetRequiredService<ILogger<JobLaneEnrichmentWorker>>()
 ));
 

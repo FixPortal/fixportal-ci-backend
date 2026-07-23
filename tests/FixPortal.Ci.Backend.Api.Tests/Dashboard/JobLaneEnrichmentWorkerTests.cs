@@ -114,6 +114,7 @@ public class JobLaneEnrichmentWorkerTests
             inventory,
             cache,
             laneOptions,
+            TimeProvider.System,
             NullLogger<JobLaneEnrichmentWorker>.Instance
         );
     }

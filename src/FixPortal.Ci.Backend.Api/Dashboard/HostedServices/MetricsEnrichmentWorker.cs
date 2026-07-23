@@ -19,8 +19,9 @@ public sealed class MetricsEnrichmentWorker(
     LizardScanner scanner,
     PerRepoCache<RepoMetrics> cache,
     IOptions<DashboardOptions> options,
+    TimeProvider timeProvider,
     ILogger<MetricsEnrichmentWorker> logger
-) : RepoEnrichmentWorker<RepoMetrics>(client, inventory, cache, logger)
+) : RepoEnrichmentWorker<RepoMetrics>(client, inventory, cache, timeProvider, logger)
 {
     protected override bool Enabled => options.Value.MetricsEnabled;
     protected override TimeSpan Cadence => TimeSpan.FromSeconds(options.Value.MetricsRefreshSeconds);
