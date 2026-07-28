@@ -12,8 +12,11 @@ services:
       # Allow the frontend container on port 80.
       Cors__AllowedOrigins__0: http://localhost
       Dashboard__SnapshotPath: /app/data/dashboard-snapshot.json
+    # Bound to loopback only: the frontend reaches this over the compose network
+    # (BACKEND_URL: http://backend:8080), so the host mapping is for local tooling.
+    # The snapshot endpoint is unauthenticated, so it must not be offered to the LAN.
     ports:
-      - "5049:8080"
+      - "127.0.0.1:5049:8080"
     volumes:
       - snapshot-data:/app/data
 
@@ -24,8 +27,10 @@ services:
     environment:
       # Internal service name; the frontend's nginx proxies /api/ to this.
       BACKEND_URL: http://backend:8080
+    # Bound to loopback only, matching backend above. Cors__AllowedOrigins__0 is
+    # http://localhost, so this was only ever meant to be reached from this host.
     ports:
-      - "8082:8080"
+      - "127.0.0.1:8082:8080"
     depends_on:
       - backend
 
