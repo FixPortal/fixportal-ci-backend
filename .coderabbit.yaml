@@ -11,23 +11,27 @@ reviews:
       enabled: false
 
   auto_review:
-    enabled: true
-    drafts: false
-    # Pause automatic incremental reviews after 2 reviewed commits (default 5).
-    # CodeRabbit meters reviews per DEVELOPER IDENTITY across every repo, in a rolling
-    # 7-day window degrading from 30 reviews/7d, and every push spends one. This
-    # enforces push-batching mechanically instead of relying on remembering to batch.
-    auto_pause_after_reviewed_commits: 2
-    # ignore_title_keywords REMOVED 2026-07-28. It listed "chore:", and Dependabot
-    # titles in this estate are literally "chore: Bump X" — so every dependency PR was
-    # being skipped silently. Dependency changes are classed HIGH in
-    # .claude/review-policy.json on supply-chain grounds; skipping them was the exact
-    # opposite of the intent. What gets skipped is now decided by PATH via that policy
-    # file, not by a title that can lie about what a PR touches.
+    # OFF deliberately. The PR gate in .claude/review-policy.json decides which reviewers a PR
+    # needs, and CodeRabbit is reserved for HIGH-tier changes. It meters reviews per DEVELOPER
+    # IDENTITY across every repo in a rolling 7-day window, degrading from 30/7d, so it is the
+    # scarce reviewer and must be spent deliberately. Leaving automatic review on reviews every
+    # PR regardless of tier, which makes the tier evaluation pointless. HIGH-tier PRs get an
+    # on-demand "@coderabbitai review", which still works with automatic review disabled.
     #
-    # Do NOT add ignore_usernames for dependabot[bot]/renovate[bot] either: Gitar
-    # already skips bot-authored PRs unless allow-listed, so silencing CodeRabbit too
-    # would leave supply-chain PRs with no AI review at all.
+    # auto_pause_after_reviewed_commits is deliberately absent: it governs AUTOMATIC re-review
+    # only, so with automatic review off it would be dead config that reads as load-bearing.
+    enabled: false
+    drafts: false
+    # REVERSED 2026-07-29. This block previously said "do NOT ignore dependabot[bot]", on the
+    # grounds that dependency changes were classed HIGH and Gitar skipped bot authors, so
+    # silencing CodeRabbit too would leave them unreviewed. Zero AI review of dependency bumps is
+    # now the intended state: the estate raises enough of them that reviewing each one exhausts
+    # the allowance and starves the changes that need it. Gitar's bot review is switched off as
+    # well, and dependency manifests are no longer classed HIGH in the review policy. CI plus
+    # Dependabot's own advisory data is what gates a bump.
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "renovate[bot]"
 
   path_filters:
     - "!**/bin/**"

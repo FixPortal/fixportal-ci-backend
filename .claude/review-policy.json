@@ -7,7 +7,16 @@
     "HIGH covers deploy/ (this repo has a real deploy target).",
     "LOW justification for THIS repo: docs/ is developer documentation with no site build.",
     "src/ contains the CI dashboard's JobLanes configuration, which the scaffold-ci job",
-    "naming contract depends on - that is NORMAL, never low."
+    "naming contract depends on - that is NORMAL, never low.",
+    "",
+    "Dependency manifests (package.json, package-lock.json, Directory.Packages.props,",
+    "**/*.csproj) were REMOVED from 'high' on 2026-07-29 and must not be added back. They are",
+    "what Dependabot edits, and dependency PRs are out of AI code review on both vendors:",
+    "CodeRabbit refuses bot authors outright and Gitar's bot review is switched off, because",
+    "reviewing every bump exhausts the allowance and starves the changes that need it. Listing",
+    "them HIGH would demand a reviewer that can never run - coverage on paper, none in fact. CI",
+    "plus Dependabot's own advisory data is what gates a bump. nuget.config, global.json, .npmrc",
+    "and Directory.Build.props stay HIGH: registry/feed and analyzer config, not bot-edited."
   ],
 
   "version": 1,
@@ -19,8 +28,6 @@
     "deploy/**",
     "**/*.bicep",
     ".github/workflows/**",
-    "Directory.Packages.props",
-    "**/*.csproj",
     ".config/dotnet-tools.json"
   ],
 
