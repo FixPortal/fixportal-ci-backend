@@ -9,7 +9,9 @@ services:
       # Admin__ExposePrivateToGuests here: it makes that anonymous endpoint return
       # the full snapshot (private repos included). See .env.example to opt in for
       # a private, trusted-network deployment only.
-      # Allow the frontend container on port 80.
+      # Unused by this compose stack — the frontend's nginx proxies /api/ to the
+      # backend over the compose network, so the browser only ever makes
+      # same-origin calls. Kept for a client served from a different origin.
       Cors__AllowedOrigins__0: http://localhost
       Dashboard__SnapshotPath: /app/data/dashboard-snapshot.json
     # Bound to loopback only: the frontend reaches this over the compose network

@@ -100,8 +100,15 @@ cp .env.example .env
 docker compose up
 ```
 
-Open `http://localhost` for the board. The backend snapshot API is at
-`http://localhost:5049/api/dashboard/snapshot`.
+Both steps are required — the backend fails fast on startup if `GITHUB_TOKEN` or
+`GITHUB_OWNER` is unset, with `GitHub:Owner must be configured (e.g. set
+GitHub__Owner).` Compose auto-loads `.env` from the project directory; exported
+environment variables work equally well.
+
+Open `http://localhost:8082` for the board. The backend snapshot API is at
+`http://localhost:5049/api/dashboard/snapshot`. Both ports are published on
+`127.0.0.1` only — the snapshot endpoint is unauthenticated, so it is not offered
+to the LAN.
 
 The `frontend` service uses the board UI image published from
 [fixportal-ci-frontend](https://github.com/FixPortal/fixportal-ci-frontend).
@@ -167,12 +174,13 @@ dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| Backend container exits at startup with `OptionsValidationException: GitHub:Owner must be configured` (frontend stays up) | `GITHUB_TOKEN` / `GITHUB_OWNER` not set — no `.env` in the project directory and nothing exported | `cp .env.example .env` and fill both in, then `docker compose up -d` |
 | Snapshot returns stale data after a workflow run | Refresh worker polls on a 60 s cadence; run completed between polls | Wait up to 60 s, or restart to force an immediate poll |
-| Snapshot is empty on startup | First poll not yet complete | Allow ~5 s; endpoint returns `200` with empty `repos` array until first poll finishes |
+| Snapshot endpoint returns `204 No Content` | No snapshot yet — the first poll has not completed, or every poll has failed | Allow ~5 s after startup; if it persists, check the container logs for `GitHubAuthException` |
 | `MetricsEnrichmentWorker` logs `git clone` errors | PAT lacks **Contents** read permission | Re-issue PAT with Contents (read) and update `GitHub__Token` |
 | PRs not appearing | PAT lacks **Pull requests** read permission | Re-issue PAT with Pull requests (read) and update `GitHub__Token` |
 | CORS errors in the browser | Board UI origin not in `AllowedOrigins` | Add origin to `Dashboard:AllowedOrigins` in `appsettings.json` or via `Dashboard__AllowedOrigins__0` env var |
-| `401 Unauthorized` from GitHub API | Token expired or revoked | Generate a new fine-grained PAT and update the secret or env var |
+| `401 Unauthorized` from GitHub API | Token expired, revoked, or the value is not a GitHub PAT (fine-grained tokens start `github_pat_`, classic ones `ghp_`) | Generate a new fine-grained PAT and update the secret or env var |
 
 ## Contributing
 
