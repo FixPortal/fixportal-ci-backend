@@ -51,7 +51,7 @@ jobs:
         run: dotnet build FixPortal.Ci.Backend.slnx --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build --logger "trx;LogFileName=test-results.trx" --results-directory ./TestResults
+        run: dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build --logger "trx;LogFilePrefix=test-results" --results-directory ./TestResults
 
       - name: Upload test results
         if: always()
