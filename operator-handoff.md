@@ -94,7 +94,22 @@ $plain | docker login ghcr.io -u YOUR_PERSONAL_GITHUB_USERNAME_NOT_THE_ORG --pas
 ```
 
 ### 2. Configure Environment and Run
-Once authenticated, set the environment variables for the collector and start the containers. 
+Once authenticated, configure the collector and start the containers. Both
+`GITHUB_TOKEN` and `GITHUB_OWNER` are **required** — the backend validates them at
+startup and exits immediately if either is missing, logging
+`GitHub:Owner must be configured (e.g. set GitHub__Owner).` The frontend still
+starts, so a dead backend with a live UI means these are unset.
+
+The simplest route is a `.env` file, which Compose auto-loads from the project
+directory:
+
+```powershell
+Copy-Item .env.example .env
+# Edit .env: set GITHUB_TOKEN and GITHUB_OWNER
+docker compose up -d
+```
+
+Or set them in the shell instead:
 
 > [!TIP]
 > **Token Reuse:** You can reuse the **same Classic PAT** for both pulling images and API requests. Just make sure to grant it the **`repo`** scope (or `read:org` / Actions read permissions) in addition to `read:packages`.
@@ -109,22 +124,17 @@ $env:GITHUB_OWNER = "FixPortal"
 docker compose up -d
 ```
 
-### Troubleshooting Port Conflicts (Port 80)
-If port `80` is already in use on your Windows host (e.g., by IIS, Skype, or other web servers), Docker will fail to bind the frontend container and throw an error about access permissions/socket binding.
+The board is then at `http://localhost:8082` and the snapshot API at
+`http://localhost:5049/api/dashboard/snapshot`.
 
-To resolve this:
-1. Open [docker-compose.yml](file:///D:/fix-portal/fixportal-ci-backend/docker-compose.yml).
-2. Find the `frontend` service ports definition:
-   ```yaml
-   ports:
-     - "80:8080"
-   ```
-3. Change it to use a different host port, such as `8082`:
-   ```yaml
-   ports:
-     - "8082:8080"
-   ```
-4. Run `docker compose up -d` again. The dashboard UI will then be accessible at `http://localhost:8082`.
+### Troubleshooting Port Conflicts
+Both services publish on `127.0.0.1` only (`127.0.0.1:8082:8080` for the
+frontend, `127.0.0.1:5049:8080` for the backend) because the snapshot endpoint is
+unauthenticated and must not be offered to the LAN. If either host port is
+already taken, change the **host** side of the mapping in
+[docker-compose.yml](file:///D:/fix-portal/fixportal-ci-backend/docker-compose.yml)
+— e.g. `"127.0.0.1:8083:8080"` — and keep the `127.0.0.1:` prefix. Do not drop it
+to bind on all interfaces.
 
 ## Deploying to Azure
 
