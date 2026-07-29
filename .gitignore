@@ -399,8 +399,14 @@ FodyWeavers.xsd
 .idea/
 .ai/
 
-# Claude Code
-.claude/settings.local.json
+# Claude Code: review-pass worktrees live under .claude/worktrees and are linked
+# git working trees, not content to commit on main.
+# `.claude/*` (not `.claude/`) — git cannot re-include a file whose parent DIRECTORY is
+# excluded, so the review policy below would be unreachable if this ignored the directory.
+.claude/*
+# The review policy decides which AI reviewers a PR must pass, so it is committed even though
+# the rest of .claude/ is local scratch. Removing this negation silently reverts every PR to NORMAL.
+!.claude/review-policy.json
 
 #### Project additions ####
 
