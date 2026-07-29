@@ -83,7 +83,7 @@ jobs:
       # context, so the pinned SHAs are a deliberate supply-chain trust decision:
       # update them only by reviewing the target revision, never by bumping the tag.
       - name: Setup Blacksmith Builder
-        uses: useblacksmith/setup-docker-builder@6ff44f8e5255f9d8aa31ef22f7e57a2d926b7da0 # v1
+        uses: useblacksmith/setup-docker-builder@33803e640bd9d674f2843a8c323aa2a7da478d23 # v2.0.0
         with:
           max-cache-size-mb: 409600
 
