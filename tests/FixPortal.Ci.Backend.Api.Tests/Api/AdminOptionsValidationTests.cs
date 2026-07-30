@@ -11,21 +11,19 @@ public class AdminOptionsValidationTests
 {
     private static void Start(string owner, string token, string adminKey = "", int? dashboardRefreshSeconds = null)
     {
-        using var factory = new WebApplicationFactory<Program>();
-        using var client = factory
-            .WithWebHostBuilder(builder =>
+        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        {
+            _ = builder.UseSetting("GitHub:Token", token);
+            _ = builder.UseSetting("GitHub:Owner", owner);
+            _ = builder.UseSetting("Admin:AdminKey", adminKey);
+            if (dashboardRefreshSeconds is not null)
             {
-                _ = builder.UseSetting("GitHub:Token", token);
-                _ = builder.UseSetting("GitHub:Owner", owner);
-                _ = builder.UseSetting("Admin:AdminKey", adminKey);
-                if (dashboardRefreshSeconds is not null)
-                {
-                    _ = builder.UseSetting("Dashboard:RefreshSeconds", dashboardRefreshSeconds.Value.ToString());
-                }
-                // No background polling in tests; ValidateOnStart still runs at host start.
-                _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
-            })
-            .CreateClient();
+                _ = builder.UseSetting("Dashboard:RefreshSeconds", dashboardRefreshSeconds.Value.ToString());
+            }
+            // No background polling in tests; ValidateOnStart still runs at host start.
+            _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
+        });
+        using var client = factory.CreateClient();
     }
 
     [Theory]
