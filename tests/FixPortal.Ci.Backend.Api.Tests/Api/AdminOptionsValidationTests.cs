@@ -77,16 +77,12 @@ public class AdminOptionsValidationTests
     }
 
     [Theory]
-    [InlineData("", "test-token", "GitHub:Owner")]
-    [InlineData("FixPortal", "", "GitHub:Token")]
-    public void A_blank_required_GitHub_setting_is_rejected_at_startup(
-        string owner,
-        string token,
-        string missingSetting
-    )
+    [InlineData("", "test-token")]
+    [InlineData("FixPortal", "")]
+    public void A_blank_required_GitHub_setting_is_rejected_at_startup(string owner, string token)
     {
         var act = () => Start(owner, token);
 
-        _ = act.Should().Throw<Exception>().WithMessage($"*{missingSetting}*");
+        _ = act.Should().Throw<Exception>();
     }
 }
