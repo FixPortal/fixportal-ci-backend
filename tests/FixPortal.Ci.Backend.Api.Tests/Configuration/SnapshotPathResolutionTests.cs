@@ -35,13 +35,7 @@ public class SnapshotPathResolutionTests
             });
             var environment = factory.Services.GetRequiredService<IHostEnvironment>();
             var store = factory.Services.GetRequiredService<IDashboardSnapshotStore>();
-            var snapshot = new DashboardSnapshot(
-                Instant.FromUtc(2026, 7, 30, 12, 0),
-                "FixPortal",
-                [],
-                [],
-                null
-            );
+            var snapshot = new DashboardSnapshot(Instant.FromUtc(2026, 7, 30, 12, 0), "FixPortal", [], [], null);
 
             await store.SaveAsync(snapshot, TestContext.Current.CancellationToken);
 

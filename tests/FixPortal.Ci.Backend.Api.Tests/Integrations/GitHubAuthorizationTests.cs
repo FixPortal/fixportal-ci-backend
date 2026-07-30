@@ -20,11 +20,7 @@ public class GitHubAuthorizationTests
         )
         {
             Requests.Add(
-                (
-                    request.RequestUri!,
-                    request.Headers.Authorization?.Scheme,
-                    request.Headers.Authorization?.Parameter
-                )
+                (request.RequestUri!, request.Headers.Authorization?.Scheme, request.Headers.Authorization?.Parameter)
             );
             var content = request.RequestUri!.AbsolutePath switch
             {

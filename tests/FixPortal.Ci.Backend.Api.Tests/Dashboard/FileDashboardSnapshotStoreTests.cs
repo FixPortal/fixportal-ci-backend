@@ -195,8 +195,20 @@ public class FileDashboardSnapshotStoreTests
     {
         var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
         var sut = new FileDashboardSnapshotStore(path);
-        var initialSnapshot = new DashboardSnapshot(Instant.FromUtc(2026, 5, 28, 18, 0), "Before refresh", [], [], null);
-        var replacementSnapshot = new DashboardSnapshot(Instant.FromUtc(2026, 5, 28, 19, 0), "After refresh", [], [], null);
+        var initialSnapshot = new DashboardSnapshot(
+            Instant.FromUtc(2026, 5, 28, 18, 0),
+            "Before refresh",
+            [],
+            [],
+            null
+        );
+        var replacementSnapshot = new DashboardSnapshot(
+            Instant.FromUtc(2026, 5, 28, 19, 0),
+            "After refresh",
+            [],
+            [],
+            null
+        );
 
         try
         {
