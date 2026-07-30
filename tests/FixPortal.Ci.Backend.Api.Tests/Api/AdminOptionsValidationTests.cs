@@ -9,7 +9,7 @@ namespace FixPortal.Ci.Backend.Api.Tests.Api;
 
 public class AdminOptionsValidationTests
 {
-    private static void Start(string owner, string token, string adminKey = "")
+    private static void Start(string owner, string token, string adminKey = "", int? dashboardRefreshSeconds = null)
     {
         using var factory = new WebApplicationFactory<Program>();
         using var client = factory
@@ -18,6 +18,10 @@ public class AdminOptionsValidationTests
                 _ = builder.UseSetting("GitHub:Token", token);
                 _ = builder.UseSetting("GitHub:Owner", owner);
                 _ = builder.UseSetting("Admin:AdminKey", adminKey);
+                if (dashboardRefreshSeconds is not null)
+                {
+                    _ = builder.UseSetting("Dashboard:RefreshSeconds", dashboardRefreshSeconds.Value.ToString());
+                }
                 // No background polling in tests; ValidateOnStart still runs at host start.
                 _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
             })
@@ -57,6 +61,14 @@ public class AdminOptionsValidationTests
     {
         var act = () => Start("FixPortal", "test-token", "a-perfectly-fine-admin-key");
         _ = act.Should().NotThrow();
+    }
+
+    [Fact]
+    public void A_non_positive_dashboard_refresh_cadence_is_rejected_at_startup()
+    {
+        var act = () => Start("FixPortal", "test-token", dashboardRefreshSeconds: 0);
+
+        _ = act.Should().Throw<Exception>().WithMessage("*Dashboard:RefreshSeconds*");
     }
 
     [Theory]
