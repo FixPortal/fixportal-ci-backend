@@ -88,6 +88,29 @@ public class FileDashboardSnapshotStoreTests
     }
 
     [Fact]
+    public async Task SaveAsync_should_replace_the_existing_snapshot()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
+        var sut = new FileDashboardSnapshotStore(path);
+        var firstSnapshot = new DashboardSnapshot(Instant.FromUtc(2026, 5, 28, 18, 0), "Before refresh", [], [], null);
+        var secondSnapshot = new DashboardSnapshot(Instant.FromUtc(2026, 5, 28, 19, 0), "After refresh", [], [], null);
+
+        try
+        {
+            await sut.SaveAsync(firstSnapshot, CancellationToken.None);
+            await sut.SaveAsync(secondSnapshot, CancellationToken.None);
+
+            var reloaded = await sut.LoadAsync(CancellationToken.None);
+
+            _ = reloaded.Should().BeEquivalentTo(secondSnapshot);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task LoadAsync_should_discard_a_snapshot_with_non_hour_aligned_trend_buckets()
     {
         // A pre-anchoring snapshot has BucketStart at an arbitrary refresh instant
