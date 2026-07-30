@@ -37,7 +37,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                     var state = new DashboardSnapshotState();
                     if (seed is not null)
                     {
-                        state.Update(seed, DashboardSnapshotState.ComputePublicSnapshot(seed));
+                        state.Update(seed, DashboardSnapshotState.ComputePublicSnapshot(seed, seed.PublicCiTrend));
                     }
                     _ = services.AddSingleton(state);
                 });
@@ -157,6 +157,30 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         var parsed = InstantPattern.ExtendedIso.Parse(refreshedAtRaw!);
         _ = parsed.Success.Should().BeTrue();
         _ = parsed.Value.Should().Be(refreshedAt);
+    }
+
+    [Fact]
+    public async Task Get_snapshot_should_serialize_ci_trend_state_as_camelCase_enum()
+    {
+        var bucket = new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 17, 0), CiTrendState.Failing);
+        var snapshot = new DashboardSnapshot(
+            Instant.FromUtc(2026, 5, 28, 18, 0),
+            "FixPortal",
+            [],
+            [],
+            null,
+            [bucket],
+            [bucket]
+        );
+        var client = CreateClient(snapshot);
+
+        var response = await client.GetAsync("/api/dashboard/snapshot", TestContext.Current.CancellationToken);
+
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        using var doc = JsonDocument.Parse(body);
+        var state = doc.RootElement.GetProperty("ciTrend")[0].GetProperty("state");
+        _ = state.ValueKind.Should().Be(JsonValueKind.String);
+        _ = state.GetString().Should().Be("failing");
     }
 
     [Fact]
