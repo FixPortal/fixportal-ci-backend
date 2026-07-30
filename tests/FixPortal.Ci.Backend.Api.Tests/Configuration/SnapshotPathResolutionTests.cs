@@ -18,13 +18,14 @@ public class SnapshotPathResolutionTests
     {
         var contentRoot = Directory.CreateTempSubdirectory("fixportal-cib18-").FullName;
         var relativeDirectory = $"snapshot-path-{Guid.NewGuid():N}";
-        var relativePath = Path.Combine(relativeDirectory, "snapshot.json");
-        var contentRootPath = Path.Combine(contentRoot, relativePath);
-        var workingDirectoryPath = Path.Combine(Environment.CurrentDirectory, relativePath);
+        var relativePath = Path.Join(relativeDirectory, "snapshot.json");
+        var contentRootPath = Path.Join(contentRoot, relativePath);
+        var workingDirectoryPath = Path.Join(Environment.CurrentDirectory, relativePath);
 
         try
         {
-            using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+            using var parentFactory = new WebApplicationFactory<Program>();
+            using var factory = parentFactory.WithWebHostBuilder(builder =>
             {
                 _ = builder.UseContentRoot(contentRoot);
                 _ = builder.UseSetting("GitHub:Owner", "FixPortal");

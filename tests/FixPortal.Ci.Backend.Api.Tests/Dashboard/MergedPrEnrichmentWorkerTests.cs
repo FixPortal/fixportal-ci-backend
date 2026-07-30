@@ -23,13 +23,14 @@ public class MergedPrEnrichmentWorkerTests
             CancellationToken cancellationToken
         ) =>
             request.RequestUri!.AbsolutePath == "/search/issues"
-                ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError))
+                ? Task.FromResult(ErrorResponse())
                 : throw new InvalidOperationException($"Unexpected GitHub request: {request.RequestUri}");
+
+        private static HttpResponseMessage ErrorResponse() => new(HttpStatusCode.InternalServerError);
     }
 
-    private static MergedPrEnrichmentWorker NewWorker(HttpMessageHandler handler)
+    private static MergedPrEnrichmentWorker NewWorker(HttpClient http)
     {
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
@@ -66,7 +67,12 @@ public class MergedPrEnrichmentWorkerTests
     [Fact]
     public async Task CollectAsync_should_soft_fail_to_null_when_the_merged_pr_request_fails()
     {
-        var worker = NewWorker(new MergedPrFailureHandler());
+        using var handler = new MergedPrFailureHandler();
+        using var http = new HttpClient(handler, disposeHandler: false)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
+        using var worker = NewWorker(http);
         var repo = new GitHubRepoDto("repo-a", "https://github.com/FixPortal/repo-a", false, false, "main");
 
         var result = await InvokeCollectAsync(worker, repo, TestContext.Current.CancellationToken);
