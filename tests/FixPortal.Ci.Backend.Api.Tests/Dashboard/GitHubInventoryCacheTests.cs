@@ -30,7 +30,7 @@ public sealed class GitHubInventoryCacheTests : IDisposable
     // Counts requests per inventory endpoint so a test can assert the cache
     // collapsed N callers into one GitHub fetch. Returns canned snake_case JSON
     // matching the shapes ListRepositoriesAsync / ListWorkflowsAsync expect.
-    private sealed class CountingHandler(bool blockRepoFetch = false) : HttpMessageHandler
+    private sealed class CountingHandler(bool blockRepoFetch = false, bool failFirstRepoFetch = false) : HttpMessageHandler
     {
         private readonly TaskCompletionSource _repoFetchStarted = new(
             TaskCreationOptions.RunContinuationsAsynchronously
@@ -69,6 +69,10 @@ public sealed class GitHubInventoryCacheTests : IDisposable
                 {
                     await _allowRepoFetch.Task.WaitAsync(cancellationToken);
                 }
+                if (failFirstRepoFetch && RepoCalls == 1)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.ServiceUnavailable);
+                }
 
                 json =
                     """[{"name":"a","html_url":"https://github.com/FixPortal/a","private":false,"archived":false,"default_branch":"main"}]""";
@@ -102,9 +106,12 @@ public sealed class GitHubInventoryCacheTests : IDisposable
         public Instant GetCurrentInstant() => Now;
     }
 
-    private (GitHubInventoryCache Cache, CountingHandler Handler, MutableClock Clock) Build(bool blockRepoFetch = false)
+    private (GitHubInventoryCache Cache, CountingHandler Handler, MutableClock Clock) Build(
+        bool blockRepoFetch = false,
+        bool failFirstRepoFetch = false
+    )
     {
-        var handler = new CountingHandler(blockRepoFetch);
+        var handler = new CountingHandler(blockRepoFetch, failFirstRepoFetch);
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         _clients.Add(http);
         var gitHub = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
@@ -139,6 +146,20 @@ public sealed class GitHubInventoryCacheTests : IDisposable
         _ = await cache.GetRepositoriesAsync(CancellationToken.None);
 
         _ = handler.RepoCalls.Should().Be(2);
+    }
+
+    [Fact]
+    public async Task GetRepositories_retries_after_a_failed_fetch()
+    {
+        var (cache, handler, _) = Build(failFirstRepoFetch: true);
+
+        Func<Task> first = () => cache.GetRepositoriesAsync(CancellationToken.None);
+        _ = await first.Should().ThrowAsync<HttpRequestException>();
+
+        var recovered = await cache.GetRepositoriesAsync(CancellationToken.None);
+
+        _ = handler.RepoCalls.Should().Be(2);
+        _ = recovered.Should().ContainSingle(r => r.Name == "a");
     }
 
     [Fact]
