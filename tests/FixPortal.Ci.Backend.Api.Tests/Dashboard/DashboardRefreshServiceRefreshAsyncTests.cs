@@ -138,6 +138,98 @@ public class DashboardRefreshServiceRefreshAsyncTests
             new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
     }
 
+    private sealed class RepoAuthFailureHandler : HttpMessageHandler
+    {
+        private const int RepoCount = 3;
+
+        private int _workflowRequests;
+        private readonly TaskCompletionSource _allWorkflowRequestsArrived = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+        private readonly TaskCompletionSource _authResponseConsumed = new(
+            TaskCreationOptions.RunContinuationsAsynchronously
+        );
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var path = request.RequestUri!.AbsolutePath;
+
+            if (path.Contains("/orgs/", StringComparison.Ordinal) && path.EndsWith("/repos", StringComparison.Ordinal))
+            {
+                return JsonOk(
+                    """
+                    [
+                      {"name":"auth-fails","html_url":"https://github.com/FixPortal/auth-fails","private":false,"archived":false,"default_branch":"main"},
+                      {"name":"healthy-a","html_url":"https://github.com/FixPortal/healthy-a","private":false,"archived":false,"default_branch":"main"},
+                      {"name":"healthy-b","html_url":"https://github.com/FixPortal/healthy-b","private":false,"archived":false,"default_branch":"main"}
+                    ]
+                    """
+                );
+            }
+
+            if (path.EndsWith("/actions/workflows", StringComparison.Ordinal))
+            {
+                var repo = RepoName(path);
+                if (Interlocked.Increment(ref _workflowRequests) == RepoCount)
+                {
+                    _allWorkflowRequestsArrived.TrySetResult();
+                }
+
+                await _allWorkflowRequestsArrived.Task.WaitAsync(cancellationToken);
+                if (repo == "auth-fails")
+                {
+                    return new SignallingResponse(HttpStatusCode.Unauthorized, _authResponseConsumed);
+                }
+
+                // The auth response is disposed only after GitHubOrgClient has
+                // populated LastAuthError, so these successes deterministically
+                // complete later and expose any success-side race-clear.
+                await _authResponseConsumed.Task.WaitAsync(cancellationToken);
+                return JsonOk(
+                    $$"""{"workflows":[{"id":1,"name":"{{repo}} CI","path":".github/workflows/{{repo}}.yml","state":"active"}]}"""
+                );
+            }
+
+            if (path.Contains("/actions/workflows/", StringComparison.Ordinal) && path.EndsWith("/runs", StringComparison.Ordinal))
+            {
+                var repo = RepoName(path);
+                return JsonOk(
+                    $$"""{"workflow_runs":[{"status":"completed","conclusion":"success","html_url":"https://github.com/FixPortal/{{repo}}/actions/runs/1","display_title":"{{repo}} fresh run","run_number":1,"head_branch":"main","event":"push","updated_at":"2025-12-31T23:30:00Z","id":1}]}"""
+                );
+            }
+
+            if (path.EndsWith("/pulls", StringComparison.Ordinal))
+            {
+                return JsonOk("[]");
+            }
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+
+        private static string RepoName(string path) => path.Split('/')[3];
+
+        private static HttpResponseMessage JsonOk(string json) =>
+            new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+
+        private sealed class SignallingResponse(
+            HttpStatusCode statusCode,
+            TaskCompletionSource disposed
+        ) : HttpResponseMessage(statusCode)
+        {
+            protected override void Dispose(bool disposing)
+            {
+                base.Dispose(disposing);
+                if (disposing)
+                {
+                    disposed.TrySetResult();
+                }
+            }
+        }
+    }
+
     [Fact]
     public async Task RefreshAsync_should_hold_the_concurrency_cap_and_cancel_siblings_on_rate_limit()
     {
@@ -178,5 +270,55 @@ public class DashboardRefreshServiceRefreshAsyncTests
         _ = state.Current.Should().NotBeNull();
         _ = state.Current!.Repositories.Should().HaveCount(ConcurrencyProbeHandler.RepoCount);
         _ = state.Current.Repositories.Should().OnlyContain(r => r.Workflows.Count == 0);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_should_isolate_repo_auth_failure_and_preserve_cycle_auth_error()
+    {
+        var state = new DashboardSnapshotState();
+        var handler = new RepoAuthFailureHandler();
+        var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore(), state);
+        var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var inventory = new GitHubInventoryCache(client, clock, dashboardOptions);
+        var sut = new DashboardRefreshService(
+            client,
+            inventory,
+            new FileDashboardSnapshotStore(Path.Combine("TestResults", "unused-cib-4.json")),
+            state,
+            new PerRepoCache<RepoMetrics>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<MergedPullRequest>(),
+            gitHubOptions,
+            clock,
+            NullLogger<DashboardRefreshService>.Instance
+        );
+
+        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+
+        _ = state.Current.Should().NotBeNull();
+        var repos = state.Current!.Repositories.ToDictionary(r => r.Name);
+        _ = repos.Should().HaveCount(3);
+        _ = repos["healthy-a"]
+            .Workflows.Should()
+            .ContainSingle(w =>
+                w.Name == "healthy-a CI"
+                && w.State == SignalState.Success
+                && w.LastRun != null
+                && w.LastRun.Repository == "healthy-a"
+            );
+        _ = repos["healthy-b"]
+            .Workflows.Should()
+            .ContainSingle(w =>
+                w.Name == "healthy-b CI"
+                && w.State == SignalState.Success
+                && w.LastRun != null
+                && w.LastRun.Repository == "healthy-b"
+            );
+        _ = repos["auth-fails"].Workflows.Should().BeEmpty();
+        _ = state.LastAuthError.Should().Contain("auth-fails");
     }
 }
