@@ -399,8 +399,10 @@ FodyWeavers.xsd
 .idea/
 .ai/
 
-# Claude Code
-.claude/settings.local.json
+# Claude Code: keep local runtime state and review worktrees out of the repository while
+# leaving the committed review policy reachable.
+.claude/*
+!.claude/review-policy.json
 
 #### Project additions ####
 
