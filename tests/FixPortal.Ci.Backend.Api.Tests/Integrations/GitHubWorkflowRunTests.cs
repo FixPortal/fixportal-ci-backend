@@ -15,23 +15,23 @@ public class GitHubWorkflowRunTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken
-        ) =>
-            Task.FromResult(
-                new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(
-                        """
-                        {"workflow_runs":[
-                          {"id":7,"status":"completed","conclusion":"success","html_url":"https://github.com/acme/repo/actions/runs/7","display_title":"Explicit title","run_number":7,"head_branch":"main","event":"push","updated_at":"2026-01-01T00:00:00Z"},
-                          {"id":42,"status":"completed","conclusion":"success","display_title":"   ","run_number":8,"head_branch":"main","event":"push","updated_at":"2026-01-02T00:00:00Z"},
-                          {"id":0,"status":"completed","conclusion":"success","display_title":"Workflow fallback","run_number":9,"head_branch":"main","event":"push","updated_at":"2026-01-03T00:00:00Z"}
-                        ]}
-                        """,
-                        Encoding.UTF8,
-                        "application/json"
-                    ),
-                }
-            );
+        ) => Task.FromResult(JsonOk());
+
+        private static HttpResponseMessage JsonOk() =>
+            new(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """
+                    {"workflow_runs":[
+                      {"id":7,"status":"completed","conclusion":"success","html_url":"https://github.com/acme/repo/actions/runs/7","display_title":"Explicit title","run_number":7,"head_branch":"main","event":"push","updated_at":"2026-01-01T00:00:00Z"},
+                      {"id":42,"status":"completed","conclusion":"success","display_title":"   ","run_number":8,"head_branch":"main","event":"push","updated_at":"2026-01-02T00:00:00Z"},
+                      {"id":0,"status":"completed","conclusion":"success","display_title":"Workflow fallback","run_number":9,"head_branch":"main","event":"push","updated_at":"2026-01-03T00:00:00Z"}
+                    ]}
+                    """,
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
     }
 
     [Fact]

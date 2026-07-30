@@ -30,13 +30,11 @@ public class GitHubAuthorizationTests
                 "/search/issues" => """{"items":[]}""",
                 _ => "[]",
             };
-            return Task.FromResult(
-                new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(content, Encoding.UTF8, "application/json"),
-                }
-            );
+            return Task.FromResult(JsonOk(content));
         }
+
+        private static HttpResponseMessage JsonOk(string content) =>
+            new(HttpStatusCode.OK) { Content = new StringContent(content, Encoding.UTF8, "application/json") };
     }
 
     [Fact]

@@ -1,5 +1,6 @@
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -9,9 +10,10 @@ namespace FixPortal.Ci.Backend.Api.Tests.Api;
 
 public class AdminOptionsValidationTests
 {
-    private static void Start(string owner, string token, string adminKey = "", int? dashboardRefreshSeconds = null)
+    private sealed class ValidationFactory(string owner, string token, string adminKey, int? dashboardRefreshSeconds)
+        : WebApplicationFactory<Program>
     {
-        using var factory = new WebApplicationFactory<Program>().WithWebHostBuilder(builder =>
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             _ = builder.UseSetting("GitHub:Token", token);
             _ = builder.UseSetting("GitHub:Owner", owner);
@@ -22,7 +24,12 @@ public class AdminOptionsValidationTests
             }
             // No background polling in tests; ValidateOnStart still runs at host start.
             _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
-        });
+        }
+    }
+
+    private static void Start(string owner, string token, string adminKey = "", int? dashboardRefreshSeconds = null)
+    {
+        using var factory = new ValidationFactory(owner, token, adminKey, dashboardRefreshSeconds);
         using var client = factory.CreateClient();
     }
 

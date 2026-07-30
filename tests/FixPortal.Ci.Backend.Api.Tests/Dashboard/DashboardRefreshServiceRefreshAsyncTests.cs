@@ -277,8 +277,11 @@ public class DashboardRefreshServiceRefreshAsyncTests
     public async Task RefreshAsync_should_isolate_repo_auth_failure_and_preserve_cycle_auth_error()
     {
         var state = new DashboardSnapshotState();
-        var handler = new RepoAuthFailureHandler();
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var handler = new RepoAuthFailureHandler();
+        using var http = new HttpClient(handler, disposeHandler: false)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore(), state);
