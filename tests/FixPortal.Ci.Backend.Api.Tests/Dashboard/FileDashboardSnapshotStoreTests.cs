@@ -56,6 +56,68 @@ public class FileDashboardSnapshotStoreTests
     }
 
     [Fact]
+    public async Task SaveAsync_should_write_camel_case_enum_strings()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
+        var sut = new FileDashboardSnapshotStore(path);
+        var snapshot = new DashboardSnapshot(
+            Instant.FromUtc(2026, 5, 28, 18, 0),
+            "FixPortal",
+            [
+                new RepositorySnapshot(
+                    "repo",
+                    "https://github.com/FixPortal/repo",
+                    false,
+                    [new WorkflowSnapshot("CI", "ci.yml", SignalState.Success, null)],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+            ],
+            [],
+            null,
+            [new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 0), CiTrendState.Failing)]
+        );
+
+        try
+        {
+            await sut.SaveAsync(snapshot, CancellationToken.None);
+            var json = await File.ReadAllTextAsync(path, CancellationToken.None);
+
+            _ = json.Should().Contain("\"state\":\"success\"");
+            _ = json.Should().Contain("\"state\":\"failing\"");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task LoadAsync_should_read_legacy_ordinal_fixture()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
+        var sut = new FileDashboardSnapshotStore(path);
+        const string legacySnapshot = """
+            {"refreshedAt":"2026-05-28T18:00:00Z","org":"FixPortal","repositories":[{"name":"repo","htmlUrl":"https://github.com/FixPortal/repo","private":false,"workflows":[{"name":"CI","file":"ci.yml","state":0,"lastRun":null}],"pullRequests":[],"metrics":null,"deploys":[],"packages":[],"lastMergedPr":null}],"summary":[],"lastMergedPr":null,"ciTrend":[{"bucketStart":"2026-05-28T16:00:00Z","state":2,"isBackfilled":false}],"publicCiTrend":null}
+            """;
+
+        try
+        {
+            await File.WriteAllTextAsync(path, legacySnapshot, CancellationToken.None);
+            var reloaded = await sut.LoadAsync(CancellationToken.None);
+
+            _ = reloaded!.Repositories[0].Workflows[0].State.Should().Be(SignalState.Success);
+            _ = reloaded.CiTrend![0].State.Should().Be(CiTrendState.Failing);
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task SaveAsync_should_round_trip_the_persisted_public_ci_trend()
     {
         // B5-full: the public-only trend is persisted on the full snapshot so a
