@@ -9,6 +9,24 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 public class FileDashboardSnapshotStoreTests
 {
     [Fact]
+    public async Task LoadAsync_should_return_null_when_snapshot_is_missing()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
+        var sut = new FileDashboardSnapshotStore(path);
+
+        try
+        {
+            var snapshot = await sut.LoadAsync(CancellationToken.None);
+
+            _ = snapshot.Should().BeNull();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
     public async Task SaveAsync_should_round_trip_snapshot()
     {
         var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
