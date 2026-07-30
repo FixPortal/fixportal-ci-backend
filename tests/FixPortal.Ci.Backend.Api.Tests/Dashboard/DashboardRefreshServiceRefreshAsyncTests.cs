@@ -178,7 +178,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
                     _allWorkflowRequestsArrived.TrySetResult();
                 }
 
-                await _allWorkflowRequestsArrived.Task.WaitAsync(cancellationToken);
+                await _allWorkflowRequestsArrived.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
                 if (repo == "auth-fails")
                 {
                     return new SignallingResponse(HttpStatusCode.Unauthorized, _authResponseConsumed);
@@ -187,7 +187,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
                 // The auth response is disposed only after GitHubOrgClient has
                 // populated LastAuthError, so these successes deterministically
                 // complete later and expose any success-side race-clear.
-                await _authResponseConsumed.Task.WaitAsync(cancellationToken);
+                await _authResponseConsumed.Task.WaitAsync(TimeSpan.FromSeconds(10), cancellationToken);
                 return JsonOk(
                     $$"""{"workflows":[{"id":1,"name":"{{repo}} CI","path":".github/workflows/{{repo}}.yml","state":"active"}]}"""
                 );
