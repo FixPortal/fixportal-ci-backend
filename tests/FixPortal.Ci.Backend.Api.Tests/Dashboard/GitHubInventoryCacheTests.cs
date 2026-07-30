@@ -30,7 +30,8 @@ public sealed class GitHubInventoryCacheTests : IDisposable
     // Counts requests per inventory endpoint so a test can assert the cache
     // collapsed N callers into one GitHub fetch. Returns canned snake_case JSON
     // matching the shapes ListRepositoriesAsync / ListWorkflowsAsync expect.
-    private sealed class CountingHandler(bool blockRepoFetch = false, bool failFirstRepoFetch = false) : HttpMessageHandler
+    private sealed class CountingHandler(bool blockRepoFetch = false, bool failFirstRepoFetch = false)
+        : HttpMessageHandler
     {
         private readonly TaskCompletionSource _repoFetchStarted = new(
             TaskCreationOptions.RunContinuationsAsynchronously

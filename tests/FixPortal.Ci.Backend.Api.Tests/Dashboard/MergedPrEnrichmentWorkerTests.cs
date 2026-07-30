@@ -21,9 +21,10 @@ public class MergedPrEnrichmentWorkerTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken
-        ) => request.RequestUri!.AbsolutePath == "/search/issues"
-            ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError))
-            : throw new InvalidOperationException($"Unexpected GitHub request: {request.RequestUri}");
+        ) =>
+            request.RequestUri!.AbsolutePath == "/search/issues"
+                ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError))
+                : throw new InvalidOperationException($"Unexpected GitHub request: {request.RequestUri}");
     }
 
     private static MergedPrEnrichmentWorker NewWorker(HttpMessageHandler handler)

@@ -45,8 +45,11 @@ public class ArchitectureTests
     [Fact]
     public void Snapshot_restore_service_must_implement_hosted_lifecycle_service()
     {
-        Classes().That().HaveFullName(typeof(SnapshotRestoreService).FullName!)
-            .Should().ImplementInterface(typeof(IHostedLifecycleService))
+        Classes()
+            .That()
+            .HaveFullName(typeof(SnapshotRestoreService).FullName!)
+            .Should()
+            .ImplementInterface(typeof(IHostedLifecycleService))
             .Check(Architecture);
     }
 }

@@ -74,7 +74,11 @@ public class AdminOptionsValidationTests
     [Theory]
     [InlineData("", "test-token", "GitHub:Owner")]
     [InlineData("FixPortal", "", "GitHub:Token")]
-    public void A_blank_required_GitHub_setting_is_rejected_at_startup(string owner, string token, string missingSetting)
+    public void A_blank_required_GitHub_setting_is_rejected_at_startup(
+        string owner,
+        string token,
+        string missingSetting
+    )
     {
         var act = () => Start(owner, token);
 

@@ -193,7 +193,10 @@ public class DashboardRefreshServiceRefreshAsyncTests
                 );
             }
 
-            if (path.Contains("/actions/workflows/", StringComparison.Ordinal) && path.EndsWith("/runs", StringComparison.Ordinal))
+            if (
+                path.Contains("/actions/workflows/", StringComparison.Ordinal)
+                && path.EndsWith("/runs", StringComparison.Ordinal)
+            )
             {
                 var repo = RepoName(path);
                 return JsonOk(
@@ -214,10 +217,8 @@ public class DashboardRefreshServiceRefreshAsyncTests
         private static HttpResponseMessage JsonOk(string json) =>
             new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
 
-        private sealed class SignallingResponse(
-            HttpStatusCode statusCode,
-            TaskCompletionSource disposed
-        ) : HttpResponseMessage(statusCode)
+        private sealed class SignallingResponse(HttpStatusCode statusCode, TaskCompletionSource disposed)
+            : HttpResponseMessage(statusCode)
         {
             protected override void Dispose(bool disposing)
             {
