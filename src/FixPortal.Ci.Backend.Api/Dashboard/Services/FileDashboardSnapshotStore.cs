@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using NodaTime;
 using NodaTime.Serialization.SystemTextJson;
@@ -12,7 +13,10 @@ public sealed class FileDashboardSnapshotStore(string snapshotPath) : IDashboard
     // boundary so persisted snapshots reload faithfully.
     private static readonly JsonSerializerOptions SerializerOptions = new JsonSerializerOptions(
         JsonSerializerDefaults.Web
-    ).ConfigureForNodaTime(DateTimeZoneProviders.Tzdb);
+    )
+    {
+        Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
+    }.ConfigureForNodaTime(DateTimeZoneProviders.Tzdb);
 
     public async Task<DashboardSnapshot?> LoadAsync(CancellationToken cancellationToken)
     {
