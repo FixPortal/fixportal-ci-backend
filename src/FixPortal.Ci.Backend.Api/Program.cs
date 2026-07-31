@@ -55,6 +55,7 @@ builder
     // rather than shipping a guessable admin key.
     .Validate(o => o.HasValidAdminKeyLength(), "Admin:AdminKey, when set, must be at least 16 characters.")
     .ValidateOnStart();
+builder.Services.Configure<ReviewSignalsOptions>(builder.Configuration.GetSection("ReviewSignals"));
 
 // CORS so the FixPortal SPA (a separate origin) can read the public snapshot.
 // Empty config -> no origins allowed (safe default until the SPA origin is set
