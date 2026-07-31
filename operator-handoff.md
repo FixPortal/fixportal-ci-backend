@@ -13,8 +13,8 @@ Local development instead runs the Vite dev server (`npm run dev`), which proxie
 
 ## Configuration model
 
-Every setting lives in `appsettings.json` under the `GitHub` or `Dashboard`
-section. A host overrides any value with an environment variable whose name is
+Every setting lives in `appsettings.json` under the `GitHub`, `Dashboard`, or
+`ReviewSignals` section. A host overrides any value with an environment variable whose name is
 the config path with `:` replaced by `__` (double underscore) — e.g.
 `GitHub:Token` becomes `GitHub__Token`. The Azure deployment sets the secret
 scalars this way (see **Deploying to Azure**); the rest are baked into the image
@@ -34,6 +34,7 @@ from `appsettings.json`, so to change them, edit that file and redeploy.
 | `Dashboard:MergedPrEnabled` | `true` | Track the org's most-recently-merged PR. |
 | `Dashboard:MergedPrRefreshSeconds` | `300` | Merged-PR cadence (5 min). |
 | `Dashboard:JobLanes` | deploys, packages | Named lanes that surface matching workflow **jobs** (by name pattern) as their own status chips. |
+| `ReviewSignals:Reviewers` | *(empty)* | Per-reviewer status pills (CodeRabbit, Gitar, CodeQL, …) on each open PR. Empty by default — the feature is off and issues no GitHub requests until reviewers are configured. Full option reference: **[README.md § Review signals](README.md#review-signals-reviewsignals)**. |
 
 There is **no hardcoded repository list** — the board auto-discovers every repo
 under `GitHub:Owner` and every workflow in each, so new repos and workflows
