@@ -87,6 +87,10 @@ public sealed record GitHubSearchIssueDto(
 
 public sealed record GitHubSearchResponse(IReadOnlyList<GitHubSearchIssueDto>? Items);
 
+public sealed record CodeScanningInstanceDto(string? Ref);
+
+public sealed record CodeScanningAlertDto(CodeScanningInstanceDto? MostRecentInstance);
+
 public sealed class GitHubOrgClient(
     HttpClient httpClient,
     IOptions<GitHubOptions> gitHub,
@@ -309,6 +313,73 @@ public sealed class GitHubOrgClient(
             dto.Draft,
             dto.CreatedAt
         );
+
+    /// <summary>
+    /// Extracts the pull-request number from a GitHub ref such as
+    /// "refs/pull/181/head". Returns null for any non-pull ref, so branch-level alerts
+    /// are ignored rather than mis-attributed to a pull request.
+    /// </summary>
+    public static int? PullNumberFromRef(string? gitRef)
+    {
+        if (string.IsNullOrEmpty(gitRef))
+        {
+            return null;
+        }
+        const string prefix = "refs/pull/";
+        if (!gitRef.StartsWith(prefix, StringComparison.Ordinal))
+        {
+            return null;
+        }
+        var rest = gitRef.AsSpan(prefix.Length);
+        var slash = rest.IndexOf('/');
+        var numberSpan = slash < 0 ? rest : rest[..slash];
+        return int.TryParse(numberSpan, out var number) ? number : null;
+    }
+
+    /// <summary>
+    /// Open code-scanning alerts for a repo, bucketed by pull-request number. One call
+    /// per repo, not per pull request. Returns NULL when the endpoint cannot be read —
+    /// the token lacks "Code scanning alerts: read", or scanning is not enabled — which
+    /// the caller must render as "not yet reviewed", never as a clean scan. An empty
+    /// dictionary means the endpoint answered and nothing is open.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<int, int>?> GetOpenCodeScanningAlertCountsAsync(
+        string repo,
+        CancellationToken ct
+    )
+    {
+        List<CodeScanningAlertDto>? alerts;
+        try
+        {
+            // affectsAuthState: false — a missing code-scanning scope 403s here and must
+            // not flip /api/health, exactly as the pull-request listing does.
+            alerts = await SendAsync<List<CodeScanningAlertDto>>(
+                $"repos/{_gitHub.Owner}/{repo}/code-scanning/alerts?state=open&per_page=100",
+                ct,
+                affectsAuthState: false
+            );
+        }
+        catch (GitHubAuthException)
+        {
+            return null;
+        }
+
+        // SendAsync maps 404 to default(T) — repo has scanning disabled entirely.
+        if (alerts is null)
+        {
+            return null;
+        }
+
+        var counts = new Dictionary<int, int>();
+        foreach (var alert in alerts)
+        {
+            if (PullNumberFromRef(alert.MostRecentInstance?.Ref) is { } number)
+            {
+                counts[number] = counts.GetValueOrDefault(number) + 1;
+            }
+        }
+        return counts;
+    }
 
     /// <summary>
     /// Flattens one GraphQL pull-request node into the facts the signal factory needs.
