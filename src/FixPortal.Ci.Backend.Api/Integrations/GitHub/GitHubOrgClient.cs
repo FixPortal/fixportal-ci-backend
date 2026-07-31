@@ -219,6 +219,96 @@ public sealed class GitHubOrgClient(
             dto.CreatedAt
         );
 
+    /// <summary>
+    /// Flattens one GraphQL pull-request node into the facts the signal factory needs.
+    /// Every collection is treated as optional: GraphQL omits or nulls empty
+    /// connections, and a missing author is legitimate for a deleted account.
+    /// All string sets are case-insensitive so a configured BotLogin cannot miss on
+    /// casing alone (GitHub logins are case-preserving but not case-sensitive).
+    /// </summary>
+    public static PrReviewFacts ToReviewFacts(ReviewFactsPull pull)
+    {
+        var labels = CollectLabels(pull.Labels);
+        var participating = CollectReviewers(pull.Reviews);
+        var unresolved = CollectThreadFacts(pull.ReviewThreads, participating);
+        var checkApps = CollectSuccessfulCheckApps(pull.Commits);
+
+        return new PrReviewFacts(
+            pull.Number,
+            pull.Author?.Login is { Length: > 0 } author ? author : "unknown",
+            labels,
+            unresolved,
+            participating,
+            checkApps
+        );
+    }
+
+    private static HashSet<string> CollectLabels(NodeList<GraphQlLabel>? labels)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var label in (labels?.Nodes ?? []).Where(l => !string.IsNullOrWhiteSpace(l.Name)))
+        {
+            _ = result.Add(label.Name!);
+        }
+        return result;
+    }
+
+    private static HashSet<string> CollectReviewers(NodeList<GraphQlReview>? reviews)
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var review in reviews?.Nodes ?? [])
+        {
+            if (review.Author?.Login is { Length: > 0 } login)
+            {
+                _ = result.Add(login);
+            }
+        }
+        return result;
+    }
+
+    // Also adds every thread author (resolved or not) to participating: a resolved
+    // thread still proves the reviewer ran, which is what separates "clean" from
+    // "pending".
+    private static Dictionary<string, int> CollectThreadFacts(NodeList<GraphQlThread>? threads, HashSet<string> participating)
+    {
+        var unresolved = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        foreach (var thread in threads?.Nodes ?? [])
+        {
+            // The FIRST comment's author owns the thread. A human replying to a bot's
+            // finding must not re-attribute that thread to the human.
+            var author = thread.Comments?.Nodes is { Count: > 0 } comments ? comments[0].Author?.Login : null;
+            if (author is not { Length: > 0 })
+            {
+                continue;
+            }
+            _ = participating.Add(author);
+            if (!thread.IsResolved)
+            {
+                unresolved[author] = unresolved.GetValueOrDefault(author) + 1;
+            }
+        }
+        return unresolved;
+    }
+
+    private static HashSet<string> CollectSuccessfulCheckApps(NodeList<GraphQlCommitNode>? commits)
+    {
+        var checkApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var commit in commits?.Nodes ?? [])
+        {
+            foreach (var context in commit.Commit?.StatusCheckRollup?.Contexts?.Nodes ?? [])
+            {
+                if (
+                    string.Equals(context.Conclusion, "SUCCESS", StringComparison.OrdinalIgnoreCase)
+                    && context.CheckSuite?.App?.Slug is { Length: > 0 } slug
+                )
+                {
+                    _ = checkApps.Add(slug);
+                }
+            }
+        }
+        return checkApps;
+    }
+
     public async Task<MergedPullRequest?> GetLastMergedPullRequestAsync(string repo, CancellationToken ct)
     {
         var q = Uri.EscapeDataString($"repo:{_gitHub.Owner}/{repo} is:pr is:merged");
