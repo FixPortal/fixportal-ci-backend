@@ -1,5 +1,9 @@
+using System.Net;
+using System.Text;
 using AwesomeAssertions;
+using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Integrations;
@@ -99,5 +103,66 @@ public class GitHubReviewFactsTests
         var facts = GitHubOrgClient.ToReviewFacts(Pull(threads: [Thread("CodeRabbitAI", false)]));
 
         _ = facts.UnresolvedThreadsByAuthor.ContainsKey("coderabbitai").Should().BeTrue();
+    }
+}
+
+public class GitHubReviewFactsTransportTests
+{
+    private sealed class ScriptedHandler(Queue<HttpResponseMessage> responses) : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            Requests.Add(request);
+            return Task.FromResult(responses.Dequeue());
+        }
+    }
+
+    private static GitHubOrgClient CreateClient(HttpClient http) =>
+        new(
+            http,
+            Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
+            Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 }),
+            new GitHubETagStore()
+        );
+
+    private static HttpResponseMessage Json(string body) =>
+        new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    [Fact]
+    public async Task Posts_to_graphql_and_parses_camel_case_field_names()
+    {
+        const string body = """
+            {"data":{"repository":{"pullRequests":{"nodes":[
+              {"number":181,"author":{"login":"chris"},
+               "labels":{"nodes":[{"name":"review-high"}]},
+               "reviews":{"nodes":[]},
+               "reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":{"login":"coderabbitai"}}]}}]},
+               "commits":{"nodes":[]}}
+            ]}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+
+        var facts = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
+        _ = handler.Requests[0].Method.Should().Be(HttpMethod.Post);
+        _ = handler.Requests[0].RequestUri!.AbsolutePath.Should().Be("/graphql");
+        _ = facts[181].Labels.Should().Contain("review-high");
+        _ = facts[181].UnresolvedThreadsByAuthor["coderabbitai"].Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Throws_when_graphql_reports_errors_in_a_200_response()
+    {
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([Json("""{"data":null,"errors":[{"message":"Could not resolve to a Repository"}]}""")])
+        );
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+
+        var act = async () => await CreateClient(http).GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
+        _ = await act.Should().ThrowAsync<HttpRequestException>();
     }
 }
