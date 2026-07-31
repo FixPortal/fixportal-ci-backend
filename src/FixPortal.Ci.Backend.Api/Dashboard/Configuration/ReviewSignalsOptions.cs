@@ -50,3 +50,26 @@ public sealed class ReviewSignalsOptions
     /// </summary>
     public IReadOnlyList<ReviewerOptions> Reviewers { get; init; } = [];
 }
+
+internal static class ReviewSignalsOptionsRegistration
+{
+    public static void AddReviewSignalsOptions(this IServiceCollection services, IConfiguration configuration)
+    {
+        services
+            .AddOptions<ReviewSignalsOptions>()
+            .Bind(configuration.GetSection("ReviewSignals"))
+            .Validate(o => o.RefreshSeconds > 0, "ReviewSignals:RefreshSeconds must be greater than zero.")
+            .Validate(
+                o => o.Reviewers.All(r => !string.IsNullOrWhiteSpace(r.Name)),
+                "Every ReviewSignals:Reviewers entry must set a non-blank Name (it is the pill's label)."
+            )
+            .Validate(
+                o =>
+                    o.Reviewers.All(r =>
+                        r.Source != ReviewerSource.ReviewThreads || !string.IsNullOrWhiteSpace(r.BotLogin)
+                    ),
+                "Every ReviewSignals:Reviewers entry with Source=ReviewThreads must set a non-blank BotLogin, or it can never match and reports Pending forever."
+            )
+            .ValidateOnStart();
+    }
+}

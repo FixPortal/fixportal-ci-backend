@@ -1,7 +1,7 @@
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -47,46 +47,14 @@ public class ReviewSignalsConfigBindingTests(WebApplicationFactory<Program> fact
 // rather than failing loudly at boot.
 public class ReviewSignalsOptionsValidationTests
 {
-    private sealed class ValidationFactory(IReadOnlyDictionary<string, string> settings)
-        : WebApplicationFactory<Program>
+    private static ServiceProvider Provider(IReadOnlyDictionary<string, string> settings)
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder)
-        {
-            _ = builder.UseSetting("GitHub:Token", "test-token");
-            _ = builder.UseSetting("GitHub:Owner", "FixPortal");
-            foreach (var (key, value) in settings)
-            {
-                _ = builder.UseSetting(key, value);
-            }
-            // No background polling in tests; ValidateOnStart still runs at host start.
-            _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
-        }
-    }
-
-    private static void Start(IReadOnlyDictionary<string, string> settings)
-    {
-        var factory = new ValidationFactory(settings);
-        try
-        {
-            using var client = factory.CreateClient();
-        }
-        catch (Exception startupException)
-        {
-            var startupFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(startupException);
-            try
-            {
-                factory.Dispose();
-            }
-            catch (Exception disposalException)
-            {
-                // Preserve the validation failure if cleanup also fails after a partial startup.
-                startupException.Data["FactoryDisposalException"] = disposalException;
-            }
-
-            startupFailure.Throw();
-        }
-
-        factory.Dispose();
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(settings.Select(pair => new KeyValuePair<string, string?>(pair.Key, pair.Value)))
+            .Build();
+        var services = new ServiceCollection();
+        services.AddReviewSignalsOptions(configuration);
+        return services.BuildServiceProvider();
     }
 
     private static Dictionary<string, string> Reviewer(string name, string? botLogin, string? source = null)
@@ -106,9 +74,13 @@ public class ReviewSignalsOptionsValidationTests
     [Fact]
     public void A_non_positive_review_signal_cadence_is_rejected_at_startup()
     {
-        var act = () => Start(new Dictionary<string, string> { ["ReviewSignals:RefreshSeconds"] = "0" });
+        using var provider = Provider(new Dictionary<string, string> { ["ReviewSignals:RefreshSeconds"] = "0" });
 
-        _ = act.Should().Throw<Exception>().WithMessage("*ReviewSignals:RefreshSeconds*");
+        _ = provider
+            .Invoking(p => p.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value)
+            .Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*ReviewSignals:RefreshSeconds*");
     }
 
     [Fact]
@@ -116,24 +88,34 @@ public class ReviewSignalsOptionsValidationTests
     {
         // `required string Name` is not honoured by the configuration binder, so without
         // this rule a Name-less entry binds happily and renders a nameless pill.
-        var act = () => Start(Reviewer(name: " ", botLogin: "gitar-app"));
+        using var provider = Provider(Reviewer(name: " ", botLogin: "gitar-app"));
 
-        _ = act.Should().Throw<Exception>().WithMessage("*Name*");
+        _ = provider
+            .Invoking(p => p.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value)
+            .Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*Name*");
     }
 
     [Fact]
     public void A_review_threads_reviewer_with_no_bot_login_is_rejected_at_startup()
     {
-        var act = () => Start(Reviewer(name: "Gitar", botLogin: null));
+        using var provider = Provider(Reviewer(name: "Gitar", botLogin: null));
 
-        _ = act.Should().Throw<Exception>().WithMessage("*BotLogin*");
+        _ = provider
+            .Invoking(p => p.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value)
+            .Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*BotLogin*");
     }
 
     [Fact]
     public void A_code_scanning_reviewer_needs_no_bot_login()
     {
-        var act = () => Start(Reviewer(name: "CodeQL", botLogin: null, source: nameof(ReviewerSource.CodeScanning)));
+        using var provider = Provider(
+            Reviewer(name: "CodeQL", botLogin: null, source: nameof(ReviewerSource.CodeScanning))
+        );
 
-        _ = act.Should().NotThrow();
+        _ = provider.Invoking(p => p.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value).Should().NotThrow();
     }
 }

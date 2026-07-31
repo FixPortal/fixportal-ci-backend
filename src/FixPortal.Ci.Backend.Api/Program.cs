@@ -55,25 +55,12 @@ builder
     // rather than shipping a guessable admin key.
     .Validate(o => o.HasValidAdminKeyLength(), "Admin:AdminKey, when set, must be at least 16 characters.")
     .ValidateOnStart();
-builder
-    .Services.AddOptions<ReviewSignalsOptions>()
-    .Bind(builder.Configuration.GetSection("ReviewSignals"))
-    // RefreshSeconds reaches PeriodicTimer on the enrichment worker, and zero throws
-    // there — after cold start, on a background service whose default failure
-    // behaviour stops the host. An optional feature must not be able to take the board
-    // down from a typo'd environment variable, so reject it at boot instead.
-    .Validate(o => o.RefreshSeconds > 0, "ReviewSignals:RefreshSeconds must be greater than zero.")
-    // The configuration binder does not honour `required`, so a reviewer entry with no
-    // Name binds happily and renders a nameless pill.
-    .Validate(
-        o => o.Reviewers.All(r => !string.IsNullOrWhiteSpace(r.Name)),
-        "Every ReviewSignals:Reviewers entry must set a non-blank Name (it is the pill's label)."
-    )
-    .Validate(
-        o => o.Reviewers.All(r => r.Source != ReviewerSource.ReviewThreads || !string.IsNullOrWhiteSpace(r.BotLogin)),
-        "Every ReviewSignals:Reviewers entry with Source=ReviewThreads must set a non-blank BotLogin, or it can never match and reports Pending forever."
-    )
-    .ValidateOnStart();
+
+// RefreshSeconds reaches PeriodicTimer on the enrichment worker, and zero throws
+// there — after cold start, on a background service whose default failure
+// behaviour stops the host. The registration also validates reviewer identity
+// because the configuration binder does not honour `required`.
+builder.Services.AddReviewSignalsOptions(builder.Configuration);
 
 // CORS so the FixPortal SPA (a separate origin) can read the public snapshot.
 // Empty config -> no origins allowed (safe default until the SPA origin is set
