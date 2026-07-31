@@ -231,6 +231,76 @@ public class DashboardRefreshServiceRefreshAsyncTests
         }
     }
 
+    // One repo, no workflows, one open PR. Just enough for RefreshAsync to publish a
+    // snapshot whose pull requests can be inspected.
+    private sealed class OnePullRequestHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            var body = path switch
+            {
+                _ when path.EndsWith("/repos", StringComparison.Ordinal) =>
+                    """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"}]""",
+                _ when path.EndsWith("/actions/workflows", StringComparison.Ordinal) => """{"workflows":[]}""",
+                _ when path.EndsWith("/pulls", StringComparison.Ordinal) =>
+                    """[{"number":181,"title":"Add widget","user":{"login":"chris"},"html_url":"https://github.com/FixPortal/repo-a/pull/181","draft":false,"created_at":"2026-07-30T09:00:00Z"}]""",
+                _ => "[]",
+            };
+            return Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                }
+            );
+        }
+    }
+
+    [Fact]
+    public async Task RefreshAsync_should_attach_cached_review_signals_to_the_published_snapshot()
+    {
+        // The only place a review signal reaches a published snapshot is the
+        // TryGet + ApplyReviewSignals pair in CollectRepoAsync. Both other RefreshAsync
+        // tests pass an empty cache, so deleting those two lines left the suite green.
+        var state = new DashboardSnapshotState();
+        using var handler = new OnePullRequestHandler();
+        using var http = new HttpClient(handler, disposeHandler: false)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var signals = new ReviewSignal[] { new("Gitar", ReviewSignalState.Clean, null, null) };
+        var reviewSignalCache = new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>();
+        reviewSignalCache.Update("repo-a", new Dictionary<int, IReadOnlyList<ReviewSignal>> { [181] = signals });
+        var sut = new DashboardRefreshService(
+            client,
+            new GitHubInventoryCache(client, clock, dashboardOptions),
+            Substitute.For<IDashboardSnapshotStore>(),
+            state,
+            new PerRepoCache<RepoMetrics>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<MergedPullRequest>(),
+            reviewSignalCache,
+            gitHubOptions,
+            clock,
+            NullLogger<DashboardRefreshService>.Instance
+        );
+
+        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+
+        _ = state.Current.Should().NotBeNull();
+        var pr = state.Current!.Repositories.Should().ContainSingle().Which.PullRequests.Should().ContainSingle().Subject;
+        _ = pr.Number.Should().Be(181);
+        _ = pr.ReviewSignals.Should().BeEquivalentTo(signals);
+    }
+
     [Fact]
     public async Task RefreshAsync_should_hold_the_concurrency_cap_and_cancel_siblings_on_rate_limit()
     {

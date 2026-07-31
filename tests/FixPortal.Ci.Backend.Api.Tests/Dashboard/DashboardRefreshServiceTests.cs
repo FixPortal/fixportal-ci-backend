@@ -71,6 +71,36 @@ public class DashboardRefreshServiceTests
     }
 
     [Fact]
+    public void MergeWithPrevious_strips_review_signals_from_a_reinstated_prior_snapshot()
+    {
+        // A repo whose fetch failed republishes its prior snapshot, and that substitution
+        // chains forward every cycle. Workflow state is legitimately last-known-good but a
+        // review signal is not: it was earned against a head commit that has since moved,
+        // so a clean pill reinstated here is a pass nobody performed.
+        var priorRepo = Repo("a", (SignalState.Success, "success")) with
+        {
+            PullRequests =
+            [
+                new PullRequest(
+                    181,
+                    "t",
+                    "u",
+                    "url",
+                    false,
+                    Instant.MinValue,
+                    [new ReviewSignal("Gitar", ReviewSignalState.Clean, null, null)]
+                ),
+            ],
+        };
+        var prior = new DashboardSnapshot(Instant.MinValue, "FixPortal", [priorRepo], [], null);
+
+        var merged = DashboardRefreshService.MergeWithPrevious([(Repo("a"), true)], prior);
+
+        _ = merged[0].Workflows[0].State.Should().Be(SignalState.Success);
+        _ = merged[0].PullRequests.Should().ContainSingle().Which.ReviewSignals.Should().BeNull();
+    }
+
+    [Fact]
     public void BuildSummary_counts_repos_workflows_failing_running_noci_and_prs()
     {
         var withPr = Repo("a", (SignalState.Success, "success"), (SignalState.Failure, "failure")) with

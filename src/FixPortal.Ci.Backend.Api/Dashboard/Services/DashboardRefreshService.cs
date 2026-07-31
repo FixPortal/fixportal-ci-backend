@@ -289,9 +289,29 @@ public sealed class DashboardRefreshService(
 
         var prior = previous.Repositories.ToDictionary(r => r.Name, StringComparer.OrdinalIgnoreCase);
         return results
-            .Select(r => r.FetchFailed && prior.TryGetValue(r.Snapshot.Name, out var p) ? p : r.Snapshot)
+            .Select(r =>
+                r.FetchFailed && prior.TryGetValue(r.Snapshot.Name, out var p) ? WithoutReviewSignals(p) : r.Snapshot
+            )
             .ToList();
     }
+
+    /// <summary>
+    /// Strips review signals from a prior snapshot before it is republished for a repo
+    /// whose fetch failed. Everything else (workflows, runs, metrics) is genuinely
+    /// last-known-good and is worth showing while a repo is rate-limited or degraded;
+    /// a review signal is not. It is earned against one head commit, and a failing
+    /// repo's head moves on while this substitution chains the same snapshot forward
+    /// every cycle — which would keep a Clean pill alive indefinitely, the exact
+    /// false pass the head-scoping and the cache TTL exist to prevent. Degrade to
+    /// showing no pills instead.
+    /// </summary>
+    private static RepositorySnapshot WithoutReviewSignals(RepositorySnapshot prior) =>
+        prior.PullRequests is null or { Count: 0 }
+            ? prior
+            : prior with
+            {
+                PullRequests = [.. prior.PullRequests.Select(pr => pr with { ReviewSignals = null })],
+            };
 
     // On cold start the enrichment caches (metrics/deploys/packages) are empty until the
     // slow-cadence workers complete their first run (up to 300s). Without this, the first

@@ -323,14 +323,21 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         _ = signal.Count.Should().Be(expectedCount);
     }
 
-    [Fact]
-    public async Task An_excluded_authors_pull_request_carries_no_signals_at_all()
+    // Both spellings, because the wire shape is not the one the config was first written
+    // for: GraphQL reports a Bot node's login as "dependabot", WITHOUT the "[bot]"
+    // suffix — that suffix is a REST-ism. A suffix-only exclusion list therefore matches
+    // nothing here and every dependency PR grows a row of pills, against standing policy.
+    [Theory]
+    [InlineData("dependabot")]
+    [InlineData("dependabot[bot]")]
+    [InlineData("renovate")]
+    public async Task An_excluded_authors_pull_request_carries_no_signals_at_all(string author)
     {
-        var handler = new RoutingHandler(FactsJson("dependabot[bot]", includeSuccessfulCodeScanningCheck: true), HttpStatusCode.OK, "[]");
+        var handler = new RoutingHandler(FactsJson(author, includeSuccessfulCodeScanningCheck: true), HttpStatusCode.OK, "[]");
         var options = new ReviewSignalsOptions
         {
             Reviewers = [new ReviewerOptions { Name = "CodeQL", Source = ReviewerSource.CodeScanning }],
-            ExcludedAuthors = ["dependabot[bot]"],
+            ExcludedAuthors = ["dependabot", "dependabot[bot]", "renovate", "renovate[bot]"],
         };
 
         var signals = await RunOneSweepAsync(handler, options);
