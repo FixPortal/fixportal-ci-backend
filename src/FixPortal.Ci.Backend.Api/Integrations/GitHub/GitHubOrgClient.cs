@@ -98,11 +98,102 @@ public sealed class GitHubOrgClient(
 {
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
 
+    // GraphQL returns camelCase, unlike the snake_case REST API, so it needs its own
+    // options object. It is also a POST, so the ETag store gives it nothing — this
+    // request costs a real rate-limit unit on every cycle.
+    private static readonly JsonSerializerOptions GraphQlSerializerOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        PropertyNameCaseInsensitive = true,
+    };
+
+    private const string ReviewFactsQuery = """
+        query($owner: String!, $name: String!) {
+          repository(owner: $owner, name: $name) {
+            pullRequests(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
+              nodes {
+                number
+                author { login }
+                labels(first: 20) { nodes { name } }
+                reviews(first: 50) { nodes { author { login } } }
+                reviewThreads(first: 100) {
+                  nodes { isResolved comments(first: 1) { nodes { author { login } } } }
+                }
+                commits(last: 1) {
+                  nodes {
+                    commit {
+                      statusCheckRollup {
+                        contexts(first: 50) {
+                          nodes { ... on CheckRun { name conclusion checkSuite { app { slug } } } }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """;
+
     // Search/issues page size. internal so the merged-PR tests size their full-page
     // fixtures off the same value instead of a hand-mirrored literal.
     internal const int SearchPageSize = 20;
     private readonly GitHubOptions _gitHub = gitHub.Value;
     private readonly DashboardOptions _dashboard = dashboard.Value;
+
+    /// <summary>
+    /// One query per repo covering every open pull request. Batched deliberately: a
+    /// per-PR query would multiply the request count by the open-PR total and break
+    /// the rate budget. affectsAuthState is false throughout — this is a supplementary
+    /// signal and a token missing a scope here must not flip /api/health.
+    /// </summary>
+    public async Task<IReadOnlyDictionary<int, PrReviewFacts>> GetPullRequestReviewFactsAsync(
+        string repo,
+        CancellationToken ct
+    )
+    {
+        var data = await PostGraphQlAsync<ReviewFactsData>(
+            ReviewFactsQuery,
+            new { owner = _gitHub.Owner, name = repo },
+            $"{_gitHub.Owner}/{repo}",
+            ct
+        );
+
+        var facts = new Dictionary<int, PrReviewFacts>();
+        foreach (var pull in data?.Repository?.PullRequests?.Nodes ?? [])
+        {
+            facts[pull.Number] = ToReviewFacts(pull);
+        }
+        return facts;
+    }
+
+    private async Task<T?> PostGraphQlAsync<T>(string query, object variables, string subject, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Post, "graphql")
+        {
+            Content = JsonContent.Create(new { query, variables }, options: GraphQlSerializerOptions),
+        };
+        AddStandardHeaders(request);
+
+        using var response = await httpClient.SendAsync(request, ct);
+        GuardResponse(response, "graphql", affectsAuthState: false);
+        _ = response.EnsureSuccessStatusCode();
+
+        var envelope = await response.Content.ReadFromJsonAsync<GraphQlEnvelope<T>>(GraphQlSerializerOptions, ct);
+
+        // GraphQL reports failures as HTTP 200 with an errors array. Surfacing them as
+        // HttpRequestException means the enrichment worker's existing catch keeps the
+        // last-known-good cache rather than writing a partial result.
+        if (envelope?.Errors is { Count: > 0 } errors)
+        {
+            throw new HttpRequestException(
+                $"GitHub GraphQL returned {errors.Count} error(s) for {subject}: {errors[0].Message}"
+            );
+        }
+
+        return envelope is null ? default : envelope.Data;
+    }
 
     public async Task<IReadOnlyList<GitHubRepoDto>> ListRepositoriesAsync(CancellationToken ct)
     {
@@ -629,10 +720,7 @@ public sealed class GitHubOrgClient(
     private async Task<T?> SendAsync<T>(string url, CancellationToken ct, bool affectsAuthState = true)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
-        request.Headers.Add("User-Agent", "fixportal-ci-backend");
-        request.Headers.Add("Accept", "application/vnd.github+json");
-        request.Headers.Authorization = new("Bearer", _gitHub.Token);
+        AddStandardHeaders(request);
 
         // Conditional GET: a matching validator yields 304 Not Modified, which GitHub
         // serves without charging the primary rate limit. We then return the payload
@@ -654,6 +742,30 @@ public sealed class GitHubOrgClient(
             return default;
         }
 
+        GuardResponse(response, url, affectsAuthState);
+        _ = response.EnsureSuccessStatusCode();
+
+        var value = await response.Content.ReadFromJsonAsync<T>(SerializerOptions, ct);
+
+        // Remember the validator + payload so the next cycle can revalidate cheaply.
+        if (response.Headers.ETag is { } etag)
+        {
+            etags.Set(url, etag, value);
+        }
+
+        return value;
+    }
+
+    private void AddStandardHeaders(HttpRequestMessage request)
+    {
+        request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
+        request.Headers.Add("User-Agent", "fixportal-ci-backend");
+        request.Headers.Add("Accept", "application/vnd.github+json");
+        request.Headers.Authorization = new("Bearer", _gitHub.Token);
+    }
+
+    private void GuardResponse(HttpResponseMessage response, string url, bool affectsAuthState)
+    {
         if (response.StatusCode == HttpStatusCode.Unauthorized)
         {
             var err =
@@ -688,17 +800,6 @@ public sealed class GitHubOrgClient(
                 $"GitHub rate limit reached (HTTP {(int)response.StatusCode}) for {url}."
             );
         }
-        _ = response.EnsureSuccessStatusCode();
-
-        var value = await response.Content.ReadFromJsonAsync<T>(SerializerOptions, ct);
-
-        // Remember the validator + payload so the next cycle can revalidate cheaply.
-        if (response.Headers.ETag is { } etag)
-        {
-            etags.Set(url, etag, value);
-        }
-
-        return value;
     }
 
     private static bool IsRateLimited(HttpResponseMessage response)
