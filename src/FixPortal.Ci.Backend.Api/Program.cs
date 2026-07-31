@@ -109,7 +109,28 @@ builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
 builder.Services.AddSingleton<GitHubInventoryCache>();
 builder.Services.AddSingleton<PerRepoCache<RepoMetrics>>();
 builder.Services.AddSingleton<PerRepoCache<MergedPullRequest>>();
-builder.Services.AddSingleton<PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>>();
+// Unlike its neighbours above, this cache IS given a max-age. An expired review
+// signal must read as "unknown" (no pills), never as a stale pass: while
+// CollectAsync keeps soft-failing (GraphQL 5xx, rate limit, a PAT losing a scope
+// — all caught and returned as null), the base RepoEnrichmentWorker preserves
+// last-known-good forever, and the board refresh keeps re-attaching those stale
+// signals to a PR that has since been pushed to. That is the exact false-pass the
+// head-scoping in ReviewSignalFactory/PrReviewFacts exists to prevent, so it must
+// not be reintroduced at the cache layer. Nothing re-inherits this cache the way
+// InheritEnrichment re-inherits Metrics/Deploys/Packages/LastMergedPr across a
+// degraded refresh — PullRequests (and ReviewSignals within it) is not in that
+// list — so an expired entry genuinely produces ReviewSignals = null rather than
+// silently persisting through the "ineffective TTL" path the comment above
+// documents for the job-lane caches. TTL is 3x the configured refresh interval so
+// one or two transient soft-fails do not expire a signal that is still current.
+builder.Services.AddSingleton(sp =>
+{
+    var reviewSignals = sp.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value;
+    return new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(
+        sp.GetRequiredService<IClock>(),
+        Duration.FromSeconds(3 * reviewSignals.RefreshSeconds)
+    );
+});
 
 // Last-known-good, no TTL — consistent with the metrics and merged-PR caches above.
 // A max-age here was ineffective: InheritEnrichment re-inherits an expired lane
