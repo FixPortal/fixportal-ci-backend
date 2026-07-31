@@ -10,11 +10,17 @@ namespace FixPortal.Ci.Backend.Api.Tests.Integrations;
 
 public class GitHubReviewFactsTests
 {
+    // Default head oid shared by Pull/Review/Thread below so ordinary fixtures land on
+    // the head commit without every test having to plumb it through by hand. Tests that
+    // care about commit-scoping override it explicitly.
+    private const string HeadOid = "head-sha";
+
     private static ReviewFactsPull Pull(
         IReadOnlyList<GraphQlThread>? threads = null,
         IReadOnlyList<GraphQlReview>? reviews = null,
         IReadOnlyList<GraphQlLabel>? labels = null,
-        IReadOnlyList<GraphQlContext>? checks = null
+        IReadOnlyList<GraphQlContext>? checks = null,
+        string? headOid = HeadOid
     ) =>
         new(
             181,
@@ -22,13 +28,27 @@ public class GitHubReviewFactsTests
             new NodeList<GraphQlLabel>(labels ?? []),
             new NodeList<GraphQlReview>(reviews ?? []),
             new NodeList<GraphQlThread>(threads ?? []),
-            new NodeList<GraphQlCommitNode>(
-                [new GraphQlCommitNode(new GraphQlCommit(new GraphQlRollup(new NodeList<GraphQlContext>(checks ?? []))))]
-            )
+            headOid is null
+                ? new NodeList<GraphQlCommitNode>([])
+                : new NodeList<GraphQlCommitNode>(
+                    [
+                        new GraphQlCommitNode(
+                            new GraphQlCommit(headOid, new GraphQlRollup(new NodeList<GraphQlContext>(checks ?? [])))
+                        ),
+                    ]
+                )
         );
 
-    private static GraphQlThread Thread(string author, bool resolved) =>
-        new(resolved, new NodeList<GraphQlComment>([new GraphQlComment(new GraphQlActor(author))]));
+    private static GraphQlReview Review(string author, string? commitOid = HeadOid) =>
+        new(new GraphQlActor(author), commitOid is null ? null : new GraphQlCommit(commitOid, null));
+
+    private static GraphQlThread Thread(string author, bool resolved, string? commitOid = HeadOid) =>
+        new(
+            resolved,
+            new NodeList<GraphQlComment>(
+                [new GraphQlComment(new GraphQlActor(author), commitOid is null ? null : new GraphQlCommit(commitOid, null))]
+            )
+        );
 
     [Fact]
     public void Counts_only_unresolved_threads_and_keys_them_by_the_first_comment_author()
@@ -47,15 +67,64 @@ public class GitHubReviewFactsTests
         var facts = GitHubOrgClient.ToReviewFacts(Pull(threads: [Thread("gitar-app", true)]));
 
         _ = facts.UnresolvedThreadsByAuthor.Should().NotContainKey("gitar-app");
-        _ = facts.ParticipatingAuthors.Should().Contain("gitar-app");
+        _ = facts.HeadParticipatingAuthors.Should().Contain("gitar-app");
     }
 
     [Fact]
     public void Records_a_review_author_as_participation()
     {
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(reviews: [new GraphQlReview(new GraphQlActor("gitar-app"))]));
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(reviews: [Review("gitar-app")]));
 
-        _ = facts.ParticipatingAuthors.Should().Contain("gitar-app");
+        _ = facts.HeadParticipatingAuthors.Should().Contain("gitar-app");
+    }
+
+    [Fact]
+    public void A_review_on_the_head_commit_counts_as_head_participation()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(reviews: [Review("gitar-app", commitOid: HeadOid)], headOid: HeadOid));
+
+        _ = facts.HeadParticipatingAuthors.Should().Contain("gitar-app");
+    }
+
+    [Fact]
+    public void A_review_on_an_older_commit_does_not_count_as_head_participation()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(reviews: [Review("gitar-app", commitOid: "old-sha")], headOid: HeadOid));
+
+        _ = facts.HeadParticipatingAuthors.Should().NotContain("gitar-app");
+    }
+
+    [Fact]
+    public void A_thread_comment_on_the_head_commit_counts_as_head_participation()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(threads: [Thread("coderabbitai", resolved: true, commitOid: HeadOid)], headOid: HeadOid)
+        );
+
+        _ = facts.HeadParticipatingAuthors.Should().Contain("coderabbitai");
+    }
+
+    [Fact]
+    public void A_thread_comment_on_an_older_commit_does_not_count_as_head_participation_but_still_counts_when_unresolved()
+    {
+        // Unresolved-thread counting is unchanged by head-scoping: an open finding from
+        // an older commit is still open and must still produce Outstanding.
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(threads: [Thread("coderabbitai", resolved: false, commitOid: "old-sha")], headOid: HeadOid)
+        );
+
+        _ = facts.HeadParticipatingAuthors.Should().NotContain("coderabbitai");
+        _ = facts.UnresolvedThreadsByAuthor["coderabbitai"].Should().Be(1);
+    }
+
+    [Fact]
+    public void A_null_head_oid_yields_no_head_participation()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(reviews: [Review("gitar-app")], threads: [Thread("coderabbitai", resolved: true)], headOid: null)
+        );
+
+        _ = facts.HeadParticipatingAuthors.Should().BeEmpty();
     }
 
     [Fact]
@@ -98,11 +167,20 @@ public class GitHubReviewFactsTests
     }
 
     [Fact]
-    public void Matches_logins_case_insensitively_so_config_casing_cannot_silently_miss()
+    public void Matches_logins_and_labels_case_insensitively_so_config_casing_cannot_silently_miss()
     {
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(threads: [Thread("CodeRabbitAI", false)]));
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(
+                threads: [Thread("CodeRabbitAI", false)],
+                labels: [new GraphQlLabel("Review-High")],
+                checks: [new GraphQlContext("CodeQL", "SUCCESS", new GraphQlCheckSuite(new GraphQlApp("GitHub-Code-Scanning")))]
+            )
+        );
 
         _ = facts.UnresolvedThreadsByAuthor.ContainsKey("coderabbitai").Should().BeTrue();
+        _ = facts.HeadParticipatingAuthors.Contains("coderabbitai").Should().BeTrue();
+        _ = facts.Labels.Contains("review-high").Should().BeTrue();
+        _ = facts.SuccessfulCheckAppSlugs.Contains("github-code-scanning").Should().BeTrue();
     }
 }
 

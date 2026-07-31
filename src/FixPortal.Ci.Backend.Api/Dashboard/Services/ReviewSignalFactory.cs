@@ -42,7 +42,7 @@ public static class ReviewSignalFactory
         string prHtmlUrl
     )
     {
-        if (reviewer.RequiredLabel is { Length: > 0 } label && !facts.Labels.Contains(label))
+        if (reviewer.RequiredLabel is { } label && !string.IsNullOrWhiteSpace(label) && !facts.Labels.Contains(label))
         {
             return new ReviewSignal(reviewer.Name, ReviewSignalState.Disabled, null, null);
         }
@@ -90,7 +90,10 @@ public static class ReviewSignalFactory
             return new ReviewSignal(reviewer.Name, ReviewSignalState.Outstanding, unresolved, $"{prHtmlUrl}/files");
         }
 
-        var ran = facts.ParticipatingAuthors.Contains(login) || facts.SuccessfulCheckAppSlugs.Contains(login);
+        // A passing check is not evidence a reviewer ran: CodeRabbit's "rate limited" /
+        // "review skipped" checks pass by design so they never block a protected-branch
+        // merge. Only actual participation (a review or an opened thread) counts.
+        var ran = facts.HeadParticipatingAuthors.Contains(login);
         return ran
             ? new ReviewSignal(reviewer.Name, ReviewSignalState.Clean, null, null)
             : new ReviewSignal(reviewer.Name, ReviewSignalState.Pending, null, null);
