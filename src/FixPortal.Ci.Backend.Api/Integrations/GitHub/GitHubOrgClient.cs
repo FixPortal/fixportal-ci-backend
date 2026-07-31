@@ -510,12 +510,11 @@ public sealed class GitHubOrgClient(
             // The FIRST comment's author owns the thread. A human replying to a bot's
             // finding must not re-attribute that thread to the human.
             var comment = thread.Comments?.Nodes is { Count: > 0 } comments ? comments[0] : null;
-            var author = comment?.Author?.Login;
-            if (author is not { Length: > 0 })
+            if (comment?.Author?.Login is not { Length: > 0 } author)
             {
                 continue;
             }
-            if (IsHeadCommit(comment?.OriginalCommit?.Oid, headOid))
+            if (IsHeadCommit(comment.OriginalCommit?.Oid, headOid))
             {
                 _ = headParticipating.Add(author);
             }
