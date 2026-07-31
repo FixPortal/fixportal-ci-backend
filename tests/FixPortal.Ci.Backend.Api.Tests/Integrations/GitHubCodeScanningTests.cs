@@ -3,6 +3,7 @@ using System.Text;
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -24,12 +25,13 @@ public class GitHubCodeScanningTests
         }
     }
 
-    private static GitHubOrgClient CreateClient(HttpClient http) =>
+    private static GitHubOrgClient CreateClient(HttpClient http, ILogger<GitHubOrgClient>? logger = null) =>
         new(
             http,
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
             Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 }),
-            new GitHubETagStore()
+            new GitHubETagStore(),
+            logger: logger
         );
 
     private static HttpClient Responding(HttpStatusCode status, string body = "[]")
@@ -115,5 +117,36 @@ public class GitHubCodeScanningTests
         // Null, not empty: an empty dictionary would render the CodeQL pill green,
         // claiming a clean scan that never ran.
         _ = counts.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task A_successful_read_clears_the_one_time_permission_warning_so_a_regression_re_warns()
+    {
+        // 403 (scope missing) -> OK (operator fixed the PAT) -> 403 (regressed). The
+        // warning must fire for BOTH failures: if a successful read did not clear the
+        // warned-flag, the second 403 would be silent until a process restart.
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([
+                new HttpResponseMessage(HttpStatusCode.Forbidden),
+                JsonOk("""[{"most_recent_instance":{"ref":"refs/pull/181/head"}}]"""),
+                new HttpResponseMessage(HttpStatusCode.Forbidden),
+            ])
+        );
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var logger = new CapturingLogger<GitHubOrgClient>();
+        var client = CreateClient(http, logger);
+
+        _ = await client.GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
+        var recovered = await client.GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
+        _ = await client.GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
+
+        _ = recovered.Should().NotBeNull();
+        _ = recovered![181].Should().Be(1);
+        _ = logger.Entries.Count(e => e.Level == LogLevel.Warning).Should().Be(2);
+        _ = logger
+            .Entries.Should()
+            .Contain(e =>
+                e.Level == LogLevel.Information && e.Message.Contains("readable again", StringComparison.Ordinal)
+            );
     }
 }

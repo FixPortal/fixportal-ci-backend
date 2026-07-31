@@ -421,6 +421,17 @@ public sealed class GitHubOrgClient(
                 return null;
             }
 
+            // The endpoint answered, so any earlier one-time warning is stale: clear it
+            // so a permission regression later in the process re-warns, and make the
+            // recovery visible rather than just the absence of a warning.
+            if (_codeScanningWarned.TryRemove(repo, out _))
+            {
+                logger?.LogInformation(
+                    "Code-scanning alerts are readable again for {Repo}; the earlier permission warning has cleared.",
+                    repo
+                );
+            }
+
             // SendAsync maps 404 to default(T) — repo has scanning disabled entirely.
             if (batch is null)
             {
