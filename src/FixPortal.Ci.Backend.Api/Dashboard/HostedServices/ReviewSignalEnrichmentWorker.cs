@@ -106,8 +106,13 @@ public sealed class ReviewSignalEnrichmentWorker(
             }
             return signals;
         }
+        // GitHubAuthException belongs with the soft-fail transports: a PAT missing the
+        // GraphQL scope must degrade to last-known-good and let cold start converge,
+        // matching the code-scanning path in GetOpenCodeScanningAlertCountsAsync. Letting
+        // it escape counts as a per-repo sweep failure and cold start retries every
+        // 5 minutes indefinitely — worse than a stale pill, and unfixable-looking.
         catch (Exception ex)
-            when (ex is HttpRequestException or GitHubRateLimitException
+            when (ex is HttpRequestException or GitHubRateLimitException or GitHubAuthException
                 || ex is TaskCanceledException && !ct.IsCancellationRequested
             )
         {

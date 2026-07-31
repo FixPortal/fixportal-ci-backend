@@ -21,6 +21,13 @@ internal sealed class TrackingFakeTimeProvider : FakeTimeProvider
 
     public TaskCompletionSource RetryDelayScheduled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+    // Fires when the steady-state PeriodicTimer is registered — the event-driven proof
+    // that RunColdStartAsync returned (converged) rather than parking on the 5-minute
+    // retry delay. Any timer that is neither the jitter delay nor the retry delay can
+    // only be the cadence timer.
+    public TaskCompletionSource SteadyStateTimerScheduled { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         var timer = base.CreateTimer(callback, state, dueTime, period);
@@ -31,6 +38,10 @@ internal sealed class TrackingFakeTimeProvider : FakeTimeProvider
         else if (dueTime == TimeSpan.FromMinutes(5))
         {
             RetryDelayScheduled.TrySetResult();
+        }
+        else
+        {
+            SteadyStateTimerScheduled.TrySetResult();
         }
 
         return timer;
