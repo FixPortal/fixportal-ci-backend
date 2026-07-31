@@ -137,13 +137,18 @@ builder.Services.AddSingleton<PerRepoCache<MergedPullRequest>>();
 // last-known-good forever, and the board refresh keeps re-attaching those stale
 // signals to a PR that has since been pushed to. That is the exact false-pass the
 // head-scoping in ReviewSignalFactory/PrReviewFacts exists to prevent, so it must
-// not be reintroduced at the cache layer. Nothing re-inherits this cache the way
-// InheritEnrichment re-inherits Metrics/Deploys/Packages/LastMergedPr across a
-// degraded refresh — PullRequests (and ReviewSignals within it) is not in that
-// list — so an expired entry genuinely produces ReviewSignals = null rather than
-// silently persisting through the "ineffective TTL" path the comment above
-// documents for the job-lane caches. TTL is 3x the configured refresh interval so
-// one or two transient soft-fails do not expire a signal that is still current.
+// not be reintroduced at the cache layer. TTL is 3x the configured refresh interval
+// so one or two transient soft-fails do not expire a signal that is still current.
+//
+// TWO separate mechanisms could otherwise re-inherit a stale signal past this TTL,
+// and both are closed. InheritEnrichment never carries PullRequests — only
+// Metrics/Deploys/Packages/LastMergedPr — so it cannot. MergeWithPrevious CAN: it
+// substitutes a failed repo's whole prior RepositorySnapshot, PullRequests included,
+// and chains it forward every cycle, which would outlive this TTL entirely; it
+// therefore strips ReviewSignals from anything it reinstates (see
+// DashboardRefreshService.WithoutReviewSignals). With both closed, an expired entry
+// genuinely produces ReviewSignals = null rather than persisting through the
+// "ineffective TTL" path the comment below documents for the job-lane caches.
 builder.Services.AddSingleton(sp =>
 {
     var reviewSignals = sp.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value;
