@@ -66,8 +66,26 @@ public class ReviewSignalsOptionsValidationTests
     private static void Start(IReadOnlyDictionary<string, string> settings)
     {
         var factory = new ValidationFactory(settings);
-        var client = factory.CreateClient();
-        client.Dispose();
+        try
+        {
+            using var client = factory.CreateClient();
+        }
+        catch (Exception startupException)
+        {
+            var startupFailure = System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(startupException);
+            try
+            {
+                factory.Dispose();
+            }
+            catch (Exception disposalException)
+            {
+                // Preserve the validation failure if cleanup also fails after a partial startup.
+                startupException.Data["FactoryDisposalException"] = disposalException;
+            }
+
+            startupFailure.Throw();
+        }
+
         factory.Dispose();
     }
 
