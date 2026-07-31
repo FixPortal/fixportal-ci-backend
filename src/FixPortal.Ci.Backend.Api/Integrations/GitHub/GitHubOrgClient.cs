@@ -117,6 +117,7 @@ public sealed class GitHubOrgClient(
           rateLimit { cost remaining resetAt }
           repository(owner: $owner, name: $name) {
             pullRequests(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
+              pageInfo { hasNextPage }
               nodes {
                 number
                 author { login }
@@ -174,10 +175,15 @@ public sealed class GitHubOrgClient(
     public GraphQlRateLimit? LastGraphQlRateLimit { get; private set; }
 
     /// <summary>
-    /// One query per repo covering every open pull request. Batched deliberately: a
+    /// One query per repo covering open pull requests. Batched deliberately: a
     /// per-PR query would multiply the request count by the open-PR total and break
     /// the rate budget. affectsAuthState is false throughout — this is a supplementary
     /// signal and a token missing a scope here must not flip /api/health.
+    /// The connection is capped at the 50 most recently updated open PRs (first: 50,
+    /// no cursor pagination — the nested connections are capped the same way, so every
+    /// level of this query trades completeness for a bounded rate cost). A repo past
+    /// the cap gets no signals for the overflow PRs, which would be invisible without
+    /// the hasNextPage warning below.
     /// </summary>
     public async Task<IReadOnlyDictionary<int, PrReviewFacts>> GetPullRequestReviewFactsAsync(
         string repo,
@@ -192,6 +198,14 @@ public sealed class GitHubOrgClient(
         );
 
         LastGraphQlRateLimit = data?.RateLimit;
+
+        if (data?.Repository?.PullRequests?.PageInfo?.HasNextPage == true)
+        {
+            logger?.LogWarning(
+                "{Repo} has more than 50 open pull requests; review signals cover only the 50 most recently updated.",
+                repo
+            );
+        }
 
         var facts = new Dictionary<int, PrReviewFacts>();
         foreach (var pull in data?.Repository?.PullRequests?.Nodes ?? [])
