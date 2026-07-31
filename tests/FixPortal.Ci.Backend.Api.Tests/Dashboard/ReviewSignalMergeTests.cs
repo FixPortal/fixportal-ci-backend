@@ -18,12 +18,16 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 public class ReviewSignalMergeTests
 {
     private static PullRequest Pr(int number) =>
-        new(number, $"PR {number}", "chris", $"https://github.com/FixPortal/repo/pull/{number}", false, Instant.FromUnixTimeSeconds(1));
+        new(
+            number,
+            $"PR {number}",
+            "chris",
+            $"https://github.com/FixPortal/repo/pull/{number}",
+            false,
+            Instant.FromUnixTimeSeconds(1)
+        );
 
-    private static readonly IReadOnlyList<ReviewSignal> Signals =
-    [
-        new("Gitar", ReviewSignalState.Clean, null, null),
-    ];
+    private static readonly IReadOnlyList<ReviewSignal> Signals = [new("Gitar", ReviewSignalState.Clean, null, null)];
 
     [Fact]
     public void Attaches_signals_to_the_matching_pull_request_only()
@@ -68,7 +72,10 @@ public class ReviewSignalMergeTests
     public void An_expired_review_signal_cache_entry_reads_as_a_miss_so_the_snapshot_carries_no_signals()
     {
         var clock = new FakeClock(Instant.FromUnixTimeSeconds(1000));
-        var cache = new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(clock, Duration.FromMinutes(10));
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(
+            clock,
+            Duration.FromMinutes(10)
+        );
         cache.Update("repo", new Dictionary<int, IReadOnlyList<ReviewSignal>> { [181] = Signals });
 
         clock.AdvanceMinutes(11);
@@ -94,7 +101,10 @@ public class ReviewSignalWorkerGatingTests
         public int Calls => _calls;
         public TaskCompletionSource RequestReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             _ = Interlocked.Increment(ref _calls);
             RequestReceived.TrySetResult();
@@ -103,7 +113,10 @@ public class ReviewSignalWorkerGatingTests
                 ? """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"}]"""
                 : "[]";
             return Task.FromResult(
-                new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") }
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                }
             );
         }
     }
@@ -173,7 +186,10 @@ public class ReviewSignalWorkerGatingTests
         );
 
         await worker.StartAsync(TestContext.Current.CancellationToken);
-        await timeProvider.InitialDelayScheduled.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await timeProvider.InitialDelayScheduled.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
         timeProvider.Advance(TimeSpan.FromSeconds(15));
         await handler.RequestReceived.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
@@ -191,15 +207,20 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 {
     private const string RepoName = "repo-a";
 
-    private sealed class RoutingHandler(string factsJson, HttpStatusCode alertsStatus, string alertsJson) : HttpMessageHandler
+    private sealed class RoutingHandler(string factsJson, HttpStatusCode alertsStatus, string alertsJson)
+        : HttpMessageHandler
     {
         // The alerts endpoint is always the LAST network call CollectAsync makes for
         // every scenario this class drives (every test configures a CodeScanning
         // reviewer, so needsAlerts is always true) — it is therefore the real
         // completion signal a test can await, rather than a fixed real-time budget.
-        public TaskCompletionSource AlertsRequestReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource AlertsRequestReceived { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             var path = request.RequestUri!.AbsolutePath;
             var isAlertsRequest = path.Contains("code-scanning/alerts", StringComparison.Ordinal);
@@ -268,9 +289,15 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         // ReviewSignalWorkerGatingTests.Issues_requests_once_enabled_and_past_the_initial_jitter),
         // then wait for the alerts call — CollectAsync's last network request — to
         // land before touching the cache at all.
-        await timeProvider.InitialDelayScheduled.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await timeProvider.InitialDelayScheduled.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
         timeProvider.Advance(TimeSpan.FromSeconds(15));
-        await handler.AlertsRequestReceived.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await handler.AlertsRequestReceived.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
 
         // The alerts response landing does not itself prove RunSweepAsync's
         // cache.Update has run yet — a few more continuations (JSON parsing,
@@ -333,7 +360,11 @@ public class ReviewSignalEnrichmentWorkerCollectTests
     [InlineData("renovate")]
     public async Task An_excluded_authors_pull_request_carries_no_signals_at_all(string author)
     {
-        var handler = new RoutingHandler(FactsJson(author, includeSuccessfulCodeScanningCheck: true), HttpStatusCode.OK, "[]");
+        var handler = new RoutingHandler(
+            FactsJson(author, includeSuccessfulCodeScanningCheck: true),
+            HttpStatusCode.OK,
+            "[]"
+        );
         var options = new ReviewSignalsOptions
         {
             Reviewers = [new ReviewerOptions { Name = "CodeQL", Source = ReviewerSource.CodeScanning }],

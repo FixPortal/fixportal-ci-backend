@@ -30,13 +30,11 @@ public class GitHubReviewFactsTests
             new NodeList<GraphQlThread>(threads ?? []),
             headOid is null
                 ? new NodeList<GraphQlCommitNode>([])
-                : new NodeList<GraphQlCommitNode>(
-                    [
-                        new GraphQlCommitNode(
-                            new GraphQlCommit(headOid, new GraphQlRollup(new NodeList<GraphQlContext>(checks ?? [])))
-                        ),
-                    ]
-                )
+                : new NodeList<GraphQlCommitNode>([
+                    new GraphQlCommitNode(
+                        new GraphQlCommit(headOid, new GraphQlRollup(new NodeList<GraphQlContext>(checks ?? [])))
+                    ),
+                ])
         );
 
     private static GraphQlReview Review(string author, string? commitOid = HeadOid) =>
@@ -45,16 +43,27 @@ public class GitHubReviewFactsTests
     private static GraphQlThread Thread(string author, bool resolved, string? commitOid = HeadOid) =>
         new(
             resolved,
-            new NodeList<GraphQlComment>(
-                [new GraphQlComment(new GraphQlActor(author), commitOid is null ? null : new GraphQlCommit(commitOid, null))]
-            )
+            new NodeList<GraphQlComment>([
+                new GraphQlComment(
+                    new GraphQlActor(author),
+                    commitOid is null ? null : new GraphQlCommit(commitOid, null)
+                ),
+            ])
         );
 
     [Fact]
     public void Counts_only_unresolved_threads_and_keys_them_by_the_first_comment_author()
     {
         var facts = GitHubOrgClient.ToReviewFacts(
-            Pull(threads: [Thread("coderabbitai", false), Thread("coderabbitai", false), Thread("coderabbitai", true), Thread("chris", false)])
+            Pull(
+                threads:
+                [
+                    Thread("coderabbitai", false),
+                    Thread("coderabbitai", false),
+                    Thread("coderabbitai", true),
+                    Thread("chris", false),
+                ]
+            )
         );
 
         _ = facts.UnresolvedThreadsByAuthor["coderabbitai"].Should().Be(2);
@@ -64,7 +73,9 @@ public class GitHubReviewFactsTests
     [Fact]
     public void A_review_on_the_head_commit_counts_as_head_participation()
     {
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(reviews: [Review("gitar-app", commitOid: HeadOid)], headOid: HeadOid));
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(reviews: [Review("gitar-app", commitOid: HeadOid)], headOid: HeadOid)
+        );
 
         _ = facts.HeadParticipatingAuthors.Should().Contain("gitar-app");
     }
@@ -72,7 +83,9 @@ public class GitHubReviewFactsTests
     [Fact]
     public void A_review_on_an_older_commit_does_not_count_as_head_participation()
     {
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(reviews: [Review("gitar-app", commitOid: "old-sha")], headOid: HeadOid));
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(reviews: [Review("gitar-app", commitOid: "old-sha")], headOid: HeadOid)
+        );
 
         _ = facts.HeadParticipatingAuthors.Should().NotContain("gitar-app");
     }
@@ -177,7 +190,10 @@ public class GitHubReviewFactsTransportTests
         // the body has to be captured here rather than read off Requests afterwards.
         public List<string> Bodies { get; } = [];
 
-        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             Requests.Add(request);
             if (request.Content is not null)
@@ -263,7 +279,9 @@ public class GitHubReviewFactsTransportTests
     public async Task Throws_when_graphql_reports_errors_in_a_200_response()
     {
         var handler = new ScriptedHandler(
-            new Queue<HttpResponseMessage>([Json("""{"data":null,"errors":[{"message":"Could not resolve to a Repository"}]}""")])
+            new Queue<HttpResponseMessage>([
+                Json("""{"data":null,"errors":[{"message":"Could not resolve to a Repository"}]}"""),
+            ])
         );
         using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
 

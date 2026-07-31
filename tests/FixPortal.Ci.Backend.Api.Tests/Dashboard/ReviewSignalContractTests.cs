@@ -22,7 +22,15 @@ public class ReviewSignalContractTests
     };
 
     private static PullRequest Pr(IReadOnlyList<ReviewSignal>? signals = null) =>
-        new(7, "Add widget", "alice", "https://github.com/FixPortal/repo/pull/7", false, Instant.FromUnixTimeSeconds(1000), signals);
+        new(
+            7,
+            "Add widget",
+            "alice",
+            "https://github.com/FixPortal/repo/pull/7",
+            false,
+            Instant.FromUnixTimeSeconds(1000),
+            signals
+        );
 
     [Fact]
     public void Pull_request_defaults_to_no_review_signals()
@@ -33,12 +41,16 @@ public class ReviewSignalContractTests
     [Fact]
     public void Review_signal_state_serializes_as_a_camel_case_string()
     {
-        var json = JsonSerializer.Serialize(new ReviewSignal("CodeQL", ReviewSignalState.Outstanding, 2, null), Options);
+        var json = JsonSerializer.Serialize(
+            new ReviewSignal("CodeQL", ReviewSignalState.Outstanding, 2, null),
+            Options
+        );
         _ = json.Should().Contain("\"outstanding\"").And.Contain("\"count\":2");
     }
 }
 
-public class ReviewSignalEndpointTests(WebApplicationFactory<Program> factory) : IClassFixture<WebApplicationFactory<Program>>
+public class ReviewSignalEndpointTests(WebApplicationFactory<Program> factory)
+    : IClassFixture<WebApplicationFactory<Program>>
 {
     private HttpClient CreateClient(DashboardSnapshot snapshot) =>
         factory
@@ -50,7 +62,10 @@ public class ReviewSignalEndpointTests(WebApplicationFactory<Program> factory) :
                     _ = services.RemoveAll<IHostedService>();
                     _ = services.RemoveAll<DashboardSnapshotState>();
                     var state = new DashboardSnapshotState();
-                    state.Update(snapshot, DashboardSnapshotState.ComputePublicSnapshot(snapshot, snapshot.PublicCiTrend));
+                    state.Update(
+                        snapshot,
+                        DashboardSnapshotState.ComputePublicSnapshot(snapshot, snapshot.PublicCiTrend)
+                    );
                     _ = services.AddSingleton(state);
                 });
             })
@@ -68,7 +83,16 @@ public class ReviewSignalEndpointTests(WebApplicationFactory<Program> factory) :
                     "https://github.com/FixPortal/repo",
                     false,
                     [],
-                    [new PullRequest(7, "Add widget", "alice", "https://github.com/FixPortal/repo/pull/7", false, Instant.FromUnixTimeSeconds(1000))],
+                    [
+                        new PullRequest(
+                            7,
+                            "Add widget",
+                            "alice",
+                            "https://github.com/FixPortal/repo/pull/7",
+                            false,
+                            Instant.FromUnixTimeSeconds(1000)
+                        ),
+                    ],
                     null,
                     [],
                     []

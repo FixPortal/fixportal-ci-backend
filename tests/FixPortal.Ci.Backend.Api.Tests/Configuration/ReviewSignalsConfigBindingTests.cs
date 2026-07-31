@@ -34,7 +34,9 @@ public class ReviewSignalsConfigBindingTests(WebApplicationFactory<Program> fact
         // Both spellings of each dependency bot: GraphQL reports a Bot node's login
         // without the "[bot]" suffix, which is a REST-ism, so a suffix-only list would
         // silently match nothing and put pills on every Dependabot PR.
-        _ = options.ExcludedAuthors.Should().BeEquivalentTo("dependabot", "dependabot[bot]", "renovate", "renovate[bot]");
+        _ = options
+            .ExcludedAuthors.Should()
+            .BeEquivalentTo("dependabot", "dependabot[bot]", "renovate", "renovate[bot]");
     }
 }
 
@@ -45,7 +47,8 @@ public class ReviewSignalsConfigBindingTests(WebApplicationFactory<Program> fact
 // rather than failing loudly at boot.
 public class ReviewSignalsOptionsValidationTests
 {
-    private sealed class ValidationFactory(IReadOnlyDictionary<string, string> settings) : WebApplicationFactory<Program>
+    private sealed class ValidationFactory(IReadOnlyDictionary<string, string> settings)
+        : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {

@@ -21,13 +21,14 @@ public sealed class ReviewSignalEnrichmentWorker(
     IOptions<GitHubOptions> gitHub,
     TimeProvider timeProvider,
     ILogger<ReviewSignalEnrichmentWorker> logger
-) : RepoEnrichmentWorker<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(
-    client,
-    inventory,
-    cache,
-    timeProvider,
-    logger
 )
+    : RepoEnrichmentWorker<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(
+        client,
+        inventory,
+        cache,
+        timeProvider,
+        logger
+    )
 {
     // No reviewers configured means the feature is off: the base class logs once and
     // the worker idles without issuing a single request.
