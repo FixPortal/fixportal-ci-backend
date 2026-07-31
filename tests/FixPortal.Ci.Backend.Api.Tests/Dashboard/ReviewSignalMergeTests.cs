@@ -85,16 +85,19 @@ public class ReviewSignalWorkerGatingTests
 {
     // Serves the one-repo org listing so a sweep past the gate has something to
     // collect against; every other path answers an empty JSON array. Calls is
-    // incremented with Interlocked because the positive-control test below races
-    // the fake-time-driven sweep against the assertion thread.
+    // incremented with Interlocked, and RequestReceived fires on the first call,
+    // because the positive-control test below awaits it from a different thread
+    // than the fake-time-driven sweep that sets it.
     private sealed class RecordingHandler : HttpMessageHandler
     {
         private int _calls;
         public int Calls => _calls;
+        public TaskCompletionSource RequestReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _ = Interlocked.Increment(ref _calls);
+            RequestReceived.TrySetResult();
             var path = request.RequestUri!.AbsolutePath;
             var body = path.EndsWith("/repos", StringComparison.Ordinal)
                 ? """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"}]"""
@@ -137,8 +140,11 @@ public class ReviewSignalWorkerGatingTests
         // before the jitter delay). If Enabled were wrongly true it would instead
         // park on WaitForInitialJitterAsync forever, so this await — with a bounded
         // timeout rather than an unbounded one — is what makes the test fail for the
-        // right reason instead of vacuously passing on an un-awaited StartAsync.
-        await worker.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(2), TestContext.Current.CancellationToken);
+        // right reason instead of vacuously passing on an un-awaited StartAsync. The
+        // timeout is generous (30s, not a tight budget) because a disabled worker
+        // returns synchronously and does not depend on scheduling latency; a stalled
+        // runner should still report the real failure rather than a race.
+        await worker.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         _ = worker.ExecuteTask!.IsCompletedSuccessfully.Should().BeTrue();
         _ = handler.Calls.Should().Be(0);
@@ -152,8 +158,14 @@ public class ReviewSignalWorkerGatingTests
         // Positive control: proves the harness can observe a real HTTP call when the
         // worker is genuinely enabled, so the negative test above cannot be passing
         // merely because nothing in this setup is capable of making a request.
+        //
+        // Event-driven, not wall-clock-budgeted: await InitialDelayScheduled so the
+        // fake clock is only advanced once the jitter timer is genuinely registered
+        // (advancing sooner races the worker's own thread-pool scheduling), then
+        // await RequestReceived so the assertion runs only once the real request has
+        // actually landed rather than after a fixed real-time window.
         var handler = new RecordingHandler();
-        var timeProvider = new FakeTimeProvider();
+        var timeProvider = new TrackingFakeTimeProvider();
         var worker = NewWorker(
             handler,
             new ReviewSignalsOptions { Reviewers = [new ReviewerOptions { Name = "Gitar", BotLogin = "gitar-app" }] },
@@ -161,17 +173,9 @@ public class ReviewSignalWorkerGatingTests
         );
 
         await worker.StartAsync(TestContext.Current.CancellationToken);
-
-        // The fake-time jitter timer's registration can lag the call to StartAsync by
-        // a beat of real scheduling, so a single Advance can race it. Step the clock
-        // repeatedly (well past the 15s jitter ceiling) with a real yield between
-        // steps, rather than betting on one Advance landing after the timer exists.
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
-        while (handler.Calls == 0 && DateTime.UtcNow < deadline)
-        {
-            timeProvider.Advance(TimeSpan.FromSeconds(1));
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await timeProvider.InitialDelayScheduled.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        timeProvider.Advance(TimeSpan.FromSeconds(15));
+        await handler.RequestReceived.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         _ = handler.Calls.Should().BeGreaterThan(0);
 
@@ -189,9 +193,16 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 
     private sealed class RoutingHandler(string factsJson, HttpStatusCode alertsStatus, string alertsJson) : HttpMessageHandler
     {
+        // The alerts endpoint is always the LAST network call CollectAsync makes for
+        // every scenario this class drives (every test configures a CodeScanning
+        // reviewer, so needsAlerts is always true) — it is therefore the real
+        // completion signal a test can await, rather than a fixed real-time budget.
+        public TaskCompletionSource AlertsRequestReceived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             var path = request.RequestUri!.AbsolutePath;
+            var isAlertsRequest = path.Contains("code-scanning/alerts", StringComparison.Ordinal);
             var (status, body) = path switch
             {
                 _ when path.EndsWith("/repos", StringComparison.Ordinal) => (
@@ -199,9 +210,13 @@ public class ReviewSignalEnrichmentWorkerCollectTests
                     $$"""[{"name":"{{RepoName}}","html_url":"https://github.com/FixPortal/{{RepoName}}","private":false,"archived":false,"default_branch":"main"}]"""
                 ),
                 "/graphql" => (HttpStatusCode.OK, factsJson),
-                _ when path.Contains("code-scanning/alerts", StringComparison.Ordinal) => (alertsStatus, alertsJson),
+                _ when isAlertsRequest => (alertsStatus, alertsJson),
                 _ => (HttpStatusCode.OK, "[]"),
             };
+            if (isAlertsRequest)
+            {
+                AlertsRequestReceived.TrySetResult();
+            }
             return Task.FromResult(
                 new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") }
             );
@@ -227,7 +242,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
     }
 
     private static async Task<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>> RunOneSweepAsync(
-        HttpMessageHandler handler,
+        RoutingHandler handler,
         ReviewSignalsOptions options
     )
     {
@@ -236,7 +251,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
         var cache = new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>();
-        var timeProvider = new FakeTimeProvider();
+        var timeProvider = new TrackingFakeTimeProvider();
         var worker = new ReviewSignalEnrichmentWorker(
             client,
             new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions),
@@ -248,19 +263,32 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         );
 
         await worker.StartAsync(TestContext.Current.CancellationToken);
+        // Event-driven, not wall-clock-budgeted: wait for the jitter timer to be
+        // genuinely registered before advancing past it (see the matching comment on
+        // ReviewSignalWorkerGatingTests.Issues_requests_once_enabled_and_past_the_initial_jitter),
+        // then wait for the alerts call — CollectAsync's last network request — to
+        // land before touching the cache at all.
+        await timeProvider.InitialDelayScheduled.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        timeProvider.Advance(TimeSpan.FromSeconds(15));
+        await handler.AlertsRequestReceived.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        // See the matching comment in ReviewSignalWorkerGatingTests: step the fake
-        // clock repeatedly with a real yield between steps rather than betting on one
-        // Advance landing after the jitter timer is actually registered.
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(2);
+        // The alerts response landing does not itself prove RunSweepAsync's
+        // cache.Update has run yet — a few more continuations (JSON parsing,
+        // ReviewSignalFactory.Build, the sweep's own cache write) still need a
+        // thread-pool turn. This is the "poll-until-condition helper with a generous
+        // timeout" the house rule explicitly allows as the final settle, now gated
+        // behind a real completion signal rather than being the only wait in the test.
+        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
         while (!cache.TryGet(RepoName, out _) && DateTime.UtcNow < deadline)
         {
-            timeProvider.Advance(TimeSpan.FromSeconds(1));
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
         await worker.StopAsync(TestContext.Current.CancellationToken);
 
-        _ = cache.TryGet(RepoName, out var result).Should().BeTrue("the cold-start sweep should have populated the cache");
+        _ = cache
+            .TryGet(RepoName, out var result)
+            .Should()
+            .BeTrue("the cold-start sweep should have written to the cache within 30s of the alerts response");
         return result!;
     }
 
