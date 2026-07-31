@@ -3,6 +3,7 @@ using System.Text;
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Xunit;
 
@@ -204,12 +205,13 @@ public class GitHubReviewFactsTransportTests
         }
     }
 
-    private static GitHubOrgClient CreateClient(HttpClient http) =>
+    private static GitHubOrgClient CreateClient(HttpClient http, ILogger<GitHubOrgClient>? logger = null) =>
         new(
             http,
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
             Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 }),
-            new GitHubETagStore()
+            new GitHubETagStore(),
+            logger: logger
         );
 
     private static HttpResponseMessage Json(string body) =>
@@ -276,6 +278,31 @@ public class GitHubReviewFactsTransportTests
         _ = await client.GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
 
         _ = client.LastGraphQlRateLimit.Should().Be(new GraphQlRateLimit(7, 4993, "2026-07-31T12:00:00Z"));
+    }
+
+    [Fact]
+    public async Task Warns_when_a_repo_overflows_the_fifty_pull_request_cap()
+    {
+        // pullRequests(first: 50) truncates silently beyond page 1; the hasNextPage
+        // warning is the only place an overflowing repo becomes observable. The query
+        // must also keep asking for pageInfo, or the warning can never fire.
+        const string body = """
+            {"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":true},"nodes":[]}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var logger = new CapturingLogger<GitHubOrgClient>();
+
+        _ = await CreateClient(http, logger).GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
+        _ = handler.Bodies.Should().ContainSingle().Subject.Should().Contain("pageInfo { hasNextPage }");
+        _ = logger
+            .Entries.Should()
+            .Contain(e =>
+                e.Level == LogLevel.Warning
+                && e.Message.Contains("more than 50 open pull requests", StringComparison.Ordinal)
+            );
     }
 
     [Fact]

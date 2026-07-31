@@ -51,7 +51,15 @@ public sealed record ReviewFactsPull(
     NodeList<GraphQlCommitNode>? Commits
 );
 
-public sealed record ReviewFactsRepository(NodeList<ReviewFactsPull>? PullRequests);
+// hasNextPage only — the open-PR connection is deliberately capped at the 50 most
+// recently updated (see ReviewFactsQuery in GitHubOrgClient), and the flag exists so
+// an overflowing repo is observable rather than silently truncated. endCursor is not
+// queried: there is no cursor pagination to consume it.
+public sealed record GraphQlPageInfo(bool HasNextPage);
+
+public sealed record ReviewFactsPullConnection(IReadOnlyList<ReviewFactsPull>? Nodes, GraphQlPageInfo? PageInfo);
+
+public sealed record ReviewFactsRepository(ReviewFactsPullConnection? PullRequests);
 
 /// <summary>
 /// GraphQL's own rate-limit accounting for the query that returned it. GraphQL is
