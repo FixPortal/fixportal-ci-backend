@@ -1,13 +1,9 @@
 using ArchUnitNET.Domain;
-using ArchUnitNET.Fluent;
 using ArchUnitNET.Loader;
 using ArchUnitNET.xUnitV3;
 using FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using Microsoft.Extensions.Hosting;
-// Required by the compiler for FactAttribute; InspectCode 2026.1 reports this using as redundant incorrectly.
-// ReSharper disable once RedundantUsingDirective
-using Xunit;
 using static ArchUnitNET.Fluent.ArchRuleDefinition;
 
 namespace FixPortal.Ci.Backend.Api.Tests;
@@ -18,31 +14,31 @@ public class ArchitectureTests
         .LoadAssemblies(typeof(IDashboardSnapshotStore).Assembly)
         .Build();
 
-    [Fact]
+    [Xunit.Fact]
     public void Interfaces_must_have_I_prefix()
     {
         FixPortalArchRules.InterfacesMustHaveIPrefix().Check(Architecture);
     }
 
-    [Fact]
+    [Xunit.Fact]
     public void Exception_types_must_inherit_from_Exception()
     {
         FixPortalArchRules.ExceptionsMustInheritFromException().Check(Architecture);
     }
 
-    [Fact]
+    [Xunit.Fact]
     public void Async_methods_must_end_in_Async()
     {
         FixPortalArchRules.AsyncMethodsMustEndInAsync().Check(Architecture);
     }
 
-    [Fact]
+    [Xunit.Fact]
     public void Model_types_must_be_sealed()
     {
         FixPortalArchRules.ModelTypesMustBeSealed("FixPortal.Ci.Backend.Api.Dashboard.Model").Check(Architecture);
     }
 
-    [Fact]
+    [Xunit.Fact]
     public void Snapshot_restore_service_must_implement_hosted_lifecycle_service()
     {
         Classes()

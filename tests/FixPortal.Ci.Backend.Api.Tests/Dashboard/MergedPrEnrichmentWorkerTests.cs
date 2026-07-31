@@ -68,10 +68,8 @@ public class MergedPrEnrichmentWorkerTests
     public async Task CollectAsync_should_soft_fail_to_null_when_the_merged_pr_request_fails()
     {
         using var handler = new MergedPrFailureHandler();
-        using var http = new HttpClient(handler, disposeHandler: false)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        using var http = new HttpClient(handler, disposeHandler: false);
+        http.BaseAddress = new Uri("https://api.github.com/");
         using var worker = NewWorker(http);
         var repo = new GitHubRepoDto("repo-a", "https://github.com/FixPortal/repo-a", false, false, "main");
 

@@ -203,10 +203,8 @@ public sealed class GitHubOrgClient(
 
     private async Task<T?> PostGraphQlAsync<T>(string query, object variables, string subject, CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, "graphql")
-        {
-            Content = JsonContent.Create(new { query, variables }, options: GraphQlSerializerOptions),
-        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, "graphql");
+        request.Content = JsonContent.Create(new { query, variables }, options: GraphQlSerializerOptions);
         AddStandardHeaders(request);
 
         using var response = await httpClient.SendAsync(request, ct);

@@ -217,7 +217,8 @@ public class FileDashboardSnapshotStoreTests
             using var cancellation = new CancellationTokenSource();
             await cancellation.CancelAsync();
 
-            var save = () => sut.SaveAsync(replacementSnapshot, cancellation.Token);
+            var cancellationToken = cancellation.Token;
+            var save = () => sut.SaveAsync(replacementSnapshot, cancellationToken);
             _ = await save.Should().ThrowAsync<OperationCanceledException>();
 
             var reloaded = await sut.LoadAsync(CancellationToken.None);

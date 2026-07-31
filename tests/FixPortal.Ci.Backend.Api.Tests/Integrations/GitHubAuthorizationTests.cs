@@ -42,7 +42,8 @@ public class GitHubAuthorizationTests
     {
         const string token = "pat-sentinel-7f2c";
         var handler = new RecordingHandler();
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var client = new GitHubOrgClient(
             http,
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = token }),
