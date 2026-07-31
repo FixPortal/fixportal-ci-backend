@@ -37,6 +37,34 @@ public sealed class ReviewSignalEnrichmentWorker(
 
     protected override string Name => "PR review signals";
 
+    // Whole-sweep GraphQL cost, reset each sweep. The design costed this feature against
+    // the 5,000/hour REST budget, but the batched query is billed against GraphQL's own
+    // 5,000-POINTS/hour budget, priced by connection fan-out — pullRequests(50) x
+    // reviewThreads(100) x comments(1) is not one point. Nothing else measures that, and
+    // exhausting it degrades silently (rate-limit errors become last-known-good, then a
+    // TTL expiry to no pills), so the number is logged rather than guessed at.
+    private int _sweepCost;
+    private int _sweepQueries;
+    private GraphQlRateLimit? _lastRateLimit;
+
+    protected override void OnSweepCompleted()
+    {
+        if (_sweepQueries == 0)
+        {
+            return;
+        }
+
+        logger.LogInformation(
+            "PR review signals sweep issued {Queries} GraphQL queries costing {Cost} point(s); {Remaining} remaining until {ResetAt}.",
+            _sweepQueries,
+            _sweepCost,
+            _lastRateLimit?.Remaining,
+            _lastRateLimit?.ResetAt
+        );
+        _sweepCost = 0;
+        _sweepQueries = 0;
+    }
+
     protected override async Task<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>?> CollectAsync(
         GitHubRepoDto repo,
         CancellationToken ct
@@ -46,6 +74,7 @@ public sealed class ReviewSignalEnrichmentWorker(
         try
         {
             var facts = await Client.GetPullRequestReviewFactsAsync(repo.Name, ct);
+            RecordGraphQlCost();
             if (facts.Count == 0)
             {
                 return new Dictionary<int, IReadOnlyList<ReviewSignal>>();
@@ -83,6 +112,18 @@ public sealed class ReviewSignalEnrichmentWorker(
         {
             logger.LogWarning(ex, "Failed to fetch review signals for {Repo}; keeping last-known-good.", repo.Name);
             return null;
+        }
+    }
+
+    // Sweeps are sequential (RepoEnrichmentWorker.RunSweepAsync awaits each repo in
+    // turn), so plain accumulation is safe here.
+    private void RecordGraphQlCost()
+    {
+        _sweepQueries++;
+        if (Client.LastGraphQlRateLimit is { } rateLimit)
+        {
+            _lastRateLimit = rateLimit;
+            _sweepCost += rateLimit.Cost;
         }
     }
 }

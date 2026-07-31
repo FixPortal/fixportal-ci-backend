@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Text.Json;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
@@ -113,6 +114,7 @@ public sealed class GitHubOrgClient(
 
     private const string ReviewFactsQuery = """
         query($owner: String!, $name: String!) {
+          rateLimit { cost remaining resetAt }
           repository(owner: $owner, name: $name) {
             pullRequests(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
               nodes {
@@ -139,7 +141,7 @@ public sealed class GitHubOrgClient(
                       oid
                       statusCheckRollup {
                         contexts(first: 50) {
-                          nodes { ... on CheckRun { name conclusion checkSuite { app { slug } } } }
+                          nodes { ... on CheckRun { conclusion checkSuite { app { slug } } } }
                         }
                       }
                     }
@@ -156,6 +158,20 @@ public sealed class GitHubOrgClient(
     internal const int SearchPageSize = 20;
     private readonly GitHubOptions _gitHub = gitHub.Value;
     private readonly DashboardOptions _dashboard = dashboard.Value;
+
+    // Repos whose code-scanning endpoint has already been reported as unreadable, so
+    // the warning is emitted once rather than on every 150s sweep. Concurrent because
+    // nothing guarantees the enrichment sweep is the only caller.
+    private readonly ConcurrentDictionary<string, byte> _codeScanningWarned = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Rate-limit accounting reported by the most recent GraphQL query. GraphQL is
+    /// metered on a SEPARATE 5,000-points/hour budget from REST and is priced by
+    /// connection fan-out, so the REST request count says nothing about what this
+    /// feature costs. Recorded here so the enrichment worker can log the real number
+    /// once per sweep instead of the cost being invisible in production.
+    /// </summary>
+    public GraphQlRateLimit? LastGraphQlRateLimit { get; private set; }
 
     /// <summary>
     /// One query per repo covering every open pull request. Batched deliberately: a
@@ -175,6 +191,8 @@ public sealed class GitHubOrgClient(
             ct
         );
 
+        LastGraphQlRateLimit = data?.RateLimit;
+
         var facts = new Dictionary<int, PrReviewFacts>();
         foreach (var pull in data?.Repository?.PullRequests?.Nodes ?? [])
         {
@@ -192,7 +210,7 @@ public sealed class GitHubOrgClient(
         AddStandardHeaders(request);
 
         using var response = await httpClient.SendAsync(request, ct);
-        GuardResponse(response, "graphql", affectsAuthState: false);
+        GuardResponse(response, subject, affectsAuthState: false);
         _ = response.EnsureSuccessStatusCode();
 
         var envelope = await response.Content.ReadFromJsonAsync<GraphQlEnvelope<T>>(GraphQlSerializerOptions, ct);
@@ -359,28 +377,57 @@ public sealed class GitHubOrgClient(
         CancellationToken ct
     )
     {
-        List<CodeScanningAlertDto>? alerts;
-        try
+        var all = new List<CodeScanningAlertDto>();
+        var page = 1;
+        while (true)
         {
-            // affectsAuthState: false — a missing code-scanning scope 403s here and must
-            // not flip /api/health, exactly as the pull-request listing does.
-            alerts = await SendAsync<List<CodeScanningAlertDto>>(
-                $"repos/{_gitHub.Owner}/{repo}/code-scanning/alerts?state=open&per_page=100",
-                ct,
-                affectsAuthState: false
-            );
-        }
-        catch (GitHubAuthException)
-        {
-            return null;
-        }
+            List<CodeScanningAlertDto>? batch;
+            try
+            {
+                // affectsAuthState: false — a missing code-scanning scope 403s here and must
+                // not flip /api/health, exactly as the pull-request listing does.
+                batch = await SendAsync<List<CodeScanningAlertDto>>(
+                    $"repos/{_gitHub.Owner}/{repo}/code-scanning/alerts?state=open&per_page=100&page={page}",
+                    ct,
+                    affectsAuthState: false
+                );
+            }
+            catch (GitHubAuthException ex)
+            {
+                // Once per repo per process, not per cycle: a missing "Code scanning
+                // alerts: read" scope is permanent until an operator fixes the PAT, and
+                // silently swallowing it leaves the CodeQL pill stuck on Pending with no
+                // clue why.
+                if (_codeScanningWarned.TryAdd(repo, 0))
+                {
+                    logger?.LogWarning(
+                        ex,
+                        "Code-scanning alerts are unreadable for {Repo}; the CodeQL reviewer will stay Pending until the PAT gains \"Code scanning alerts: read\" (or scanning is enabled on the repo).",
+                        repo
+                    );
+                }
+                return null;
+            }
 
-        // SendAsync maps 404 to default(T) — repo has scanning disabled entirely.
-        if (alerts is null)
-        {
-            return null;
-        }
+            // SendAsync maps 404 to default(T) — repo has scanning disabled entirely.
+            if (batch is null)
+            {
+                return page == 1 ? null : Bucket(all);
+            }
 
+            all.AddRange(batch);
+            if (batch.Count < 100)
+            {
+                break;
+            }
+
+            page++;
+        }
+        return Bucket(all);
+    }
+
+    private static Dictionary<int, int> Bucket(IReadOnlyList<CodeScanningAlertDto> alerts)
+    {
         var counts = new Dictionary<int, int>();
         foreach (var alert in alerts)
         {

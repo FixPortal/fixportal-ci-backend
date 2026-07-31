@@ -29,7 +29,10 @@ public sealed record GraphQlApp(string? Slug);
 
 public sealed record GraphQlCheckSuite(GraphQlApp? App);
 
-public sealed record GraphQlContext(string? Name, string? Conclusion, GraphQlCheckSuite? CheckSuite);
+// Only the conclusion and the publishing app matter: the check-run NAME is never read
+// (a reviewer is matched by app slug, not by check title), so it is neither queried
+// nor carried here.
+public sealed record GraphQlContext(string? Conclusion, GraphQlCheckSuite? CheckSuite);
 
 public sealed record GraphQlRollup(NodeList<GraphQlContext>? Contexts);
 
@@ -50,7 +53,16 @@ public sealed record ReviewFactsPull(
 
 public sealed record ReviewFactsRepository(NodeList<ReviewFactsPull>? PullRequests);
 
-public sealed record ReviewFactsData(ReviewFactsRepository? Repository);
+/// <summary>
+/// GraphQL's own rate-limit accounting for the query that returned it. GraphQL is
+/// metered on a separate 5,000-points/hour budget from REST, priced by connection
+/// fan-out rather than by request, so <paramref name="Cost"/> is the only honest
+/// measure of what one sweep of this feature spends. ResetAt is left as the raw
+/// ISO-8601 string: the GraphQL serializer options are deliberately NodaTime-free.
+/// </summary>
+public sealed record GraphQlRateLimit(int Cost, int Remaining, string? ResetAt);
+
+public sealed record ReviewFactsData(ReviewFactsRepository? Repository, GraphQlRateLimit? RateLimit);
 
 /// <summary>
 /// Everything needed to decide one pull request's reviewer states, flattened out of

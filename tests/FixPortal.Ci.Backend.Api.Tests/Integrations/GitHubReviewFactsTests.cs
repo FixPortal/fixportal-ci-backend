@@ -127,8 +127,8 @@ public class GitHubReviewFactsTests
             Pull(
                 checks:
                 [
-                    new GraphQlContext("CodeQL", "SUCCESS", new GraphQlCheckSuite(new GraphQlApp("github-code-scanning"))),
-                    new GraphQlContext("flaky", "FAILURE", new GraphQlCheckSuite(new GraphQlApp("some-app"))),
+                    new GraphQlContext("SUCCESS", new GraphQlCheckSuite(new GraphQlApp("github-code-scanning"))),
+                    new GraphQlContext("FAILURE", new GraphQlCheckSuite(new GraphQlApp("some-app"))),
                 ]
             )
         );
@@ -156,7 +156,7 @@ public class GitHubReviewFactsTests
             Pull(
                 threads: [Thread("CodeRabbitAI", false)],
                 labels: [new GraphQlLabel("Review-High")],
-                checks: [new GraphQlContext("CodeQL", "SUCCESS", new GraphQlCheckSuite(new GraphQlApp("GitHub-Code-Scanning")))]
+                checks: [new GraphQlContext("SUCCESS", new GraphQlCheckSuite(new GraphQlApp("GitHub-Code-Scanning")))]
             )
         );
 
@@ -173,10 +173,18 @@ public class GitHubReviewFactsTransportTests
     {
         public List<HttpRequestMessage> Requests { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        // The request (and its content) is disposed as soon as the client returns, so
+        // the body has to be captured here rather than read off Requests afterwards.
+        public List<string> Bodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
             Requests.Add(request);
-            return Task.FromResult(responses.Dequeue());
+            if (request.Content is not null)
+            {
+                Bodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            }
+            return responses.Dequeue();
         }
     }
 
@@ -212,6 +220,43 @@ public class GitHubReviewFactsTransportTests
         _ = handler.Requests[0].RequestUri!.AbsolutePath.Should().Be("/graphql");
         _ = facts[181].Labels.Should().Contain("review-high");
         _ = facts[181].UnresolvedThreadsByAuthor["coderabbitai"].Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Selects_originalCommit_on_thread_comments_and_asks_for_the_rate_limit()
+    {
+        // The whole head-scoping design lives in the query TEXT, which no other test
+        // reads: reverting `originalCommit` to `commit` would regress a false-Clean bug
+        // with a green suite, because `commit` tracks forward onto the new head as a PR
+        // is pushed to and would make a stale thread look like head participation.
+        // rateLimit is asserted alongside it for the same reason — it is only observable
+        // in the serialized request.
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([Json("""{"data":{"repository":{"pullRequests":{"nodes":[]}}}}""")])
+        );
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+
+        _ = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
+        var body = handler.Bodies.Should().ContainSingle().Subject;
+        _ = body.Should().Contain("nodes { author { login } originalCommit { oid } }");
+        _ = body.Should().Contain("rateLimit { cost remaining resetAt }");
+    }
+
+    [Fact]
+    public async Task Records_the_graphql_rate_limit_reported_by_the_query()
+    {
+        const string body = """
+            {"data":{"rateLimit":{"cost":7,"remaining":4993,"resetAt":"2026-07-31T12:00:00Z"},
+             "repository":{"pullRequests":{"nodes":[]}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var client = CreateClient(http);
+
+        _ = await client.GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
+        _ = client.LastGraphQlRateLimit.Should().Be(new GraphQlRateLimit(7, 4993, "2026-07-31T12:00:00Z"));
     }
 
     [Fact]
