@@ -76,6 +76,20 @@ public class ReviewSignalFactoryTests
         _ = Only(whitespaceGated, Facts(headParticipating: ["weird-app"])).State.Should().Be(ReviewSignalState.Clean);
     }
 
+    [Theory]
+    [InlineData("review-high ")]
+    [InlineData(" review-high")]
+    public void A_required_label_with_stray_whitespace_still_matches_rather_than_disabling_forever(string configured)
+    {
+        // Untrimmed, "review-high " matches no real label, so the reviewer reads Disabled
+        // on every PR — and a human reads Disabled as "safe to skip", not "misconfigured".
+        var padded = new ReviewerOptions { Name = "CodeRabbit", BotLogin = "coderabbitai", RequiredLabel = configured };
+
+        var signal = Only(padded, Facts(labels: ["review-high"], headParticipating: ["coderabbitai"]));
+
+        _ = signal.State.Should().Be(ReviewSignalState.Clean);
+    }
+
     [Fact]
     public void Outstanding_with_a_count_when_the_bot_has_unresolved_threads()
     {

@@ -42,7 +42,11 @@ public static class ReviewSignalFactory
         string prHtmlUrl
     )
     {
-        if (reviewer.RequiredLabel is { } label && !string.IsNullOrWhiteSpace(label) && !facts.Labels.Contains(label))
+        // Trimmed: a stray space in configuration ("review-high ") matches no real label,
+        // which would pin the reviewer to Disabled forever — and a human reads Disabled
+        // as "safe to skip", not as "misconfigured".
+        var label = reviewer.RequiredLabel?.Trim();
+        if (!string.IsNullOrEmpty(label) && !facts.Labels.Contains(label))
         {
             return new ReviewSignal(reviewer.Name, ReviewSignalState.Disabled, null, null);
         }
