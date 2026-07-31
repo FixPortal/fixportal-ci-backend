@@ -38,8 +38,8 @@ public abstract class RepoEnrichmentWorker<T>(
     protected abstract Task<T?> CollectAsync(GitHubRepoDto repo, CancellationToken ct);
 
     /// <summary>
-    /// Called once after every sweep, successful or not. Hook for whole-sweep reporting
-    /// (e.g. the GraphQL rate-limit cost a sweep actually spent); no-op by default.
+    /// Called after a sweep completes (all repositories processed with collected values written).
+    /// Not called if repository listing fails, the sweep is cancelled, or an unexpected error occurs.
     /// </summary>
     protected virtual void OnSweepCompleted() { }
 
