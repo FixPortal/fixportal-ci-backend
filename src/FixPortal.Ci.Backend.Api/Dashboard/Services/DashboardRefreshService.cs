@@ -16,6 +16,7 @@ public sealed class DashboardRefreshService(
     [FromKeyedServices("deploys")] PerRepoCache<IReadOnlyList<JobSignal>> deploys,
     [FromKeyedServices("packages")] PerRepoCache<IReadOnlyList<JobSignal>> packages,
     PerRepoCache<MergedPullRequest> mergedPrs,
+    PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>> reviewSignals,
     IOptions<GitHubOptions> gitHub,
     IClock clock,
     ILogger<DashboardRefreshService> logger
@@ -159,7 +160,9 @@ public sealed class DashboardRefreshService(
             // token scope, which workflow/run reads (Actions: Read) do not. Missing
             // pull-request access, or a transient endpoint error, must not degrade the repo.
             // only rate limits propagate and abort the batch.
-            var pullRequests = await TryListOpenPullRequestsAsync(repo.Name, rateLimitToken);
+            var openPrs = await TryListOpenPullRequestsAsync(repo.Name, rateLimitToken);
+            _ = reviewSignals.TryGet(repo.Name, out var repoReviewSignals);
+            var pullRequests = ApplyReviewSignals(openPrs, repoReviewSignals);
             _ = metrics.TryGet(repo.Name, out var repoMetrics);
             _ = deploys.TryGet(repo.Name, out var repoDeploys);
             _ = packages.TryGet(repo.Name, out var repoPackages);
@@ -250,6 +253,28 @@ public sealed class DashboardRefreshService(
             );
             return [];
         }
+    }
+
+    /// <summary>
+    /// Attaches cached review signals to the freshly-fetched pull requests. Signals are
+    /// enriched on a slower cadence than the board refresh, so a PR with no cached
+    /// entry keeps a null field rather than blocking the cycle.
+    /// </summary>
+    public static IReadOnlyList<PullRequest> ApplyReviewSignals(
+        IReadOnlyList<PullRequest> prs,
+        IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>? signals
+    )
+    {
+        if (signals is null || signals.Count == 0 || prs.Count == 0)
+        {
+            return prs;
+        }
+        var merged = new List<PullRequest>(prs.Count);
+        foreach (var pr in prs)
+        {
+            merged.Add(signals.TryGetValue(pr.Number, out var prSignals) ? pr with { ReviewSignals = prSignals } : pr);
+        }
+        return merged;
     }
 
     public static IReadOnlyList<RepositorySnapshot> MergeWithPrevious(

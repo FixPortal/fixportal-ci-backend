@@ -109,6 +109,7 @@ builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
 builder.Services.AddSingleton<GitHubInventoryCache>();
 builder.Services.AddSingleton<PerRepoCache<RepoMetrics>>();
 builder.Services.AddSingleton<PerRepoCache<MergedPullRequest>>();
+builder.Services.AddSingleton<PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>>();
 
 // Last-known-good, no TTL — consistent with the metrics and merged-PR caches above.
 // A max-age here was ineffective: InheritEnrichment re-inherits an expired lane
@@ -131,6 +132,7 @@ builder.Services.AddHostedService<SnapshotRestoreService>();
 builder.Services.AddHostedService<DashboardRefreshWorker>();
 builder.Services.AddHostedService<MetricsEnrichmentWorker>();
 builder.Services.AddHostedService<MergedPrEnrichmentWorker>();
+builder.Services.AddHostedService<ReviewSignalEnrichmentWorker>();
 builder.Services.AddSingleton<IHostedService>(sp => new JobLaneEnrichmentWorker(
     "deploys",
     sp.GetRequiredService<GitHubOrgClient>(),
