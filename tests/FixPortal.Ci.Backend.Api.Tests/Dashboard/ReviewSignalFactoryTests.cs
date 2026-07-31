@@ -25,7 +25,7 @@ public class ReviewSignalFactoryTests
     private static PrReviewFacts Facts(
         IEnumerable<string>? labels = null,
         IDictionary<string, int>? unresolved = null,
-        IEnumerable<string>? participating = null,
+        IEnumerable<string>? headParticipating = null,
         IEnumerable<string>? checkApps = null
     ) =>
         new(
@@ -33,7 +33,7 @@ public class ReviewSignalFactoryTests
             "chris",
             new HashSet<string>(labels ?? [], StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, int>(unresolved ?? new Dictionary<string, int>(), StringComparer.OrdinalIgnoreCase),
-            new HashSet<string>(participating ?? [], StringComparer.OrdinalIgnoreCase),
+            new HashSet<string>(headParticipating ?? [], StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(checkApps ?? [], StringComparer.OrdinalIgnoreCase)
         );
 
@@ -73,7 +73,7 @@ public class ReviewSignalFactoryTests
         // skips whitespace-only names), so treat it as unset rather than an unmatchable gate.
         var whitespaceGated = new ReviewerOptions { Name = "Weird", BotLogin = "weird-app", RequiredLabel = "   " };
 
-        _ = Only(whitespaceGated, Facts(participating: ["weird-app"])).State.Should().Be(ReviewSignalState.Clean);
+        _ = Only(whitespaceGated, Facts(headParticipating: ["weird-app"])).State.Should().Be(ReviewSignalState.Clean);
     }
 
     [Fact]
@@ -99,7 +99,7 @@ public class ReviewSignalFactoryTests
     [Fact]
     public void Clean_when_the_bot_participated_and_left_nothing_unresolved()
     {
-        var signal = Only(Gitar, Facts(participating: ["gitar-app"]));
+        var signal = Only(Gitar, Facts(headParticipating: ["gitar-app"]));
 
         _ = signal.State.Should().Be(ReviewSignalState.Clean);
         _ = signal.Count.Should().BeNull();
@@ -164,6 +164,6 @@ public class ReviewSignalFactoryTests
     {
         var misconfigured = new ReviewerOptions { Name = "Mystery" };
 
-        _ = Only(misconfigured, Facts(participating: ["someone"])).State.Should().Be(ReviewSignalState.Pending);
+        _ = Only(misconfigured, Facts(headParticipating: ["someone"])).State.Should().Be(ReviewSignalState.Pending);
     }
 }
