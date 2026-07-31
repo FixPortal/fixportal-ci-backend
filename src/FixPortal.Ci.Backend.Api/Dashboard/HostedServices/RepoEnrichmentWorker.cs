@@ -37,6 +37,12 @@ public abstract class RepoEnrichmentWorker<T>(
     /// <summary>Collect the enrichment for one repo. Return null to keep the prior cached value.</summary>
     protected abstract Task<T?> CollectAsync(GitHubRepoDto repo, CancellationToken ct);
 
+    /// <summary>
+    /// Called once after every sweep, successful or not. Hook for whole-sweep reporting
+    /// (e.g. the GraphQL rate-limit cost a sweep actually spent); no-op by default.
+    /// </summary>
+    protected virtual void OnSweepCompleted() { }
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (!Enabled)
@@ -65,7 +71,10 @@ public abstract class RepoEnrichmentWorker<T>(
     {
         try
         {
-            await Task.Delay(TimeSpan.FromMilliseconds(Random.Shared.Next(0, 15000)), timeProvider, stoppingToken);
+            // Lower bound 1, not 0: Task.Delay(TimeSpan.Zero) completes synchronously
+            // without ever calling TimeProvider.CreateTimer, so a test that waits for the
+            // timer registration would hang on roughly 1 run in 15,000.
+            await Task.Delay(TimeSpan.FromMilliseconds(Random.Shared.Next(1, 15000)), timeProvider, stoppingToken);
             return true;
         }
         catch (OperationCanceledException)
@@ -171,6 +180,7 @@ public abstract class RepoEnrichmentWorker<T>(
                 );
             }
         }
+        OnSweepCompleted();
         return new SweepOutcome(repos.Count, failed);
     }
 }
