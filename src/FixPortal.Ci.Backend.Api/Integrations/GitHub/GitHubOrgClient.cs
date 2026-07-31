@@ -119,13 +119,14 @@ public sealed class GitHubOrgClient(
                 number
                 author { login }
                 labels(first: 20) { nodes { name } }
-                reviews(first: 50) { nodes { author { login } } }
+                reviews(first: 50) { nodes { author { login } commit { oid } } }
                 reviewThreads(first: 100) {
-                  nodes { isResolved comments(first: 1) { nodes { author { login } } } }
+                  nodes { isResolved comments(first: 1) { nodes { author { login } commit { oid } } } }
                 }
                 commits(last: 1) {
                   nodes {
                     commit {
+                      oid
                       statusCheckRollup {
                         contexts(first: 50) {
                           nodes { ... on CheckRun { name conclusion checkSuite { app { slug } } } }
@@ -391,8 +392,9 @@ public sealed class GitHubOrgClient(
     public static PrReviewFacts ToReviewFacts(ReviewFactsPull pull)
     {
         var labels = CollectLabels(pull.Labels);
-        var participating = CollectReviewers(pull.Reviews);
-        var unresolved = CollectThreadFacts(pull.ReviewThreads, participating);
+        var headOid = GetHeadOid(pull.Commits);
+        var headParticipating = CollectReviewers(pull.Reviews, headOid);
+        var unresolved = CollectThreadFacts(pull.ReviewThreads, headParticipating, headOid);
         var checkApps = CollectSuccessfulCheckApps(pull.Commits);
 
         return new PrReviewFacts(
@@ -400,7 +402,7 @@ public sealed class GitHubOrgClient(
             pull.Author?.Login is { Length: > 0 } author ? author : "unknown",
             labels,
             unresolved,
-            participating,
+            headParticipating,
             checkApps
         );
     }
@@ -415,12 +417,21 @@ public sealed class GitHubOrgClient(
         return result;
     }
 
-    private static HashSet<string> CollectReviewers(NodeList<GraphQlReview>? reviews)
+    // commits(last: 1) requests exactly the head commit, so the last (only) node is it.
+    // A null result (empty/absent commits connection) means the caller must not assume
+    // any participation matches — see CollectReviewers / CollectThreadFacts.
+    private static string? GetHeadOid(NodeList<GraphQlCommitNode>? commits) =>
+        commits?.Nodes is { Count: > 0 } nodes ? nodes[^1].Commit?.Oid : null;
+
+    private static bool IsHeadCommit(string? oid, string? headOid) =>
+        headOid is not null && string.Equals(oid, headOid, StringComparison.Ordinal);
+
+    private static HashSet<string> CollectReviewers(NodeList<GraphQlReview>? reviews, string? headOid)
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var review in reviews?.Nodes ?? [])
         {
-            if (review.Author?.Login is { Length: > 0 } login)
+            if (review.Author?.Login is { Length: > 0 } login && IsHeadCommit(review.Commit?.Oid, headOid))
             {
                 _ = result.Add(login);
             }
@@ -428,22 +439,29 @@ public sealed class GitHubOrgClient(
         return result;
     }
 
-    // Also adds every thread author (resolved or not) to participating: a resolved
-    // thread still proves the reviewer ran, which is what separates "clean" from
-    // "pending".
-    private static Dictionary<string, int> CollectThreadFacts(NodeList<GraphQlThread>? threads, HashSet<string> participating)
+    // Unresolved-thread counting is commit-agnostic: an open finding from an older
+    // commit is still open. Head participation is not — see IsHeadCommit.
+    private static Dictionary<string, int> CollectThreadFacts(
+        NodeList<GraphQlThread>? threads,
+        HashSet<string> headParticipating,
+        string? headOid
+    )
     {
         var unresolved = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         foreach (var thread in threads?.Nodes ?? [])
         {
             // The FIRST comment's author owns the thread. A human replying to a bot's
             // finding must not re-attribute that thread to the human.
-            var author = thread.Comments?.Nodes is { Count: > 0 } comments ? comments[0].Author?.Login : null;
+            var comment = thread.Comments?.Nodes is { Count: > 0 } comments ? comments[0] : null;
+            var author = comment?.Author?.Login;
             if (author is not { Length: > 0 })
             {
                 continue;
             }
-            _ = participating.Add(author);
+            if (IsHeadCommit(comment?.Commit?.Oid, headOid))
+            {
+                _ = headParticipating.Add(author);
+            }
             if (!thread.IsResolved)
             {
                 unresolved[author] = unresolved.GetValueOrDefault(author) + 1;

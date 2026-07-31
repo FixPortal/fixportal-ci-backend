@@ -43,7 +43,11 @@ public class ReviewSignalFactoryTests
     [Fact]
     public void Disabled_when_the_required_label_is_absent()
     {
-        _ = Only(CodeRabbit, Facts()).State.Should().Be(ReviewSignalState.Disabled);
+        var signal = Only(CodeRabbit, Facts());
+
+        _ = signal.State.Should().Be(ReviewSignalState.Disabled);
+        _ = signal.Count.Should().BeNull();
+        _ = signal.HtmlUrl.Should().BeNull();
     }
 
     [Fact]
@@ -52,6 +56,24 @@ public class ReviewSignalFactoryTests
         var facts = Facts(unresolved: new Dictionary<string, int> { ["coderabbitai"] = 4 });
 
         _ = Only(CodeRabbit, facts).State.Should().Be(ReviewSignalState.Disabled);
+    }
+
+    [Fact]
+    public void Disabled_outranks_open_alerts_on_the_code_scanning_source()
+    {
+        var gated = new ReviewerOptions { Name = "CodeQL", Source = ReviewerSource.CodeScanning, RequiredLabel = "review-high" };
+
+        _ = Only(gated, Facts(checkApps: ["github-code-scanning"]), 2).State.Should().Be(ReviewSignalState.Disabled);
+    }
+
+    [Fact]
+    public void Whitespace_required_label_does_not_permanently_disable_the_reviewer()
+    {
+        // A misconfigured RequiredLabel of "  " could never match a real label (CollectLabels
+        // skips whitespace-only names), so treat it as unset rather than an unmatchable gate.
+        var whitespaceGated = new ReviewerOptions { Name = "Weird", BotLogin = "weird-app", RequiredLabel = "   " };
+
+        _ = Only(whitespaceGated, Facts(participating: ["weird-app"])).State.Should().Be(ReviewSignalState.Clean);
     }
 
     [Fact]
@@ -77,13 +99,20 @@ public class ReviewSignalFactoryTests
     [Fact]
     public void Clean_when_the_bot_participated_and_left_nothing_unresolved()
     {
-        _ = Only(Gitar, Facts(participating: ["gitar-app"])).State.Should().Be(ReviewSignalState.Clean);
+        var signal = Only(Gitar, Facts(participating: ["gitar-app"]));
+
+        _ = signal.State.Should().Be(ReviewSignalState.Clean);
+        _ = signal.Count.Should().BeNull();
+        _ = signal.HtmlUrl.Should().BeNull();
     }
 
     [Fact]
-    public void Clean_when_the_only_evidence_is_a_successful_check_from_that_app()
+    public void A_successful_check_alone_is_not_evidence_a_thread_reviewer_ran()
     {
-        _ = Only(Gitar, Facts(checkApps: ["gitar-app"])).State.Should().Be(ReviewSignalState.Clean);
+        // CodeRabbit's "rate limited" / "review skipped" checks pass by design so they
+        // never block a protected-branch merge. A passing check from the bot's app slug
+        // must not read as Clean -- only actual participation earns that.
+        _ = Only(Gitar, Facts(checkApps: ["gitar-app"])).State.Should().Be(ReviewSignalState.Pending);
     }
 
     [Fact]
@@ -103,8 +132,10 @@ public class ReviewSignalFactoryTests
     public void Code_scanning_state_follows_the_open_alert_count_when_a_scan_has_run(int alerts, ReviewSignalState expected)
     {
         var facts = Facts(checkApps: ["github-code-scanning"]);
+        var expectedCount = alerts > 0 ? alerts : (int?)null;
+        var expectedUrl = alerts > 0 ? $"{PrUrl}/checks" : null;
 
-        _ = Only(CodeQl, facts, alerts).State.Should().Be(expected);
+        _ = Only(CodeQl, facts, alerts).Should().Be(new ReviewSignal("CodeQL", expected, expectedCount, expectedUrl));
     }
 
     [Fact]
