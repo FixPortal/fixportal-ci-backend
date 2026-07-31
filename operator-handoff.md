@@ -32,7 +32,7 @@ from `appsettings.json`, so to change them, edit that file and redeploy.
 | `Dashboard:MetricsEnabled` | `true` | Run the slow Lizard code-metrics worker (NLOC / cyclomatic complexity). |
 | `Dashboard:MetricsRefreshSeconds` | `43200` | Metrics cadence (12 h). Each pass shallow-clones every repo. |
 | `Dashboard:MergedPrEnabled` | `true` | Track the org's most-recently-merged PR. |
-| `Dashboard:MergedPrRefreshSeconds` | `300` | Merged-PR cadence (5 min). |
+| `Dashboard:MergedPrRefreshSeconds` | `150` | Merged-PR cadence (2.5 min). |
 | `Dashboard:JobLanes` | deploys, packages | Named lanes that surface matching workflow **jobs** (by name pattern) as their own status chips. |
 | `ReviewSignals:Reviewers` | *(empty)* | Per-reviewer status pills (CodeRabbit, Gitar, CodeQL, …) on each open PR. Empty by default — the feature is off and issues no GitHub requests until reviewers are configured. Full option reference: **[README.md § Review signals](README.md#review-signals-reviewsignals)**. |
 
