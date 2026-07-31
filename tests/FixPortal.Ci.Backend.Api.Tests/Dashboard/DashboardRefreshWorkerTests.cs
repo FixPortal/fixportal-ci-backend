@@ -84,6 +84,7 @@ public class DashboardRefreshWorkerTests
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<MergedPullRequest>(),
+            new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
             gitHubOptions,
             clock,
             NullLoggerFor<DashboardRefreshService>()

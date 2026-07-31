@@ -1,0 +1,88 @@
+using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
+using FixPortal.Ci.Backend.Api.Dashboard.Model;
+using FixPortal.Ci.Backend.Api.Dashboard.Services;
+using FixPortal.Ci.Backend.Api.Integrations.GitHub;
+using Microsoft.Extensions.Options;
+
+namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
+
+/// <summary>
+/// Slow-cadence enrichment (default 150s): fetches each repo's open-PR review state in
+/// one batched GraphQL query plus one code-scanning call, and caches a per-PR signal
+/// list. Off the 20s board loop deliberately — a per-PR fetch on that cadence would
+/// exceed the PAT rate budget several times over. Disabled unless reviewers are
+/// configured, so the default deployment issues no extra requests at all.
+/// </summary>
+public sealed class ReviewSignalEnrichmentWorker(
+    GitHubOrgClient client,
+    GitHubInventoryCache inventory,
+    PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>> cache,
+    IOptions<ReviewSignalsOptions> options,
+    IOptions<GitHubOptions> gitHub,
+    TimeProvider timeProvider,
+    ILogger<ReviewSignalEnrichmentWorker> logger
+) : RepoEnrichmentWorker<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(
+    client,
+    inventory,
+    cache,
+    timeProvider,
+    logger
+)
+{
+    // No reviewers configured means the feature is off: the base class logs once and
+    // the worker idles without issuing a single request.
+    protected override bool Enabled => options.Value.Enabled && options.Value.Reviewers.Count > 0;
+
+    protected override TimeSpan Cadence => TimeSpan.FromSeconds(options.Value.RefreshSeconds);
+
+    protected override string Name => "PR review signals";
+
+    protected override async Task<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>?> CollectAsync(
+        GitHubRepoDto repo,
+        CancellationToken ct
+    )
+    {
+        var reviewers = options.Value.Reviewers;
+        try
+        {
+            var facts = await Client.GetPullRequestReviewFactsAsync(repo.Name, ct);
+            if (facts.Count == 0)
+            {
+                return new Dictionary<int, IReadOnlyList<ReviewSignal>>();
+            }
+
+            // Only pay for the alerts call when a configured reviewer actually reads it.
+            var needsAlerts = reviewers.Any(r => r.Source == ReviewerSource.CodeScanning);
+            var alerts = needsAlerts ? await Client.GetOpenCodeScanningAlertCountsAsync(repo.Name, ct) : null;
+
+            var signals = new Dictionary<int, IReadOnlyList<ReviewSignal>>();
+            foreach (var pr in facts.Values)
+            {
+                // Dependency bots are out of AI code review by policy, so their PRs carry
+                // no pills at all rather than a row of disabled ones.
+                if (options.Value.ExcludedAuthors.Contains(pr.AuthorLogin, StringComparer.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+                // A null alerts dictionary means unreadable and must stay null per PR.
+                // A present dictionary with no entry for this PR means zero open alerts.
+                var openAlerts = alerts is null ? (int?)null : alerts.GetValueOrDefault(pr.Number);
+                signals[pr.Number] = ReviewSignalFactory.Build(
+                    pr,
+                    reviewers,
+                    openAlerts,
+                    $"https://github.com/{gitHub.Value.Owner}/{repo.Name}/pull/{pr.Number}"
+                );
+            }
+            return signals;
+        }
+        catch (Exception ex)
+            when (ex is HttpRequestException or GitHubRateLimitException
+                || ex is TaskCanceledException && !ct.IsCancellationRequested
+            )
+        {
+            logger.LogWarning(ex, "Failed to fetch review signals for {Repo}; keeping last-known-good.", repo.Name);
+            return null;
+        }
+    }
+}

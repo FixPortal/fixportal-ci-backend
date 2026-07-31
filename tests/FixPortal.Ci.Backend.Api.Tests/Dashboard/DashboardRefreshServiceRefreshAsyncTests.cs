@@ -251,6 +251,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<MergedPullRequest>(),
+            new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
             gitHubOptions,
             clock,
             NullLogger<DashboardRefreshService>.Instance
@@ -296,6 +297,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<MergedPullRequest>(),
+            new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
             gitHubOptions,
             clock,
             NullLogger<DashboardRefreshService>.Instance
