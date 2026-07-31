@@ -55,6 +55,10 @@ The collector needs a **fine-grained, read-only** Personal Access Token.
        auto-adds **Metadata: Read-only**, a mandatory dependency — leave it.
      - **Pull requests** — open PRs and the most-recently-merged PR.
      - **Contents** — `git clone` for the Lizard code-metrics worker.
+     - **Code scanning alerts** — open CodeQL alert counts, needed only if
+       `ReviewSignals` configures a `CodeScanning` reviewer. Without it that
+       reviewer reports "not yet reviewed" (`pending`) on every pull request;
+       no other review signal is affected.
    - Leave every other permission at **No access**. A fine-grained PAT has no
      single "read-only" switch; it is read-only purely because every granted
      permission is *Read*. (A classic PAT's nearest scope, `repo`, grants write

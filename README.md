@@ -145,6 +145,59 @@ can be overridden by an environment variable using `__` for `:` (e.g.
 reusable/CodeQL filters, metrics, merged-PR tracking, and job lanes — is
 documented in **[operator-handoff.md](operator-handoff.md#configuration-model)**.
 
+### Review signals (`ReviewSignals`)
+
+A top-level `ReviewSignals` section (a sibling of `Dashboard`, not nested under
+it) adds a per-reviewer status pill — e.g. a CodeRabbit or Gitar pass, a CodeQL
+scan — to each open pull request in the snapshot. It ships **off in effect**:
+`ReviewSignals:Reviewers` is an empty array by default, and with no reviewers
+configured the enrichment worker issues zero GitHub requests. Set the real
+values in deployment configuration, not `appsettings.json`, the same way as
+`GitHub:Token`.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `ReviewSignals:Enabled` | `true` | Master switch. Even when `true`, the worker stays idle until `Reviewers` is non-empty. |
+| `ReviewSignals:RefreshSeconds` | `150` | Enrichment cadence, independent of `Dashboard:RefreshSeconds` — the pills refresh on their own schedule, not the 20 s board loop. The last-known-good cache expires after 3× this interval, so a persistently failing fetch drops to no pills rather than showing a stale pass. |
+| `ReviewSignals:ExcludedAuthors` | `dependabot[bot]`, `renovate[bot]` | Pull-request authors (matched case-insensitively) whose PRs carry no review signals at all. |
+| `ReviewSignals:Reviewers` | *(empty)* | The reviewers to report — see below. |
+
+Each entry in `Reviewers` is:
+
+| Field | Meaning |
+|---|---|
+| `Name` | Display label on the pill, e.g. `"CodeRabbit"`. |
+| `BotLogin` | The reviewing bot's GitHub login. Required when `Source` is `ReviewThreads`; matched against unresolved review-thread authors and PR participants. |
+| `RequiredLabel` | When set, this reviewer only applies to pull requests carrying that label — how CodeRabbit is scoped to HIGH-tier PRs only. Absent means every pull request. |
+| `Source` | `ReviewThreads` (default) reads unresolved review-thread authorship; `CodeScanning` reads open code-scanning alert counts on the PR's head ref instead (used for CodeQL) and ignores `BotLogin`. |
+
+FixPortal's worked example, set via deployment configuration:
+
+```json
+"ReviewSignals": {
+  "Enabled": true,
+  "RefreshSeconds": 150,
+  "ExcludedAuthors": [ "dependabot[bot]", "renovate[bot]" ],
+  "Reviewers": [
+    { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high" },
+    { "Name": "Gitar", "BotLogin": "gitar-app" },
+    { "Name": "CodeQL", "Source": "CodeScanning" }
+  ]
+}
+```
+
+Each reviewer resolves to one of **four** pill states, not three:
+
+| State | Meaning |
+|---|---|
+| `clean` | The reviewer demonstrably ran against the pull request's **current head commit** and left nothing outstanding. A review of an earlier commit does not keep a PR clean after a later push — participation is re-checked against the head commit on every sweep. |
+| `outstanding` | The reviewer has open items — unresolved review threads or open code-scanning alerts — `count` on the pill says how many. |
+| `pending` | Required here, but there is no evidence it has run yet. **Not a pass** — a paused or rate-limited reviewer lands here, indistinguishable from one that simply has not started. |
+| `disabled` | Not required on this pull request, e.g. `RequiredLabel` is set and the PR lacks that label. |
+
+A `CodeScanning` reviewer needs the **Code scanning alerts: read** PAT
+permission — see [operator-handoff.md](operator-handoff.md#github).
+
 ## Deployment
 
 CI deploys to **Azure Container Apps** on every push to `main`. The publish job
