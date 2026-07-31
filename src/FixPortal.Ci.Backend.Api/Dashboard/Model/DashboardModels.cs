@@ -29,13 +29,34 @@ public sealed record WorkflowRun(
 
 public sealed record WorkflowSnapshot(string Name, string File, SignalState State, WorkflowRun? LastRun);
 
+public enum ReviewSignalState
+{
+    /// <summary>The reviewer demonstrably ran and left nothing outstanding.</summary>
+    Clean,
+
+    /// <summary>The reviewer has items still open; Count carries how many.</summary>
+    Outstanding,
+
+    /// <summary>Required here, but no evidence it has run. Never render as clean.</summary>
+    Pending,
+
+    /// <summary>Not required on this pull request.</summary>
+    Disabled,
+}
+
+public sealed record ReviewSignal(string Name, ReviewSignalState State, int? Count, string? HtmlUrl);
+
 public sealed record PullRequest(
     int Number,
     string Title,
     string Author,
     string HtmlUrl,
     bool IsDraft,
-    Instant CreatedAt
+    Instant CreatedAt,
+    // Optional and trailing so every existing construction site keeps compiling and
+    // an older frontend simply never sees the field. Null means "nothing to show":
+    // enrichment has not run, the author is excluded, or no reviewers are configured.
+    IReadOnlyList<ReviewSignal>? ReviewSignals = null
 );
 
 public sealed record MergedPullRequest(
