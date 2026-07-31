@@ -139,7 +139,8 @@ against a local API, see [fixportal-ci-frontend](https://github.com/FixPortal/fi
 ## Configuration
 
 All settings live in `src/FixPortal.Ci.Backend.Api/appsettings.json` under
-`GitHub` and `Dashboard`. The one most forks change is `GitHub:Owner`. Any value
+`GitHub`, `Dashboard` and `ReviewSignals`. The one most forks change is
+`GitHub:Owner`. Any value
 can be overridden by an environment variable using `__` for `:` (e.g.
 `GitHub__Token`). The full table — owner, token, refresh cadences, archived/
 reusable/CodeQL filters, metrics, merged-PR tracking, and job lanes — is
@@ -159,7 +160,7 @@ values in deployment configuration, not `appsettings.json`, the same way as
 |---|---|---|
 | `ReviewSignals:Enabled` | `true` | Master switch. Even when `true`, the worker stays idle until `Reviewers` is non-empty. |
 | `ReviewSignals:RefreshSeconds` | `150` | Enrichment cadence, independent of `Dashboard:RefreshSeconds` — the pills refresh on their own schedule, not the 20 s board loop. The last-known-good cache expires after 3× this interval, so a persistently failing fetch drops to no pills rather than showing a stale pass. |
-| `ReviewSignals:ExcludedAuthors` | `dependabot[bot]`, `renovate[bot]` | Pull-request authors (matched case-insensitively) whose PRs carry no review signals at all. |
+| `ReviewSignals:ExcludedAuthors` | `dependabot`, `dependabot[bot]`, `renovate`, `renovate[bot]` | Pull-request authors (matched case-insensitively) whose PRs carry no review signals at all. Both spellings of each bot ship by default: GraphQL reports a Bot node's login **without** the `[bot]` suffix, which is a REST-ism, so a suffix-only list would never match. |
 | `ReviewSignals:Reviewers` | *(empty)* | The reviewers to report — see below. |
 
 Each entry in `Reviewers` is:
@@ -177,7 +178,7 @@ FixPortal's worked example, set via deployment configuration:
 "ReviewSignals": {
   "Enabled": true,
   "RefreshSeconds": 150,
-  "ExcludedAuthors": [ "dependabot[bot]", "renovate[bot]" ],
+  "ExcludedAuthors": [ "dependabot", "dependabot[bot]", "renovate", "renovate[bot]" ],
   "Reviewers": [
     { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high" },
     { "Name": "Gitar", "BotLogin": "gitar-app" },

@@ -58,7 +58,6 @@ public class ReviewSignalContractTests
     private static readonly JsonSerializerOptions Options = new()
     {
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
@@ -78,14 +77,17 @@ public class ReviewSignalContractTests
         _ = json.Should().Contain("\"outstanding\"").And.Contain("\"count\":2");
     }
 
-    [Fact]
-    public void Absent_signals_are_omitted_from_the_wire_rather_than_sent_as_an_empty_array()
-    {
-        var json = JsonSerializer.Serialize(Pr(), Options);
-        _ = json.Should().NotContain("reviewSignals");
-    }
 }
 ```
+
+> **Correction (as shipped).** This snippet originally asserted that an absent
+> `ReviewSignals` is omitted from the wire. Production does not do that: the API's
+> serializer sets no `DefaultIgnoreCondition`, so the field is emitted as
+> `"reviewSignals": null` — which is what the frontend contract expects anyway. The
+> ruling was to fix the test rather than the serializer, so what shipped is a
+> `WebApplicationFactory<Program>` endpoint test (`ReviewSignalEndpointTests`) that
+> GETs `/api/dashboard/snapshot` and asserts the property is present with
+> `JsonValueKind.Null` — pinning the real wire shape instead of an invented one.
 
 - [ ] **Step 2: Run the test and verify it fails**
 
@@ -429,78 +431,19 @@ public sealed record PrReviewFacts(
 
 In `GitHubOrgClient.cs`, beside the other static mappers (near `ToPullRequest`):
 
-```csharp
-    /// <summary>
-    /// Flattens one GraphQL pull-request node into the facts the signal factory needs.
-    /// Every collection is treated as optional: GraphQL omits or nulls empty
-    /// connections, and a missing author is legitimate for a deleted account.
-    /// All string sets are case-insensitive so a configured BotLogin cannot miss on
-    /// casing alone (GitHub logins are case-preserving but not case-sensitive).
-    /// </summary>
-    public static PrReviewFacts ToReviewFacts(ReviewFactsPull pull)
-    {
-        var labels = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var label in pull.Labels?.Nodes ?? [])
-        {
-            if (!string.IsNullOrWhiteSpace(label.Name))
-            {
-                _ = labels.Add(label.Name);
-            }
-        }
-
-        var participating = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var review in pull.Reviews?.Nodes ?? [])
-        {
-            if (review.Author?.Login is { Length: > 0 } login)
-            {
-                _ = participating.Add(login);
-            }
-        }
-
-        var unresolved = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
-        foreach (var thread in pull.ReviewThreads?.Nodes ?? [])
-        {
-            // The FIRST comment's author owns the thread. A human replying to a bot's
-            // finding must not re-attribute that thread to the human.
-            var author = thread.Comments?.Nodes is { Count: > 0 } comments ? comments[0].Author?.Login : null;
-            if (author is not { Length: > 0 })
-            {
-                continue;
-            }
-            // A resolved thread still proves the reviewer ran — that is what separates
-            // "clean" from "pending".
-            _ = participating.Add(author);
-            if (!thread.IsResolved)
-            {
-                unresolved[author] = unresolved.GetValueOrDefault(author) + 1;
-            }
-        }
-
-        var checkApps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var commit in pull.Commits?.Nodes ?? [])
-        {
-            foreach (var context in commit.Commit?.StatusCheckRollup?.Contexts?.Nodes ?? [])
-            {
-                if (
-                    string.Equals(context.Conclusion, "SUCCESS", StringComparison.OrdinalIgnoreCase)
-                    && context.CheckSuite?.App?.Slug is { Length: > 0 } slug
-                )
-                {
-                    _ = checkApps.Add(slug);
-                }
-            }
-        }
-
-        return new PrReviewFacts(
-            pull.Number,
-            pull.Author?.Login is { Length: > 0 } author ? author : "unknown",
-            labels,
-            unresolved,
-            participating,
-            checkApps
-        );
-    }
-```
+> **Correction (as shipped).** The single-method `ToReviewFacts` originally sketched
+> here does not compile in this repository. Its two `is { Length: > 0 } login` /
+> `... author` pattern variables collide across the method scope (CS0136), and
+> `TreatWarningsAsErrors` plus the Sonar analyzers reject the nested-loop body on top
+> of that. What shipped is the same logic decomposed into four private helpers —
+> `CollectLabels`, `CollectReviewers`, `CollectThreadFacts`,
+> `CollectSuccessfulCheckApps` — each owning one accumulator, with `ToReviewFacts`
+> reduced to calling them in order. The reviewer walked all four paths and confirmed
+> semantic equivalence to this sketch. Two later changes also apply: participation is
+> head-scoped (`GetHeadOid` / `IsHeadCommit`, so `ParticipatingAuthors` is
+> `HeadParticipatingAuthors`), and a resolved thread only proves participation when
+> its first comment's `originalCommit` is the head commit. See
+> `GitHubOrgClient.cs` for the shipped form.
 
 - [ ] **Step 5: Run the mapper tests and verify they pass**
 
