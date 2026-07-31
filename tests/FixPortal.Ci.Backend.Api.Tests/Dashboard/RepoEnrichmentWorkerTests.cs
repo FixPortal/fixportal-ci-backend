@@ -152,29 +152,8 @@ public class RepoEnrichmentWorkerTests
             Task.FromResult(collect(repo));
     }
 
-    private sealed class TrackingFakeTimeProvider : FakeTimeProvider
-    {
-        public TaskCompletionSource InitialDelayScheduled { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public TaskCompletionSource RetryDelayScheduled { get; } =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
-
-        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
-        {
-            var timer = base.CreateTimer(callback, state, dueTime, period);
-            if (dueTime < TimeSpan.FromSeconds(15))
-            {
-                InitialDelayScheduled.TrySetResult();
-            }
-            else if (dueTime == TimeSpan.FromMinutes(5))
-            {
-                RetryDelayScheduled.TrySetResult();
-            }
-
-            return timer;
-        }
-    }
+    // TrackingFakeTimeProvider lives in TrackingFakeTimeProvider.cs (shared with
+    // ReviewSignalMergeTests) rather than nested here.
 
     // CB-H8: drives the base class's real ExecuteAsync loop (not RunSweepAsync
     // directly) so the cold-start retry guard itself is under test. On a failed
