@@ -244,6 +244,37 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         }
     }
 
+    // The repos list answers normally; every GraphQL call gets a bare 403 (no
+    // rate-limit headers), which GuardResponse surfaces as GitHubAuthException —
+    // a PAT missing a scope, not a throttled request.
+    private sealed class GraphQlAuthFailHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource GraphQlRequested { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/repos", StringComparison.Ordinal))
+            {
+                return Task.FromResult(
+                    new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(
+                            """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"}]""",
+                            Encoding.UTF8,
+                            "application/json"
+                        ),
+                    }
+                );
+            }
+            GraphQlRequested.TrySetResult();
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Forbidden));
+        }
+    }
+
     // Plain placeholder substitution rather than raw-string interpolation: the JSON's
     // own run of closing braces right after the contexts hole is ambiguous for the
     // $$"""...""" interpolation-brace-counting rule (CS9007).
@@ -375,5 +406,63 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         var signals = await RunOneSweepAsync(handler, options);
 
         _ = signals.ContainsKey(181).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_graphql_authorization_failure_soft_fails_and_cold_start_still_converges()
+    {
+        // Regression cover for the GitHubAuthException arm of CollectAsync's catch:
+        // before it, a mis-scoped PAT escaped to RunSweepAsync's generic catch,
+        // counted as a per-repo sweep failure, and cold start retried every 5 minutes
+        // indefinitely instead of settling into the steady cadence.
+        var handler = new GraphQlAuthFailHandler();
+        var timeProvider = new TrackingFakeTimeProvider();
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>();
+        var worker = new ReviewSignalEnrichmentWorker(
+            client,
+            new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions),
+            cache,
+            Options.Create(
+                new ReviewSignalsOptions
+                {
+                    Reviewers = [new ReviewerOptions { Name = "Gitar", BotLogin = "gitar-app" }],
+                    // Long cadence so the steady-state timer can never tick within the
+                    // test: the assertion is about WHICH timer is registered, not what
+                    // fires from it.
+                    RefreshSeconds = 3600,
+                }
+            ),
+            gitHubOptions,
+            timeProvider,
+            NullLogger<ReviewSignalEnrichmentWorker>.Instance
+        );
+
+        await worker.StartAsync(TestContext.Current.CancellationToken);
+        await timeProvider.InitialDelayScheduled.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
+        timeProvider.Advance(TimeSpan.FromSeconds(15));
+        await handler.GraphQlRequested.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        // Convergence, event-driven: ExecuteAsync only registers the steady-state
+        // PeriodicTimer once RunColdStartAsync has returned. A counted per-repo
+        // failure would instead register the 5-minute retry delay — and this await
+        // would time out.
+        await timeProvider.SteadyStateTimerScheduled.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
+
+        _ = timeProvider
+            .RetryDelayScheduled.Task.IsCompleted.Should()
+            .BeFalse("a soft-failed collect must not count as a per-repo sweep failure");
+        _ = cache.IsEmpty.Should().BeTrue("a soft-failed collect keeps last-known-good — here, an empty cache");
+
+        await worker.StopAsync(TestContext.Current.CancellationToken);
     }
 }
