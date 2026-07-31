@@ -296,7 +296,12 @@ public class DashboardRefreshServiceRefreshAsyncTests
         await sut.RefreshAsync(TestContext.Current.CancellationToken);
 
         _ = state.Current.Should().NotBeNull();
-        var pr = state.Current!.Repositories.Should().ContainSingle().Which.PullRequests.Should().ContainSingle().Subject;
+        var pr = state
+            .Current!.Repositories.Should()
+            .ContainSingle()
+            .Which.PullRequests.Should()
+            .ContainSingle()
+            .Subject;
         _ = pr.Number.Should().Be(181);
         _ = pr.ReviewSignals.Should().BeEquivalentTo(signals);
     }

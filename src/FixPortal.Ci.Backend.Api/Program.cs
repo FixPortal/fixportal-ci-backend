@@ -70,10 +70,7 @@ builder
         "Every ReviewSignals:Reviewers entry must set a non-blank Name (it is the pill's label)."
     )
     .Validate(
-        o =>
-            o.Reviewers.All(r =>
-                r.Source != ReviewerSource.ReviewThreads || !string.IsNullOrWhiteSpace(r.BotLogin)
-            ),
+        o => o.Reviewers.All(r => r.Source != ReviewerSource.ReviewThreads || !string.IsNullOrWhiteSpace(r.BotLogin)),
         "Every ReviewSignals:Reviewers entry with Source=ReviewThreads must set a non-blank BotLogin, or it can never match and reports Pending forever."
     )
     .ValidateOnStart();
@@ -130,6 +127,7 @@ builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
 builder.Services.AddSingleton<GitHubInventoryCache>();
 builder.Services.AddSingleton<PerRepoCache<RepoMetrics>>();
 builder.Services.AddSingleton<PerRepoCache<MergedPullRequest>>();
+
 // Unlike its neighbours above, this cache IS given a max-age. An expired review
 // signal must read as "unknown" (no pills), never as a stale pass: while
 // CollectAsync keeps soft-failing (GraphQL 5xx, rate limit, a PAT losing a scope

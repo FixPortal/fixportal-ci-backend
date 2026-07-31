@@ -61,7 +61,12 @@ public class ReviewSignalFactoryTests
     [Fact]
     public void Disabled_outranks_open_alerts_on_the_code_scanning_source()
     {
-        var gated = new ReviewerOptions { Name = "CodeQL", Source = ReviewerSource.CodeScanning, RequiredLabel = "review-high" };
+        var gated = new ReviewerOptions
+        {
+            Name = "CodeQL",
+            Source = ReviewerSource.CodeScanning,
+            RequiredLabel = "review-high",
+        };
 
         _ = Only(gated, Facts(checkApps: ["github-code-scanning"]), 2).State.Should().Be(ReviewSignalState.Disabled);
     }
@@ -71,7 +76,12 @@ public class ReviewSignalFactoryTests
     {
         // A misconfigured RequiredLabel of "  " could never match a real label (CollectLabels
         // skips whitespace-only names), so treat it as unset rather than an unmatchable gate.
-        var whitespaceGated = new ReviewerOptions { Name = "Weird", BotLogin = "weird-app", RequiredLabel = "   " };
+        var whitespaceGated = new ReviewerOptions
+        {
+            Name = "Weird",
+            BotLogin = "weird-app",
+            RequiredLabel = "   ",
+        };
 
         _ = Only(whitespaceGated, Facts(headParticipating: ["weird-app"])).State.Should().Be(ReviewSignalState.Clean);
     }
@@ -83,7 +93,12 @@ public class ReviewSignalFactoryTests
     {
         // Untrimmed, "review-high " matches no real label, so the reviewer reads Disabled
         // on every PR — and a human reads Disabled as "safe to skip", not "misconfigured".
-        var padded = new ReviewerOptions { Name = "CodeRabbit", BotLogin = "coderabbitai", RequiredLabel = configured };
+        var padded = new ReviewerOptions
+        {
+            Name = "CodeRabbit",
+            BotLogin = "coderabbitai",
+            RequiredLabel = configured,
+        };
 
         var signal = Only(padded, Facts(labels: ["review-high"], headParticipating: ["coderabbitai"]));
 
@@ -143,7 +158,10 @@ public class ReviewSignalFactoryTests
     [Theory]
     [InlineData(2, ReviewSignalState.Outstanding)]
     [InlineData(0, ReviewSignalState.Clean)]
-    public void Code_scanning_state_follows_the_open_alert_count_when_a_scan_has_run(int alerts, ReviewSignalState expected)
+    public void Code_scanning_state_follows_the_open_alert_count_when_a_scan_has_run(
+        int alerts,
+        ReviewSignalState expected
+    )
     {
         var facts = Facts(checkApps: ["github-code-scanning"]);
         var expectedCount = alerts > 0 ? alerts : (int?)null;

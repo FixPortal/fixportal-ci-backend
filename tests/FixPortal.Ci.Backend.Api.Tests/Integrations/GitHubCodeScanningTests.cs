@@ -14,7 +14,10 @@ public class GitHubCodeScanningTests
     {
         public List<string> Urls { get; } = [];
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             Urls.Add(request.RequestUri!.PathAndQuery);
             return Task.FromResult(responses.Dequeue());
@@ -31,7 +34,10 @@ public class GitHubCodeScanningTests
 
     private static HttpClient Responding(HttpStatusCode status, string body = "[]")
     {
-        var response = new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+        var response = new HttpResponseMessage(status)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
         return new HttpClient(new ScriptedHandler(new Queue<HttpResponseMessage>([response])))
         {
             BaseAddress = new Uri("https://api.github.com/"),
@@ -82,9 +88,7 @@ public class GitHubCodeScanningTests
             + string.Join(",", Enumerable.Repeat("""{"most_recent_instance":{"ref":"refs/heads/main"}}""", 100))
             + "]";
         const string secondPage = """[{"most_recent_instance":{"ref":"refs/pull/181/head"}}]""";
-        var handler = new ScriptedHandler(
-            new Queue<HttpResponseMessage>([JsonOk(firstPage), JsonOk(secondPage)])
-        );
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([JsonOk(firstPage), JsonOk(secondPage)]));
         using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
 
         var counts = await CreateClient(http).GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);

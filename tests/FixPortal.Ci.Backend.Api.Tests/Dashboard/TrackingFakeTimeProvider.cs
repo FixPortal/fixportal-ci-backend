@@ -16,7 +16,8 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 /// </summary>
 internal sealed class TrackingFakeTimeProvider : FakeTimeProvider
 {
-    public TaskCompletionSource InitialDelayScheduled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    public TaskCompletionSource InitialDelayScheduled { get; } =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     public TaskCompletionSource RetryDelayScheduled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
