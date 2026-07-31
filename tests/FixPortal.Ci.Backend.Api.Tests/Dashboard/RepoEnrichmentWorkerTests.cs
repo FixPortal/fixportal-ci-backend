@@ -8,7 +8,6 @@ using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
-using Microsoft.Extensions.Time.Testing;
 using NodaTime;
 using NodaTime.Testing;
 using Xunit;

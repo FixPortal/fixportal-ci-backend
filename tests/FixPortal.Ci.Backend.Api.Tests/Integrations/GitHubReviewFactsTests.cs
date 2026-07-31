@@ -228,7 +228,8 @@ public class GitHubReviewFactsTransportTests
             ]}}}}
             """;
         var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
 
         var facts = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
 
@@ -250,7 +251,8 @@ public class GitHubReviewFactsTransportTests
         var handler = new ScriptedHandler(
             new Queue<HttpResponseMessage>([Json("""{"data":{"repository":{"pullRequests":{"nodes":[]}}}}""")])
         );
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
 
         _ = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
 
@@ -267,7 +269,8 @@ public class GitHubReviewFactsTransportTests
              "repository":{"pullRequests":{"nodes":[]}}}}
             """;
         var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var client = CreateClient(http);
 
         _ = await client.GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
@@ -283,9 +286,11 @@ public class GitHubReviewFactsTransportTests
                 Json("""{"data":null,"errors":[{"message":"Could not resolve to a Repository"}]}"""),
             ])
         );
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var client = CreateClient(http);
 
-        var act = async () => await CreateClient(http).GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+        var act = async () => await client.GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
 
         _ = await act.Should().ThrowAsync<HttpRequestException>();
     }

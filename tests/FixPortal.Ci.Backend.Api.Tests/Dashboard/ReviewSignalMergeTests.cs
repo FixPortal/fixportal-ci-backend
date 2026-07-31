@@ -267,7 +267,8 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         ReviewSignalsOptions options
     )
     {
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());

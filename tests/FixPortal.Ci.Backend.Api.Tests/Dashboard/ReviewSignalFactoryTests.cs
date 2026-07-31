@@ -180,7 +180,7 @@ public class ReviewSignalFactoryTests
     public void Code_scanning_is_pending_when_alerts_could_not_be_read()
     {
         // null openAlerts = endpoint unavailable. Must not render as a clean scan.
-        _ = Only(CodeQl, Facts(checkApps: ["github-code-scanning"]), null).State.Should().Be(ReviewSignalState.Pending);
+        _ = Only(CodeQl, Facts(checkApps: ["github-code-scanning"])).State.Should().Be(ReviewSignalState.Pending);
     }
 
     [Fact]

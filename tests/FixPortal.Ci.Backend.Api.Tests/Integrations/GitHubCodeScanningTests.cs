@@ -89,7 +89,8 @@ public class GitHubCodeScanningTests
             + "]";
         const string secondPage = """[{"most_recent_instance":{"ref":"refs/pull/181/head"}}]""";
         var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([JsonOk(firstPage), JsonOk(secondPage)]));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
 
         var counts = await CreateClient(http).GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
 

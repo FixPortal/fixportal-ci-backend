@@ -267,10 +267,8 @@ public class DashboardRefreshServiceRefreshAsyncTests
         // tests pass an empty cache, so deleting those two lines left the suite green.
         var state = new DashboardSnapshotState();
         using var handler = new OnePullRequestHandler();
-        using var http = new HttpClient(handler, disposeHandler: false)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        using var http = new HttpClient(handler, disposeHandler: false);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
@@ -354,10 +352,8 @@ public class DashboardRefreshServiceRefreshAsyncTests
     {
         var state = new DashboardSnapshotState();
         using var handler = new RepoAuthFailureHandler();
-        using var http = new HttpClient(handler, disposeHandler: false)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        using var http = new HttpClient(handler, disposeHandler: false);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore(), state);

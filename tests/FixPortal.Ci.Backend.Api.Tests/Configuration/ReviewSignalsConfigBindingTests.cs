@@ -65,8 +65,10 @@ public class ReviewSignalsOptionsValidationTests
 
     private static void Start(IReadOnlyDictionary<string, string> settings)
     {
-        using var factory = new ValidationFactory(settings);
-        using var client = factory.CreateClient();
+        var factory = new ValidationFactory(settings);
+        var client = factory.CreateClient();
+        client.Dispose();
+        factory.Dispose();
     }
 
     private static Dictionary<string, string> Reviewer(string name, string? botLogin, string? source = null)

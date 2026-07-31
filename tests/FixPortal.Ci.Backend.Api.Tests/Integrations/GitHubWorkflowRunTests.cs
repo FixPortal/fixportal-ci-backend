@@ -37,7 +37,8 @@ public class GitHubWorkflowRunTests
     [Fact]
     public async Task GetRecentRunsAsync_uses_url_and_title_fallbacks_for_incomplete_GitHub_runs()
     {
-        using var http = new HttpClient(new WorkflowRunsHandler()) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(new WorkflowRunsHandler());
+        http.BaseAddress = new Uri("https://api.github.com/");
         var client = new GitHubOrgClient(
             http,
             Options.Create(new GitHubOptions { Owner = "acme", Token = "t" }),
