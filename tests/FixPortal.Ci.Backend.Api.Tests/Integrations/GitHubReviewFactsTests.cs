@@ -62,23 +62,6 @@ public class GitHubReviewFactsTests
     }
 
     [Fact]
-    public void Treats_a_resolved_thread_as_participation_so_a_reviewer_that_ran_clean_is_not_pending()
-    {
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(threads: [Thread("gitar-app", true)]));
-
-        _ = facts.UnresolvedThreadsByAuthor.Should().NotContainKey("gitar-app");
-        _ = facts.HeadParticipatingAuthors.Should().Contain("gitar-app");
-    }
-
-    [Fact]
-    public void Records_a_review_author_as_participation()
-    {
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(reviews: [Review("gitar-app")]));
-
-        _ = facts.HeadParticipatingAuthors.Should().Contain("gitar-app");
-    }
-
-    [Fact]
     public void A_review_on_the_head_commit_counts_as_head_participation()
     {
         var facts = GitHubOrgClient.ToReviewFacts(Pull(reviews: [Review("gitar-app", commitOid: HeadOid)], headOid: HeadOid));

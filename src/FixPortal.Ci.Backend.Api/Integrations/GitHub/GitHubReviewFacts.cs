@@ -16,7 +16,12 @@ public sealed record GraphQlLabel(string? Name);
 
 public sealed record GraphQlReview(GraphQlActor? Author, GraphQlCommit? Commit);
 
-public sealed record GraphQlComment(GraphQlActor? Author, GraphQlCommit? Commit);
+// OriginalCommit (not Commit): GitHub's `commit` field on a review comment is the
+// commit the comment CURRENTLY applies to and can advance as the PR is pushed to;
+// `originalCommit` is the commit it was authored against. Head-scoping needs the
+// latter, or a thread opened on commit 1 would report the head oid and wrongly
+// count as head participation.
+public sealed record GraphQlComment(GraphQlActor? Author, GraphQlCommit? OriginalCommit);
 
 public sealed record GraphQlThread(bool IsResolved, NodeList<GraphQlComment>? Comments);
 

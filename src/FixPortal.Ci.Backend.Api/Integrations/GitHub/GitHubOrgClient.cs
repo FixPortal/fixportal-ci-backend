@@ -121,7 +121,17 @@ public sealed class GitHubOrgClient(
                 labels(first: 20) { nodes { name } }
                 reviews(first: 50) { nodes { author { login } commit { oid } } }
                 reviewThreads(first: 100) {
-                  nodes { isResolved comments(first: 1) { nodes { author { login } commit { oid } } } }
+                  nodes {
+                    isResolved
+                    comments(first: 1) {
+                      # originalCommit, not commit: commit is the commit the comment
+                      # CURRENTLY applies to and can advance as the PR is pushed to;
+                      # originalCommit is the commit it was authored against, which is
+                      # what head-scoping needs to ask "did this reviewer engage with
+                      # the current head?" without a stale thread reporting a false match.
+                      nodes { author { login } originalCommit { oid } }
+                    }
+                  }
                 }
                 commits(last: 1) {
                   nodes {
@@ -458,7 +468,7 @@ public sealed class GitHubOrgClient(
             {
                 continue;
             }
-            if (IsHeadCommit(comment?.Commit?.Oid, headOid))
+            if (IsHeadCommit(comment?.OriginalCommit?.Oid, headOid))
             {
                 _ = headParticipating.Add(author);
             }
