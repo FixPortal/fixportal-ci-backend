@@ -89,6 +89,30 @@ public sealed record ExactReviewFactsData(
 );
 
 /// <summary>
+/// Outcome of an exact-PR fetch: what was read, what could not be, and how many queries
+/// it took.
+/// </summary>
+/// <param name="Failed">
+/// Pull requests GitHub refused. Their watermark MUST NOT be advanced by the caller, or
+/// the next diff comes back clean and the failure is silently certified as current — the
+/// same trap as committing a watermark before a call that can still throw.
+/// </param>
+/// <param name="QueriesIssued">
+/// Counts ATTEMPTS, including rejected ones. Counting only successes made a sweep that
+/// was being refused on every single query report "0 GraphQL queries", indistinguishable
+/// from a quiet sweep that legitimately spent nothing. That reading cost real debugging
+/// time on the day it shipped.
+/// </param>
+public sealed record ReviewFactsBatch(
+    IReadOnlyDictionary<int, PrReviewFacts> Facts,
+    IReadOnlyList<int> Failed,
+    int QueriesIssued
+)
+{
+    public static readonly ReviewFactsBatch Empty = new(new Dictionary<int, PrReviewFacts>(), [], 0);
+}
+
+/// <summary>
 /// Everything needed to decide one pull request's reviewer states, flattened out of
 /// the GraphQL payload. Deliberately reviewer-agnostic: it records who did what, and
 /// the factory decides what that means for a configured reviewer.

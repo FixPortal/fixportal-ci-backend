@@ -227,9 +227,10 @@ public class GitHubReviewFactsTransportTests
         using var http = new HttpClient(handler);
         http.BaseAddress = new Uri("https://api.github.com/");
 
-        var facts = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [], CancellationToken.None);
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [], CancellationToken.None);
 
-        _ = facts.Should().BeEmpty();
+        _ = batch.Facts.Should().BeEmpty();
+        _ = batch.QueriesIssued.Should().Be(0);
         _ = handler.Requests.Should().BeEmpty();
     }
 
@@ -248,9 +249,11 @@ public class GitHubReviewFactsTransportTests
         using var http = new HttpClient(handler);
         http.BaseAddress = new Uri("https://api.github.com/");
 
-        var facts = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None);
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None);
 
-        _ = facts.Keys.Should().BeEquivalentTo([181, 182]);
+        _ = batch.Facts.Keys.Should().BeEquivalentTo([181, 182]);
+        _ = batch.Failed.Should().BeEmpty();
+        _ = batch.QueriesIssued.Should().Be(1);
         var sent = handler.Bodies.Should().ContainSingle().Subject;
         _ = sent.Should().Contain("pr181: pullRequest(number: 181)");
         _ = sent.Should().Contain("pr182: pullRequest(number: 182)");
@@ -271,9 +274,57 @@ public class GitHubReviewFactsTransportTests
         using var http = new HttpClient(handler);
         http.BaseAddress = new Uri("https://api.github.com/");
 
-        var facts = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
 
-        _ = facts.Should().BeEmpty();
+        _ = batch.Facts.Should().BeEmpty();
+        // Absent is not refused: nothing here should be retried or held dirty.
+        _ = batch.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_refused_pull_request_is_reported_rather_than_failing_the_whole_repo()
+    {
+        // "Resource not accessible by personal access token" on one aliased pull request
+        // fails the WHOLE document, because GitHub answers an aliased query all-or-nothing.
+        // The retry isolates the offender so its neighbours still get their pills, and the
+        // caller is told which one failed so it can keep that watermark dirty.
+        const string refused = """
+            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            """;
+        const string ok = """
+            {"data":{"repository":{"pr182":{"number":182,"author":{"login":"chris"},"labels":{"nodes":[]},
+              "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[]}}}}}
+            """;
+        // Batch fails, then 181 alone fails, then 182 alone succeeds.
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(refused), Json(refused), Json(ok)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None);
+
+        _ = batch.Facts.Keys.Should().Equal(182);
+        _ = batch.Failed.Should().Equal(181);
+        // 1 batched attempt + 2 individual retries, all counted: a sweep being refused
+        // must never report zero queries.
+        _ = batch.QueriesIssued.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task A_single_refused_pull_request_is_not_retried_pointlessly()
+    {
+        // A one-PR chunk has nothing to isolate, so it must not re-issue the same query.
+        const string refused = """
+            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(refused)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
+
+        _ = batch.Failed.Should().Equal(181);
+        _ = batch.QueriesIssued.Should().Be(1);
+        _ = handler.Requests.Should().ContainSingle();
     }
 
     [Fact]

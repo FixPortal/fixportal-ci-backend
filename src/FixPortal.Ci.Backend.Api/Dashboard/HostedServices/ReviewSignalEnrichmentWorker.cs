@@ -74,13 +74,13 @@ public sealed class ReviewSignalEnrichmentWorker(
     private int _sweepCost;
     private int _sweepQueries;
     private int _sweepRepos;
+    private int _sweepFailedPrs;
     private int _sweepSkippedForBudget;
     private GraphQlRateLimit? _lastRateLimit;
 
     private static readonly IReadOnlyDictionary<int, PrWatermark> EmptyWatermarks = new Dictionary<int, PrWatermark>();
     private static readonly IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>> EmptySignals =
         new Dictionary<int, IReadOnlyList<ReviewSignal>>();
-    private static readonly IReadOnlyDictionary<int, PrReviewFacts> EmptyFacts = new Dictionary<int, PrReviewFacts>();
 
     // Sweep-to-sweep state. Sweeps are sequential (RepoEnrichmentWorker.RunSweepAsync
     // awaits each repo in turn) and this worker is a singleton, so plain dictionaries are
@@ -113,15 +113,28 @@ public sealed class ReviewSignalEnrichmentWorker(
         // "working perfectly" and "not running" would look identical from the outside —
         // which is the same silence-reads-as-health defect this feature was fixed for.
         // The line is the proof the worker is alive and the design is doing its job.
+        // Failures at Warning, on their own line: a sweep issuing queries that are all
+        // refused would otherwise read as ordinary activity in the Information line.
+        if (_sweepFailedPrs > 0)
+        {
+            logger.LogWarning(
+                "PR review signals could not be read for {Failed} pull request(s) this sweep; they keep their previous "
+                    + "watermark and will be retried. A persistent count here means the token cannot read them at all.",
+                _sweepFailedPrs
+            );
+        }
+
         logger.LogInformation(
-            "PR review signals sweep issued {Queries} GraphQL queries costing {Cost} point(s) across {Repos} repo(s); {Remaining} remaining until {ResetAt}.",
+            "PR review signals sweep issued {Queries} GraphQL queries ({Failed} refused) costing {Cost} point(s) across {Repos} repo(s); {Remaining} remaining until {ResetAt}.",
             _sweepQueries,
+            _sweepFailedPrs,
             _sweepCost,
             _sweepRepos,
             _lastRateLimit?.Remaining,
             _lastRateLimit?.ResetAt
         );
 
+        _sweepFailedPrs = 0;
         _sweepRepos = 0;
         _sweepCost = 0;
         _sweepQueries = 0;
@@ -161,12 +174,12 @@ public sealed class ReviewSignalEnrichmentWorker(
 
             var toFetch = diff.Dirty.Union(due).ToList();
 
-            var facts =
-                toFetch.Count > 0 ? await Client.GetPullRequestReviewFactsAsync(repo.Name, toFetch, ct) : EmptyFacts;
-            if (toFetch.Count > 0)
-            {
-                RecordGraphQlCost();
-            }
+            var batch =
+                toFetch.Count > 0
+                    ? await Client.GetPullRequestReviewFactsAsync(repo.Name, toFetch, ct)
+                    : ReviewFactsBatch.Empty;
+            var facts = batch.Facts;
+            RecordGraphQlCost(batch);
 
             // Only pay for the alerts call when a configured reviewer actually reads it,
             // AND only when something is being recomputed — an unchanged sweep must cost
@@ -184,7 +197,13 @@ public sealed class ReviewSignalEnrichmentWorker(
             // A brand-new pull request is the worst case: it is not in the cache, so
             // ReviewSignalPriority cannot rescue it either, and its pills would never
             // appear until someone touched the pull request again.
-            _watermarks[repo.Name] = current;
+            // A pull request GitHub refused keeps its PREVIOUS watermark rather than the
+            // one just observed, so the next diff still sees it as dirty and retries it.
+            // Advancing it would mean a repo whose token cannot read one pull request
+            // silently reports that pull request as up to date forever — a partial version
+            // of the same certify-stale bug, and the harder one to notice because every
+            // other pull request in the repo still works.
+            _watermarks[repo.Name] = batch.Failed.Count == 0 ? current : WithoutFailed(current, previous, batch.Failed);
 
             if (diff.Evicted.Count > 0)
             {
@@ -296,6 +315,32 @@ public sealed class ReviewSignalEnrichmentWorker(
         return signals;
     }
 
+    /// <summary>
+    /// The freshly observed watermarks, except that refused pull requests keep whatever
+    /// was known before (or nothing at all, if they were never read). Either way the next
+    /// diff still reports them dirty, so a refusal is retried rather than certified.
+    /// </summary>
+    internal static IReadOnlyDictionary<int, PrWatermark> WithoutFailed(
+        IReadOnlyDictionary<int, PrWatermark> current,
+        IReadOnlyDictionary<int, PrWatermark> previous,
+        IReadOnlyList<int> failed
+    )
+    {
+        var merged = new Dictionary<int, PrWatermark>(current);
+        foreach (var number in failed)
+        {
+            if (previous.TryGetValue(number, out var before))
+            {
+                merged[number] = before;
+            }
+            else
+            {
+                _ = merged.Remove(number);
+            }
+        }
+        return merged;
+    }
+
     private bool IsBelowReserve() =>
         IsBelowReserve(_lastRateLimit, options.Value.ReserveBudgetPoints, clock.GetCurrentInstant());
 
@@ -325,9 +370,14 @@ public sealed class ReviewSignalEnrichmentWorker(
 
     // Sweeps are sequential (RepoEnrichmentWorker.RunSweepAsync awaits each repo in
     // turn), so plain accumulation is safe here.
-    private void RecordGraphQlCost()
+    private void RecordGraphQlCost(ReviewFactsBatch batch)
     {
-        _sweepQueries++;
+        // Attempts, not successes. The previous version incremented once per successful
+        // call, so a sweep being refused on every query logged "0 GraphQL queries" —
+        // identical to a quiet sweep that genuinely spent nothing, and it cost real time
+        // to spot. Failures are counted separately rather than hidden.
+        _sweepQueries += batch.QueriesIssued;
+        _sweepFailedPrs += batch.Failed.Count;
         if (Client.LastGraphQlRateLimit is { } rateLimit)
         {
             _lastRateLimit = rateLimit;
