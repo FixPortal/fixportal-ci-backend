@@ -107,7 +107,11 @@ public sealed class GitHubOrgClient(
     IOptions<DashboardOptions> dashboard,
     GitHubETagStore etags,
     DashboardSnapshotState? state = null,
-    ILogger<GitHubOrgClient>? logger = null
+    ILogger<GitHubOrgClient>? logger = null,
+    // Optional, like state and logger above: null means "use the configured personal
+    // access token", which is what every unit test wants and what the deployment used
+    // before the GitHub App existed.
+    IGitHubTokenSource? tokens = null
 )
 {
     private static readonly JsonSerializerOptions SerializerOptions = CreateSerializerOptions();
@@ -432,7 +436,7 @@ public sealed class GitHubOrgClient(
     {
         using var request = new HttpRequestMessage(HttpMethod.Post, "graphql");
         request.Content = JsonContent.Create(new { query, variables }, options: GraphQlSerializerOptions);
-        AddStandardHeaders(request);
+        await AddStandardHeadersAsync(request, ct);
 
         using var response = await httpClient.SendAsync(request, ct);
         GuardResponse(response, subject, affectsAuthState: false);
@@ -1125,7 +1129,7 @@ public sealed class GitHubOrgClient(
     private async Task<T?> SendAsync<T>(string url, CancellationToken ct, bool affectsAuthState = true)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        AddStandardHeaders(request);
+        await AddStandardHeadersAsync(request, ct);
 
         // Conditional GET: a matching validator yields 304 Not Modified, which GitHub
         // serves without charging the primary rate limit. We then return the payload
@@ -1161,12 +1165,14 @@ public sealed class GitHubOrgClient(
         return value;
     }
 
-    private void AddStandardHeaders(HttpRequestMessage request)
+    // Async because a GitHub App installation token expires hourly and is re-minted on
+    // demand; a PAT resolves synchronously and this simply completes.
+    private async Task AddStandardHeadersAsync(HttpRequestMessage request, CancellationToken ct)
     {
         request.Headers.Add("X-GitHub-Api-Version", "2022-11-28");
         request.Headers.Add("User-Agent", "fixportal-ci-backend");
         request.Headers.Add("Accept", "application/vnd.github+json");
-        request.Headers.Authorization = new("Bearer", _gitHub.Token);
+        request.Headers.Authorization = new("Bearer", tokens is null ? _gitHub.Token : await tokens.GetTokenAsync(ct));
     }
 
     private void GuardResponse(HttpResponseMessage response, string url, bool affectsAuthState)

@@ -170,6 +170,10 @@ jobs:
         env:
           IMAGE_TAG: ${{ github.sha }}
           DASHBOARD_GH_TOKEN: ${{ secrets.DASHBOARD_GH_TOKEN }}
+          # Both empty until the App is created; the template then omits the App entirely
+          # and the dashboard keeps using the PAT, so this deploys safely either way.
+          DASHBOARD_GH_APP_ID: ${{ vars.DASHBOARD_GH_APP_ID }}
+          DASHBOARD_GH_APP_PRIVATE_KEY: ${{ secrets.DASHBOARD_GH_APP_PRIVATE_KEY }}
           CI_ADMIN_KEY: ${{ secrets.CI_ADMIN_KEY }}
           ACA_ENVIRONMENT_ID: ${{ secrets.ACA_ENVIRONMENT_ID }}
           PULL_IDENTITY_ID: ${{ secrets.PULL_IDENTITY_ID }}
@@ -199,15 +203,20 @@ jobs:
           # containing a quote or backslash); the trap removes it even on failure.
           params_file="$(mktemp)"
           trap 'rm -f "$params_file"' EXIT
+          # The App private key goes through the same jq path as the other secrets, and
+          # for a stronger reason: a PEM is multi-line, so any route that does not escape
+          # it properly corrupts the key rather than failing loudly.
           jq -n \
             --arg gitHubToken "$DASHBOARD_GH_TOKEN" \
             --arg adminKey "$CI_ADMIN_KEY" \
+            --arg gitHubAppPrivateKey "$DASHBOARD_GH_APP_PRIVATE_KEY" \
             '{
               "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
               "contentVersion": "1.0.0.0",
               "parameters": {
                 "gitHubToken": { "value": $gitHubToken },
-                "adminKey": { "value": $adminKey }
+                "adminKey": { "value": $adminKey },
+                "gitHubAppPrivateKey": { "value": $gitHubAppPrivateKey }
               }
             }' > "$params_file"
 
@@ -221,6 +230,7 @@ jobs:
             managedEnvironmentId="$ACA_ENVIRONMENT_ID"
             acrLoginServer="$ACR_LOGIN_SERVER"
             pullIdentityId="$PULL_IDENTITY_ID"
+            gitHubAppId="$DASHBOARD_GH_APP_ID"
           )
 
           if [ -n "$CUSTOM_DOMAIN_NAME" ]; then
