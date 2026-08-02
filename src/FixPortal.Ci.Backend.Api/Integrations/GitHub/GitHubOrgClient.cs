@@ -116,7 +116,7 @@ public sealed class GitHubOrgClient(
         query($owner: String!, $name: String!) {
           rateLimit { cost remaining resetAt }
           repository(owner: $owner, name: $name) {
-            pullRequests(states: OPEN, first: 50, orderBy: {field: UPDATED_AT, direction: DESC}) {
+            pullRequests(states: OPEN, first: 25, orderBy: {field: UPDATED_AT, direction: DESC}) {
               pageInfo { hasNextPage }
               nodes {
                 number
@@ -161,7 +161,7 @@ public sealed class GitHubOrgClient(
     private readonly DashboardOptions _dashboard = dashboard.Value;
 
     // Repos whose code-scanning endpoint has already been reported as unreadable, so
-    // the warning is emitted once rather than on every 150s sweep. Concurrent because
+    // the warning is emitted once rather than on every sweep. Concurrent because
     // nothing guarantees the enrichment sweep is the only caller.
     private readonly ConcurrentDictionary<string, byte> _codeScanningWarned = new(StringComparer.OrdinalIgnoreCase);
 
@@ -179,9 +179,15 @@ public sealed class GitHubOrgClient(
     /// per-PR query would multiply the request count by the open-PR total and break
     /// the rate budget. affectsAuthState is false throughout — this is a supplementary
     /// signal and a token missing a scope here must not flip /api/health.
-    /// The connection is capped at the 50 most recently updated open PRs (first: 50,
+    /// The connection is capped at the 25 most recently updated open PRs (first: 25,
     /// no cursor pagination — the nested connections are capped the same way, so every
-    /// level of this query trades completeness for a bounded rate cost). A repo past
+    /// level of this query trades completeness for a bounded rate cost). The outer cap
+    /// is the one that matters for cost: GraphQL prices by connection fan-out, so every
+    /// nested connection multiplies by it and halving 50 to 25 roughly halves the whole
+    /// query. Trimming the NESTED caps instead would buy the same points while silently
+    /// dropping threads and checks — none of them carry a hasNextPage warning, so an
+    /// over-cap PR would report a confidently wrong pill. Cut here, not in there.
+    /// A repo past
     /// the cap gets no signals for the overflow PRs, which would be invisible without
     /// the hasNextPage warning below.
     /// </summary>
@@ -202,7 +208,7 @@ public sealed class GitHubOrgClient(
         if (data?.Repository?.PullRequests?.PageInfo?.HasNextPage == true)
         {
             logger?.LogWarning(
-                "{Repo} has more than 50 open pull requests; review signals cover only the 50 most recently updated.",
+                "{Repo} has more than 25 open pull requests; review signals cover only the 25 most recently updated.",
                 repo
             );
         }

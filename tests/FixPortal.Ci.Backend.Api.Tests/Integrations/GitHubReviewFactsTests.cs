@@ -281,9 +281,9 @@ public class GitHubReviewFactsTransportTests
     }
 
     [Fact]
-    public async Task Warns_when_a_repo_overflows_the_fifty_pull_request_cap()
+    public async Task Warns_when_a_repo_overflows_the_pull_request_cap()
     {
-        // pullRequests(first: 50) truncates silently beyond page 1; the hasNextPage
+        // pullRequests(first: 25) truncates silently beyond page 1; the hasNextPage
         // warning is the only place an overflowing repo becomes observable. The query
         // must also keep asking for pageInfo, or the warning can never fire.
         const string body = """
@@ -301,7 +301,7 @@ public class GitHubReviewFactsTransportTests
             .Entries.Should()
             .Contain(e =>
                 e.Level == LogLevel.Warning
-                && e.Message.Contains("more than 50 open pull requests", StringComparison.Ordinal)
+                && e.Message.Contains("more than 25 open pull requests", StringComparison.Ordinal)
             );
     }
 

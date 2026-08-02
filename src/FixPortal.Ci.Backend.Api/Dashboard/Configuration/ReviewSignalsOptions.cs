@@ -33,7 +33,22 @@ public sealed class ReviewerOptions
 public sealed class ReviewSignalsOptions
 {
     public bool Enabled { get; init; } = true;
-    public int RefreshSeconds { get; init; } = 150;
+
+    /// <summary>
+    /// Sweep cadence. 900s, NOT the 150s this shipped with — 150s was unpayable and the
+    /// production logs proved it. GraphQL bills 5,000 POINTS/hour (not requests), the
+    /// sweep measured 1,537 points across 29 repos (~53 each), and 24 sweeps/hour wanted
+    /// 36,888 — 7.4x the budget. The observed result: three sweeps landed, the fourth
+    /// died part-way, and the remaining ~51 minutes of every hour returned rate-limit
+    /// errors that <see cref="ReviewSignalsOptions"/>' worker converts to last-known-good.
+    /// The board looked fine while 22 of 29 repos served stale pills for most of the hour.
+    /// The budget is also shared with any human using the same PAT, so an exhausted hour
+    /// blocks `gh` at the terminal too — that is how this was found.
+    /// 900s with the halved PR cap is ~4 sweeps/hour, leaving headroom rather than
+    /// spending to zero. Re-measure before raising it: the worker logs the real cost per
+    /// sweep, so this is checkable rather than a guess.
+    /// </summary>
+    public int RefreshSeconds { get; init; } = 900;
 
     /// <summary>
     /// Pull request authors whose PRs get no review signals at all — dependency bots,
