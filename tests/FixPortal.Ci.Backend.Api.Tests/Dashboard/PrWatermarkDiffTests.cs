@@ -1,4 +1,5 @@
 using AwesomeAssertions;
+using FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using NodaTime;
@@ -81,6 +82,46 @@ public class PrWatermarkDiffTests
         var unknown = Watermarks((181, new PrWatermark(null, null)));
 
         _ = PrWatermarkDiff.Compute(unknown, unknown).Dirty.Should().Equal(181);
+    }
+}
+
+// A pull request the token cannot read must stay dirty. Advancing its watermark to the
+// value just observed would report it as up to date forever, while every other pull
+// request in the repo kept working — the partial, harder-to-notice version of certifying
+// stale state.
+public class FailedWatermarkRetentionTests
+{
+    private static readonly Instant T0 = Instant.FromUtc(2026, 8, 2, 12, 0, 0);
+
+    [Fact]
+    public void A_refused_pull_request_keeps_its_previous_watermark_so_it_stays_dirty()
+    {
+        var previous = new Dictionary<int, PrWatermark> { [181] = new(T0, "old") };
+        var current = new Dictionary<int, PrWatermark>
+        {
+            [181] = new(T0.Plus(Duration.FromMinutes(5)), "new"),
+            [182] = new(T0, "other"),
+        };
+
+        var committed = ReviewSignalEnrichmentWorker.WithoutFailed(current, previous, [181]);
+
+        _ = committed[181].Should().Be(new PrWatermark(T0, "old"));
+        _ = committed[182].Should().Be(new PrWatermark(T0, "other"));
+        // The whole point: the next diff must still see 181 as changed.
+        _ = PrWatermarkDiff.Compute(committed, current).Dirty.Should().Equal(181);
+    }
+
+    [Fact]
+    public void A_refused_pull_request_never_seen_before_is_dropped_rather_than_recorded()
+    {
+        // Nothing to fall back to, so recording anything would certify a pull request
+        // whose facts were never read. Absent means "unknown", which reads as dirty.
+        var current = new Dictionary<int, PrWatermark> { [181] = new(T0, "new") };
+
+        var committed = ReviewSignalEnrichmentWorker.WithoutFailed(current, new Dictionary<int, PrWatermark>(), [181]);
+
+        _ = committed.Should().BeEmpty();
+        _ = PrWatermarkDiff.Compute(committed, current).Dirty.Should().Equal(181);
     }
 }
 

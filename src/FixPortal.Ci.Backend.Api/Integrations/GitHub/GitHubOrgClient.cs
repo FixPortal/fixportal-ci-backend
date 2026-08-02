@@ -288,54 +288,104 @@ public sealed class GitHubOrgClient(
     /// means that pull request no longer exists or is no longer visible — the caller
     /// treats that as an eviction, not a failure.
     /// </remarks>
-    public async Task<IReadOnlyDictionary<int, PrReviewFacts>> GetPullRequestReviewFactsAsync(
+    public async Task<ReviewFactsBatch> GetPullRequestReviewFactsAsync(
         string repo,
         IReadOnlyCollection<int> numbers,
         CancellationToken ct
     )
     {
-        var facts = new Dictionary<int, PrReviewFacts>();
         if (numbers.Count == 0)
         {
-            return facts;
+            return ReviewFactsBatch.Empty;
         }
+
+        var facts = new Dictionary<int, PrReviewFacts>();
+        var failed = new List<int>();
+        var queries = 0;
 
         foreach (var chunk in numbers.Distinct().Order().Chunk(ExactPrBatchSize))
         {
-            // Aliases are built from int, so there is no injection surface here.
-            var aliases = string.Join("\n    ", chunk.Select(n => $"pr{n}: pullRequest(number: {n}) {{ ...PrFacts }}"));
-            var query = $$"""
-                query($owner: String!, $name: String!) {
-                  rateLimit { cost remaining resetAt }
-                  repository(owner: $owner, name: $name) {
-                    {{aliases}}
-                  }
-                }
-                {{ExactPrFragment}}
-                """;
-
-            var data = await PostGraphQlAsync<ExactReviewFactsData>(
-                query,
-                new { owner = _gitHub.Owner, name = repo },
-                $"{_gitHub.Owner}/{repo}",
-                ct
-            );
-
-            LastGraphQlRateLimit = data?.RateLimit;
-
-            foreach (var pull in data?.Repository?.Values ?? [])
+            queries++;
+            try
             {
-                if (pull is null)
+                await FetchChunkAsync(repo, chunk, facts, ct);
+            }
+            // One unreadable pull request must not cost its nineteen neighbours their
+            // pills. GitHub answers an aliased query all-or-nothing, so a single refused
+            // alias ("Resource not accessible by personal access token") fails the whole
+            // document — retrying one at a time isolates the offender and rescues the
+            // rest. Only paid when something has already gone wrong, and bounded by the
+            // chunk size.
+            catch (HttpRequestException ex) when (chunk.Length > 1)
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Batched review-facts query failed for {Repo} ({Count} pull requests); retrying individually.",
+                    repo,
+                    chunk.Length
+                );
+                foreach (var number in chunk)
                 {
-                    continue;
+                    queries++;
+                    try
+                    {
+                        await FetchChunkAsync(repo, [number], facts, ct);
+                    }
+                    catch (HttpRequestException single)
+                    {
+                        failed.Add(number);
+                        logger?.LogWarning(single, "Review facts unavailable for {Repo}#{Number}.", repo, number);
+                    }
                 }
-
-                WarnOnTruncatedConnections(repo, pull);
-                facts[pull.Number] = ToReviewFacts(pull);
+            }
+            catch (HttpRequestException ex)
+            {
+                failed.AddRange(chunk);
+                logger?.LogWarning(ex, "Review facts unavailable for {Repo}#{Number}.", repo, chunk[0]);
             }
         }
 
-        return facts;
+        return new ReviewFactsBatch(facts, failed, queries);
+    }
+
+    private async Task FetchChunkAsync(
+        string repo,
+        IReadOnlyList<int> chunk,
+        Dictionary<int, PrReviewFacts> facts,
+        CancellationToken ct
+    )
+    {
+        // Aliases are built from int, so there is no injection surface here.
+        var aliases = string.Join("\n    ", chunk.Select(n => $"pr{n}: pullRequest(number: {n}) {{ ...PrFacts }}"));
+        var query = $$"""
+            query($owner: String!, $name: String!) {
+              rateLimit { cost remaining resetAt }
+              repository(owner: $owner, name: $name) {
+                {{aliases}}
+              }
+            }
+            {{ExactPrFragment}}
+            """;
+
+        var data = await PostGraphQlAsync<ExactReviewFactsData>(
+            query,
+            new { owner = _gitHub.Owner, name = repo },
+            $"{_gitHub.Owner}/{repo}",
+            ct
+        );
+
+        LastGraphQlRateLimit = data?.RateLimit;
+
+        foreach (var pull in data?.Repository?.Values ?? [])
+        {
+            if (pull is null)
+            {
+                continue;
+            }
+
+            WarnOnTruncatedConnections(repo, pull);
+            facts[pull.Number] = ToReviewFacts(pull);
+        }
     }
 
     // A truncated nested connection is the one failure this feature cannot absorb: a
