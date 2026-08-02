@@ -180,6 +180,19 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ReviewSignals__Reviewers__2__Source'
               value: 'CodeScanning'
             }
+            // GitHub Code Quality is a ReviewThreads reviewer, not a CodeScanning one:
+            // it publishes nothing to code-scanning/alerts (that endpoint returns CodeQL
+            // only), and instead posts review threads plus a COMMENTED review. Its
+            // GraphQL login carries no `[bot]` suffix, matching how ExcludedAuthors is
+            // documented. No RequiredLabel — unlike CodeRabbit it runs on every PR.
+            {
+              name: 'ReviewSignals__Reviewers__3__Name'
+              value: 'Code Quality'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__3__BotLogin'
+              value: 'github-code-quality'
+            }
           ], map(range(0, length(corsAllowedOrigins)), i => {
             name: 'Cors__AllowedOrigins__${i}'
             value: corsAllowedOrigins[i]
