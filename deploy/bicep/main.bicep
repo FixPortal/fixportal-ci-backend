@@ -34,6 +34,17 @@ param gitHubOwner string
 @secure()
 param gitHubToken string
 
+@description('''GitHub App ID. Optional — empty keeps PAT authentication.
+Supplied together with gitHubAppPrivateKey, this authenticates API calls as an App
+installation instead. Required to read check runs at all: a fine-grained PAT is refused
+on statusCheckRollup and has no "Checks" permission to grant. It also gives the dashboard
+its own GraphQL points budget instead of sharing a human's.''')
+param gitHubAppId string = ''
+
+@description('PEM contents of the GitHub App private key. Optional — empty keeps PAT authentication.')
+@secure()
+param gitHubAppPrivateKey string = ''
+
 @description('Shared key for the /api/dashboard/snapshot/admin endpoint. Must match the Admin__Key secret in the simulator backend.')
 @secure()
 param adminKey string
@@ -93,7 +104,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           identity: pullIdentityId
         }
       ]
-      secrets: [
+      secrets: concat([
         {
           name: 'github-token'
           value: gitHubToken
@@ -102,7 +113,15 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'admin-key'
           value: adminKey
         }
-      ]
+      ],
+      // Only declared when supplied: an empty secret value is rejected by Container Apps,
+      // so the App credentials must be absent rather than blank when unconfigured.
+      empty(gitHubAppPrivateKey) ? [] : [
+        {
+          name: 'github-app-private-key'
+          value: gitHubAppPrivateKey
+        }
+      ])
     }
     template: {
       containers: [
@@ -164,7 +183,20 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           ], map(range(0, length(corsAllowedOrigins)), i => {
             name: 'Cors__AllowedOrigins__${i}'
             value: corsAllowedOrigins[i]
-          }))
+          }),
+          // App credentials only when both halves are supplied. Half-configured must look
+          // UNCONFIGURED to the app, which then falls back to the PAT rather than starting
+          // up and failing every request with an unsigned JWT.
+          empty(gitHubAppId) || empty(gitHubAppPrivateKey) ? [] : [
+            {
+              name: 'GitHubApp__AppId'
+              value: gitHubAppId
+            }
+            {
+              name: 'GitHubApp__PrivateKeyPem'
+              secretRef: 'github-app-private-key'
+            }
+          ])
         }
       ]
       // Single fixed replica: the in-process refresh worker must stay running,

@@ -31,6 +31,37 @@ builder
     .Validate(o => !string.IsNullOrWhiteSpace(o.Owner), "GitHub:Owner must be configured (e.g. set GitHub__Owner).")
     .Validate(o => !string.IsNullOrWhiteSpace(o.Token), "GitHub:Token must be configured (e.g. set GitHub__Token).")
     .ValidateOnStart();
+
+// GitHub App credentials are optional: unset, the dashboard keeps authenticating with the
+// personal access token exactly as before. Set, API calls authenticate as an installation
+// instead — which is the only way to read check runs (a fine-grained PAT is refused on
+// statusCheckRollup, and there is no "Checks" permission to grant it), and which moves the
+// dashboard off the GraphQL points budget it otherwise shares with whoever is running gh.
+builder
+    .Services.AddOptions<GitHubAppOptions>()
+    .Bind(builder.Configuration.GetSection("GitHubApp"))
+    .Validate(
+        o => !o.IsConfigured || o.PrivateKeyPem!.Contains("PRIVATE KEY", StringComparison.Ordinal),
+        "GitHubApp:PrivateKeyPem does not look like a PEM key. Paste the .pem file's contents, not its path."
+    )
+    .ValidateOnStart();
+
+// A named client, not the typed GitHubOrgClient one: minting a token must not recurse
+// through the client whose requests are waiting on that token.
+builder.Services.AddHttpClient<GitHubAppTokenSource>(client =>
+{
+    // Same fixed, well-known API root as the typed client below; S1075 does not apply.
+#pragma warning disable S1075
+    client.BaseAddress = new Uri("https://api.github.com/");
+#pragma warning restore S1075
+});
+
+builder.Services.AddSingleton<IGitHubTokenSource>(sp =>
+    sp.GetRequiredService<IOptions<GitHubAppOptions>>().Value.IsConfigured
+        ? sp.GetRequiredService<GitHubAppTokenSource>()
+        : new StaticGitHubTokenSource(sp.GetRequiredService<IOptions<GitHubOptions>>())
+);
+
 builder
     .Services.AddOptions<DashboardOptions>()
     .Bind(builder.Configuration.GetSection("Dashboard"))
