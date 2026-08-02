@@ -88,6 +88,67 @@ public class ReviewSignalMergeTests
     }
 }
 
+// The GraphQL points budget is metered per USER, not per token, so this worker shares
+// its 5,000/hour with any human running gh. Before this guard it read `remaining` off
+// every response, logged it, and swept again regardless — spending to zero and blocking
+// the CLI with an error naming a numeric user ID. The reserve is the load-bearing fix:
+// the cadence and query fan-out are tuned to today's repo count and go over again as the
+// estate grows, but the floor holds whatever they drift to.
+public class ReviewSignalReserveTests
+{
+    private static readonly Instant Now = Instant.FromUtc(2026, 8, 2, 17, 10, 0);
+    private static readonly string FutureReset = "2026-08-02T17:38:33Z";
+    private static readonly string PastReset = "2026-08-02T16:38:13Z";
+
+    [Theory]
+    // Healthy budget sweeps; at or above the floor is not below it.
+    [InlineData(4000, 1000, false)]
+    [InlineData(1000, 1000, false)]
+    // Below the floor with the window still open: hold the reserve.
+    [InlineData(999, 1000, true)]
+    [InlineData(16, 1000, true)]
+    // Reserve disabled restores the original drain-to-empty behaviour.
+    [InlineData(0, 0, false)]
+    public void The_reserve_holds_only_while_the_budget_is_genuinely_low(int remaining, int reserve, bool expected)
+    {
+        var budget = new GraphQlRateLimit(Cost: 53, Remaining: remaining, ResetAt: FutureReset);
+
+        _ = ReviewSignalEnrichmentWorker.IsBelowReserve(budget, reserve, Now).Should().Be(expected);
+    }
+
+    [Fact]
+    public void A_budget_observed_before_its_reset_does_not_latch_the_guard_shut()
+    {
+        // The failure this exists to prevent: once the guard trips the worker stops
+        // querying, so Remaining is frozen at the value that tripped it and cannot
+        // improve on its own. Expiring the observation at ResetAt is the only thing that
+        // lets the next sweep through — without it the guard latches until the process
+        // restarts, trading a starved CLI for a permanently blank board.
+        var exhausted = new GraphQlRateLimit(Cost: 53, Remaining: 0, ResetAt: PastReset);
+
+        _ = ReviewSignalEnrichmentWorker.IsBelowReserve(exhausted, reserve: 1000, Now).Should().BeFalse();
+    }
+
+    [Fact]
+    public void Cold_start_sweeps_because_no_budget_has_been_observed_yet()
+    {
+        _ = ReviewSignalEnrichmentWorker.IsBelowReserve(null, reserve: 1000, Now).Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("not-a-timestamp")]
+    public void An_unreadable_reset_fails_open_rather_than_wedging_the_worker(string? resetAt)
+    {
+        // Fail open deliberately: a guard that cannot prove the budget is still low must
+        // not be the thing that permanently blanks the board.
+        var budget = new GraphQlRateLimit(Cost: 53, Remaining: 0, ResetAt: resetAt);
+
+        _ = ReviewSignalEnrichmentWorker.IsBelowReserve(budget, reserve: 1000, Now).Should().BeFalse();
+    }
+}
+
 public class ReviewSignalWorkerGatingTests
 {
     // Serves the one-repo org listing so a sweep past the gate has something to
@@ -138,6 +199,7 @@ public class ReviewSignalWorkerGatingTests
             Options.Create(options),
             gitHubOptions,
             timeProvider,
+            new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
             NullLogger<ReviewSignalEnrichmentWorker>.Instance
         );
     }
@@ -312,6 +374,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             Options.Create(options),
             gitHubOptions,
             timeProvider,
+            new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
             NullLogger<ReviewSignalEnrichmentWorker>.Instance
         );
 
@@ -438,6 +501,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             ),
             gitHubOptions,
             timeProvider,
+            new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
             NullLogger<ReviewSignalEnrichmentWorker>.Instance
         );
 
