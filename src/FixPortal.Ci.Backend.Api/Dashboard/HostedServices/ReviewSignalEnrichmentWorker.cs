@@ -7,7 +7,7 @@ using Microsoft.Extensions.Options;
 namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 
 /// <summary>
-/// Slow-cadence enrichment (default 150s): fetches each repo's open-PR review state in
+/// Slow-cadence enrichment (default 900s): fetches each repo's open-PR review state in
 /// one batched GraphQL query plus one code-scanning call, and caches a per-PR signal
 /// list. Off the 20s board loop deliberately — a per-PR fetch on that cadence would
 /// exceed the PAT rate budget several times over. Disabled unless reviewers are
