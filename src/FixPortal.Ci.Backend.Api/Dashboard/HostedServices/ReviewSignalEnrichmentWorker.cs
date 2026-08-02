@@ -378,10 +378,16 @@ public sealed class ReviewSignalEnrichmentWorker(
         // to spot. Failures are counted separately rather than hidden.
         _sweepQueries += batch.QueriesIssued;
         _sweepFailedPrs += batch.Failed.Count;
+        // Cost comes from the batch, which sums every query it issued. Reading it off the
+        // last rate-limit observation instead discarded everything the retry path spent —
+        // a refused batch re-queried one PR at a time would report only the final query's
+        // cost, understating spend in exactly the scenario the retry exists to handle.
+        _sweepCost += batch.PointsSpent;
         if (Client.LastGraphQlRateLimit is { } rateLimit)
         {
+            // Still read for Remaining/ResetAt, which are point-in-time and only
+            // meaningful as the most recent observation.
             _lastRateLimit = rateLimit;
-            _sweepCost += rateLimit.Cost;
         }
     }
 }

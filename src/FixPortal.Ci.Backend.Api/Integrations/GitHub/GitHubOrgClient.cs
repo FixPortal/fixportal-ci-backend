@@ -302,13 +302,14 @@ public sealed class GitHubOrgClient(
         var facts = new Dictionary<int, PrReviewFacts>();
         var failed = new List<int>();
         var queries = 0;
+        var points = 0;
 
         foreach (var chunk in numbers.Distinct().Order().Chunk(ExactPrBatchSize))
         {
             queries++;
             try
             {
-                await FetchChunkAsync(repo, chunk, facts, ct);
+                points += await FetchChunkAsync(repo, chunk, facts, ct);
             }
             // One unreadable pull request must not cost its nineteen neighbours their
             // pills. GitHub answers an aliased query all-or-nothing, so a single refused
@@ -329,7 +330,7 @@ public sealed class GitHubOrgClient(
                     queries++;
                     try
                     {
-                        await FetchChunkAsync(repo, [number], facts, ct);
+                        points += await FetchChunkAsync(repo, [number], facts, ct);
                     }
                     catch (HttpRequestException single)
                     {
@@ -345,10 +346,11 @@ public sealed class GitHubOrgClient(
             }
         }
 
-        return new ReviewFactsBatch(facts, failed, queries);
+        return new ReviewFactsBatch(facts, failed, queries, points);
     }
 
-    private async Task FetchChunkAsync(
+    /// <summary>Fetches one aliased chunk and returns the GraphQL points it cost.</summary>
+    private async Task<int> FetchChunkAsync(
         string repo,
         IReadOnlyList<int> chunk,
         Dictionary<int, PrReviewFacts> facts,
@@ -386,6 +388,8 @@ public sealed class GitHubOrgClient(
             WarnOnTruncatedConnections(repo, pull);
             facts[pull.Number] = ToReviewFacts(pull);
         }
+
+        return data?.RateLimit?.Cost ?? 0;
     }
 
     // A truncated nested connection is the one failure this feature cannot absorb: a
