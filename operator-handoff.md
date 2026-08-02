@@ -16,9 +16,10 @@ Local development instead runs the Vite dev server (`npm run dev`), which proxie
 Every setting lives in `appsettings.json` under the `GitHub`, `Dashboard`, or
 `ReviewSignals` section. A host overrides any value with an environment variable whose name is
 the config path with `:` replaced by `__` (double underscore) — e.g.
-`GitHub:Token` becomes `GitHub__Token`. The Azure deployment sets the secret
-scalars this way (see **Deploying to Azure**); the rest are baked into the image
-from `appsettings.json`, so to change them, edit that file and redeploy.
+`GitHub:Token` becomes `GitHub__Token`. The Azure deployment uses environment
+variables for its secrets, owner, refresh cadence, allowed origins, and production
+reviewer list (see **Deploying to Azure**); the remaining settings come from
+`appsettings.json`.
 
 | Setting | Default | What it does |
 |---|---|---|
