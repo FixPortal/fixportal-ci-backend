@@ -103,13 +103,20 @@ public sealed record ExactReviewFactsData(
 /// from a quiet sweep that legitimately spent nothing. That reading cost real debugging
 /// time on the day it shipped.
 /// </param>
+/// <param name="PointsSpent">
+/// Summed across every query in the batch. Reading the cost off the LAST rate-limit
+/// observation instead loses everything the retry path spent: a refused batch that
+/// re-queries nineteen pull requests individually would report only the final one's cost,
+/// understating spend in exactly the scenario the retry exists for.
+/// </param>
 public sealed record ReviewFactsBatch(
     IReadOnlyDictionary<int, PrReviewFacts> Facts,
     IReadOnlyList<int> Failed,
-    int QueriesIssued
+    int QueriesIssued,
+    int PointsSpent
 )
 {
-    public static readonly ReviewFactsBatch Empty = new(new Dictionary<int, PrReviewFacts>(), [], 0);
+    public static readonly ReviewFactsBatch Empty = new(new Dictionary<int, PrReviewFacts>(), [], 0, 0);
 }
 
 /// <summary>

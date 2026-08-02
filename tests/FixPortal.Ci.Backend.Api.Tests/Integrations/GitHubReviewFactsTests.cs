@@ -310,6 +310,37 @@ public class GitHubReviewFactsTransportTests
     }
 
     [Fact]
+    public async Task Cost_is_summed_across_every_query_including_retries()
+    {
+        // Reading cost off the LAST rate-limit observation discarded everything the retry
+        // path spent. Two successful single-PR retries at 3 points each must report 6,
+        // not 3 — under-reporting spend is how the original budget bug went unnoticed.
+        // Placeholder substitution, not raw-string interpolation: the JSON's run of
+        // closing braces is ambiguous for the $$"""...""" brace-counting rule (CS9007),
+        // exactly as the FactsJson helper in the merge tests documents.
+        const string template = """
+            {"data":{"rateLimit":{"cost":__COST__,"remaining":4000,"resetAt":"2026-08-02T21:00:00Z"},
+              "repository":{"pr__N__":{"number":__N__,"author":{"login":"chris"},"labels":{"nodes":[]},
+              "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[]}}}}}
+            """;
+        static string Ok(int number, int cost) =>
+            template.Replace("__N__", number.ToString()).Replace("__COST__", cost.ToString());
+        const string refused = """
+            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            """;
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([Json(refused), Json(Ok(181, 3)), Json(Ok(182, 3))])
+        );
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None);
+
+        _ = batch.PointsSpent.Should().Be(6);
+        _ = batch.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task A_single_refused_pull_request_is_not_retried_pointlessly()
     {
         // A one-PR chunk has nothing to isolate, so it must not re-issue the same query.
