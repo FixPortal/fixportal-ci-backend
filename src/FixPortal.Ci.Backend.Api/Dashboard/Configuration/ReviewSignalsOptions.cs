@@ -51,6 +51,19 @@ public sealed class ReviewSignalsOptions
     public int RefreshSeconds { get; init; } = 900;
 
     /// <summary>
+    /// GraphQL points left unspent for everything else on this identity. GitHub meters
+    /// the 5,000/hour budget PER USER, not per token, so this worker's PAT shares a pool
+    /// with any human running `gh` — and spending it to zero blocks them mid-task, with
+    /// an error naming a numeric user ID rather than this dashboard.
+    /// This is the load-bearing guard, not <see cref="RefreshSeconds"/>. The cadence and
+    /// the query's fan-out are tuned against today's repo count and today's per-repo
+    /// cost; add repos or accumulate review threads and they silently go over again. The
+    /// floor does not care — it holds whatever the constants drift to, which is why it
+    /// exists. Zero disables it and restores the original drain-to-empty behaviour.
+    /// </summary>
+    public int ReserveBudgetPoints { get; init; } = 1000;
+
+    /// <summary>
     /// Pull request authors whose PRs get no review signals at all — dependency bots,
     /// which are out of AI code review by policy. Matched case-insensitively.
     /// </summary>
@@ -74,6 +87,10 @@ internal static class ReviewSignalsOptionsRegistration
             .AddOptions<ReviewSignalsOptions>()
             .Bind(configuration.GetSection("ReviewSignals"))
             .Validate(o => o.RefreshSeconds > 0, "ReviewSignals:RefreshSeconds must be greater than zero.")
+            .Validate(
+                o => o.ReserveBudgetPoints >= 0,
+                "ReviewSignals:ReserveBudgetPoints must not be negative (0 disables the reserve)."
+            )
             .Validate(
                 o => o.Reviewers.All(r => !string.IsNullOrWhiteSpace(r.Name)),
                 "Every ReviewSignals:Reviewers entry must set a non-blank Name (it is the pill's label)."
