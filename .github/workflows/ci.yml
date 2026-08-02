@@ -31,6 +31,31 @@ jobs:
         with:
           shellcheck: true
 
+      # The review control plane must not be able to delete itself.
+      # .claude/review-policy.json decides which reviewers a PR needs, and NO policy file
+      # means every PR in the repo tiers NORMAL — so one .gitignore line re-excluding
+      # .claude/ silently downgrades review for the whole repo, and the PR making that
+      # change is the last one that would have been reviewed properly.
+      #
+      # That used to be guarded by tiering .gitignore HIGH, which works but bills a
+      # scarce CodeRabbit review for every trivial ignore edit, because the policy hook
+      # tiers by path glob and cannot tell "re-excludes .claude/" from "ignores a scratch
+      # directory". This asserts the invariant directly instead: deterministic, free, and
+      # it cannot be overlooked the way a reviewer can. .gitignore is NORMAL as a result.
+      - name: Review policy must stay tracked and unignored
+        run: |
+          if ! git ls-files --error-unmatch .claude/review-policy.json >/dev/null 2>&1; then
+            echo "::error file=.claude/review-policy.json::Review policy is untracked, so every PR in this repo would tier NORMAL. Restore and commit it."
+            exit 1
+          fi
+          # --no-index is load-bearing: without it check-ignore consults the index and
+          # never reports a TRACKED file as ignored, so this would pass unconditionally
+          # and guard nothing.
+          if git check-ignore --no-index -q .claude/review-policy.json; then
+            echo "::error file=.gitignore::.gitignore now excludes .claude/review-policy.json, which silently drops every PR to NORMAL. Restore the '!.claude/review-policy.json' negation."
+            exit 1
+          fi
+
       - name: Set up .NET
         uses: actions/setup-dotnet@v6
         with:
