@@ -218,6 +218,65 @@ public class GitHubReviewFactsTransportTests
         new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 
     [Fact]
+    public async Task An_empty_dirty_set_issues_no_request_at_all()
+    {
+        // The other half of "a quiet estate costs nothing": PrWatermarkDiff returning no
+        // dirty pull requests only saves points if that empties out to zero HTTP here.
+        // The response queue is empty on purpose — any request would throw.
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>());
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var facts = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [], CancellationToken.None);
+
+        _ = facts.Should().BeEmpty();
+        _ = handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Aliases_one_pull_request_field_per_requested_number()
+    {
+        const string body = """
+            {"data":{"rateLimit":{"cost":3,"remaining":4997,"resetAt":"2026-08-02T18:00:00Z"},
+              "repository":{
+                "pr181":{"number":181,"author":{"login":"chris"},"labels":{"nodes":[]},
+                  "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[]}},
+                "pr182":{"number":182,"author":{"login":"chris"},"labels":{"nodes":[]},
+                  "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[]}}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var facts = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None);
+
+        _ = facts.Keys.Should().BeEquivalentTo([181, 182]);
+        var sent = handler.Bodies.Should().ContainSingle().Subject;
+        _ = sent.Should().Contain("pr181: pullRequest(number: 181)");
+        _ = sent.Should().Contain("pr182: pullRequest(number: 182)");
+        // One round trip for both, and the cost accounting still lands so the reserve
+        // guard and the sweep log keep working on this path.
+        _ = handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_requested_pull_request_github_does_not_return_is_simply_absent()
+    {
+        // Closed between the REST listing and the GraphQL fetch. Not an error: the caller
+        // treats a missing number as an eviction.
+        const string body = """
+            {"data":{"repository":{"pr181":null}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var facts = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
+
+        _ = facts.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Posts_to_graphql_and_parses_camel_case_field_names()
     {
         const string body = """

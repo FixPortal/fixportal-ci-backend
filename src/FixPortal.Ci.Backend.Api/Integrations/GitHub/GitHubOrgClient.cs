@@ -41,6 +41,13 @@ public sealed record GitHubRunsResponse(IReadOnlyList<GitHubRunItem>? WorkflowRu
 
 public sealed record GitHubUserDto(string? Login);
 
+public sealed record GitHubPullHeadDto(string? Sha);
+
+// UpdatedAt and Head are the watermark the incremental enrichment diffs on. Both are
+// already in the REST /pulls payload the board fetches every cycle, so reading them
+// costs nothing extra — they were simply never deserialized. Optional with defaults so
+// every existing construction site (and the merged-PR search path, whose payload has
+// neither) keeps compiling.
 public sealed record GitHubPullDto(
     int Number,
     string? Title,
@@ -48,7 +55,9 @@ public sealed record GitHubPullDto(
     string? HtmlUrl,
     bool Draft,
     Instant CreatedAt,
-    Instant? MergedAt = null
+    Instant? MergedAt = null,
+    Instant? UpdatedAt = null,
+    GitHubPullHeadDto? Head = null
 );
 
 public sealed record GitHubRunSummary(long Id, string? HtmlUrl, string? Status, string? Conclusion);
@@ -154,6 +163,51 @@ public sealed class GitHubOrgClient(
         }
         """;
 
+    /// <summary>
+    /// Selection for one pull request, shared by every alias in an exact-PR query.
+    /// Caps are deliberately GENEROUS compared with the per-repo sweep's: cost is priced
+    /// by fan-out, and fan-out is now multiplied by the number of CHANGED pull requests
+    /// (usually one or two) rather than by 25 slots per repository across 29 repositories.
+    /// Fidelity that was unaffordable per-repo is cheap per-PR, and every connection
+    /// reports hasNextPage so an over-cap pull request is visible rather than silently
+    /// rendering a wrong pill.
+    /// </summary>
+    private const string ExactPrFragment = """
+        fragment PrFacts on PullRequest {
+          number
+          author { login }
+          labels(first: 50) { nodes { name } pageInfo { hasNextPage } }
+          reviews(first: 100) { nodes { author { login } commit { oid } } pageInfo { hasNextPage } }
+          reviewThreads(first: 100) {
+            nodes {
+              isResolved
+              comments(first: 1) { nodes { author { login } originalCommit { oid } } }
+            }
+            pageInfo { hasNextPage }
+          }
+          commits(last: 1) {
+            nodes {
+              commit {
+                oid
+                statusCheckRollup {
+                  contexts(first: 100) {
+                    nodes { ... on CheckRun { conclusion checkSuite { app { slug } } } }
+                    pageInfo { hasNextPage }
+                  }
+                }
+              }
+            }
+          }
+        }
+        """;
+
+    /// <summary>
+    /// Aliases per exact-PR request. Aliasing does not discount anything — fan-out is
+    /// still billed per node — so this bounds document size and blast radius on failure,
+    /// not cost. One chunk failing loses only its own pull requests.
+    /// </summary>
+    internal const int ExactPrBatchSize = 20;
+
     // Search/issues page size. internal so the merged-PR tests size their full-page
     // fixtures off the same value instead of a hand-mirrored literal.
     internal const int SearchPageSize = 20;
@@ -219,6 +273,105 @@ public sealed class GitHubOrgClient(
             facts[pull.Number] = ToReviewFacts(pull);
         }
         return facts;
+    }
+
+    /// <summary>
+    /// Review facts for named pull requests only — the incremental path. The per-repo
+    /// query above asks 25 PR slots per repository on a timer and pays full fan-out for
+    /// every empty slot; measured, that was 1,537 points per sweep across 29 repositories
+    /// to track 2 open pull requests. This asks about the pull requests that actually
+    /// changed, so cost tracks activity rather than estate size and adding repositories
+    /// costs nothing.
+    /// </summary>
+    /// <remarks>
+    /// Returns only what GitHub answered for. A requested number missing from the result
+    /// means that pull request no longer exists or is no longer visible — the caller
+    /// treats that as an eviction, not a failure.
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<int, PrReviewFacts>> GetPullRequestReviewFactsAsync(
+        string repo,
+        IReadOnlyCollection<int> numbers,
+        CancellationToken ct
+    )
+    {
+        var facts = new Dictionary<int, PrReviewFacts>();
+        if (numbers.Count == 0)
+        {
+            return facts;
+        }
+
+        foreach (var chunk in numbers.Distinct().Order().Chunk(ExactPrBatchSize))
+        {
+            // Aliases are built from int, so there is no injection surface here.
+            var aliases = string.Join("\n    ", chunk.Select(n => $"pr{n}: pullRequest(number: {n}) {{ ...PrFacts }}"));
+            var query = $$"""
+                query($owner: String!, $name: String!) {
+                  rateLimit { cost remaining resetAt }
+                  repository(owner: $owner, name: $name) {
+                    {{aliases}}
+                  }
+                }
+                {{ExactPrFragment}}
+                """;
+
+            var data = await PostGraphQlAsync<ExactReviewFactsData>(
+                query,
+                new { owner = _gitHub.Owner, name = repo },
+                $"{_gitHub.Owner}/{repo}",
+                ct
+            );
+
+            LastGraphQlRateLimit = data?.RateLimit;
+
+            foreach (var pull in data?.Repository?.Values ?? [])
+            {
+                if (pull is null)
+                {
+                    continue;
+                }
+
+                WarnOnTruncatedConnections(repo, pull);
+                facts[pull.Number] = ToReviewFacts(pull);
+            }
+        }
+
+        return facts;
+    }
+
+    // A truncated nested connection is the one failure this feature cannot absorb: a
+    // missing unresolved thread turns Outstanding into a confident Clean. The per-repo
+    // query could not afford to detect it; the exact-PR query can, so an over-cap pull
+    // request is at least loud rather than quietly wrong.
+    private void WarnOnTruncatedConnections(string repo, ReviewFactsPull pull)
+    {
+        var truncated = new List<string>();
+        if (pull.Labels?.PageInfo?.HasNextPage == true)
+        {
+            truncated.Add("labels");
+        }
+        if (pull.Reviews?.PageInfo?.HasNextPage == true)
+        {
+            truncated.Add("reviews");
+        }
+        if (pull.ReviewThreads?.PageInfo?.HasNextPage == true)
+        {
+            truncated.Add("reviewThreads");
+        }
+        var rollup = pull.Commits?.Nodes?.FirstOrDefault()?.Commit?.StatusCheckRollup;
+        if (rollup?.Contexts?.PageInfo?.HasNextPage == true)
+        {
+            truncated.Add("checkContexts");
+        }
+
+        if (truncated.Count > 0)
+        {
+            logger?.LogWarning(
+                "{Repo}#{Number}: {Connections} exceeded the query page size; its review pills may be wrong until paginated.",
+                repo,
+                pull.Number,
+                string.Join(", ", truncated)
+            );
+        }
     }
 
     private async Task<T?> PostGraphQlAsync<T>(string query, object variables, string subject, CancellationToken ct)
@@ -326,7 +479,31 @@ public sealed class GitHubOrgClient(
             : $"https://github.com/{_gitHub.Owner}/{repo}/actions/workflows/{FileName(workflow.Path)}";
     }
 
-    public async Task<IReadOnlyList<PullRequest>> ListOpenPullRequestsAsync(string repo, CancellationToken ct)
+    public async Task<IReadOnlyList<PullRequest>> ListOpenPullRequestsAsync(string repo, CancellationToken ct) =>
+        (await ListOpenPullDtosAsync(repo, ct)).Select(p => ToPullRequest(p, _gitHub.Owner, repo)).ToList();
+
+    /// <summary>
+    /// The same open-PR listing the board already polls, projected to the watermark the
+    /// incremental review enrichment diffs on.
+    /// </summary>
+    /// <remarks>
+    /// This deliberately re-requests the URL rather than plumbing the board's result
+    /// through: <see cref="GitHubETagStore"/> caches the decoded payload alongside the
+    /// validator, so an unchanged repository answers 304 and replays it, and GitHub does
+    /// not charge a conditional 304 against the REST budget. The second caller is
+    /// therefore free, and the two consumers cannot race each other into missing a change
+    /// — a 304 replays the same payload a 200 would have written.
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<int, PrWatermark>> ListOpenPullRequestWatermarksAsync(
+        string repo,
+        CancellationToken ct
+    ) =>
+        (await ListOpenPullDtosAsync(repo, ct)).ToDictionary(
+            p => p.Number,
+            p => new PrWatermark(p.UpdatedAt, p.Head?.Sha)
+        );
+
+    private async Task<IReadOnlyList<GitHubPullDto>> ListOpenPullDtosAsync(string repo, CancellationToken ct)
     {
         var all = new List<GitHubPullDto>();
         var page = 1;
@@ -346,7 +523,7 @@ public sealed class GitHubOrgClient(
 
             page++;
         }
-        return all.Select(p => ToPullRequest(p, _gitHub.Owner, repo)).ToList();
+        return all;
     }
 
     public static PullRequest ToPullRequest(GitHubPullDto dto, string owner, string repo) =>

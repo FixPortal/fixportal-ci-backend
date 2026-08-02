@@ -269,6 +269,16 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 {
     private const string RepoName = "repo-a";
 
+    // The REST open-PR payload the watermark is built from. head.sha and updated_at are
+    // the two fields the diff turns on; the rest is there so the DTO binds as it does in
+    // production. PR 181 is unknown on the first sweep, so it is dirty and gets fetched.
+    private const string OpenPullsJson = """
+        [{"number":181,"title":"PR 181","user":{"login":"chris"},
+          "html_url":"https://github.com/FixPortal/repo-a/pull/181","draft":false,
+          "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z",
+          "head":{"sha":"sha"}}]
+        """;
+
     private sealed class RoutingHandler(string factsJson, HttpStatusCode alertsStatus, string alertsJson)
         : HttpMessageHandler
     {
@@ -294,6 +304,11 @@ public class ReviewSignalEnrichmentWorkerCollectTests
                 ),
                 "/graphql" => (HttpStatusCode.OK, factsJson),
                 _ when isAlertsRequest => (alertsStatus, alertsJson),
+                // The open-PR listing is now the FIRST call of every collect: it carries
+                // the watermark, and a pull request absent from it is never fetched. An
+                // empty list here would mean "nothing dirty", which spends nothing and
+                // reaches neither GraphQL nor the alerts endpoint.
+                _ when path.EndsWith("/pulls", StringComparison.Ordinal) => (HttpStatusCode.OK, OpenPullsJson),
                 _ => (HttpStatusCode.OK, "[]"),
             };
             if (isAlertsRequest)
@@ -345,12 +360,14 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         var contexts = includeSuccessfulCodeScanningCheck
             ? """[{"name":"CodeQL","conclusion":"SUCCESS","checkSuite":{"app":{"slug":"github-code-scanning"}}}]"""
             : "[]";
+        // The exact-PR query aliases one pullRequest field per requested number, so the
+        // response is an alias-keyed object rather than a pullRequests connection.
         const string template = """
-            {"data":{"repository":{"pullRequests":{"nodes":[
-              {"number":181,"author":{"login":"__AUTHOR__"},
+            {"data":{"repository":{
+              "pr181":{"number":181,"author":{"login":"__AUTHOR__"},
                "labels":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},
                "commits":{"nodes":[{"commit":{"oid":"sha","statusCheckRollup":{"contexts":{"nodes":__CONTEXTS__}}}}]}}
-            ]}}}}
+            }}}
             """;
         return template.Replace("__AUTHOR__", author).Replace("__CONTEXTS__", contexts);
     }

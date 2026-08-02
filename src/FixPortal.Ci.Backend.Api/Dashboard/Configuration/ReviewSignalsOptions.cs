@@ -35,31 +35,45 @@ public sealed class ReviewSignalsOptions
     public bool Enabled { get; init; } = true;
 
     /// <summary>
-    /// Sweep cadence. 900s, NOT the 150s this shipped with — 150s was unpayable and the
-    /// production logs proved it. GraphQL bills 5,000 POINTS/hour (not requests), the
-    /// sweep measured 1,537 points across 29 repos (~53 each), and 24 sweeps/hour wanted
-    /// 36,888 — 7.4x the budget. The observed result: three sweeps landed, the fourth
-    /// died part-way, and the remaining ~51 minutes of every hour returned rate-limit
-    /// errors that <see cref="ReviewSignalsOptions"/>' worker converts to last-known-good.
-    /// The board looked fine while 22 of 29 repos served stale pills for most of the hour.
-    /// The budget is also shared with any human using the same PAT, so an exhausted hour
-    /// blocks `gh` at the terminal too — that is how this was found.
-    /// 900s with the halved PR cap is ~4 sweeps/hour, leaving headroom rather than
-    /// spending to zero. Re-measure before raising it: the worker logs the real cost per
-    /// sweep, so this is checkable rather than a guess.
+    /// Sweep cadence. Back to 150s, and affordable this time.
     /// </summary>
-    public int RefreshSeconds { get; init; } = 900;
+    /// <remarks>
+    /// <para>
+    /// History, because the number has moved twice and the reasons matter. It shipped at
+    /// 150s against a per-repo GraphQL sweep costing 1,537 points across 29 repositories;
+    /// GraphQL bills 5,000 POINTS/hour (not requests), so 24 sweeps/hour wanted 36,888 —
+    /// 7.4x the budget. Three sweeps landed each hour, the fourth died part-way, and the
+    /// remaining ~51 minutes returned rate-limit errors the worker converts to
+    /// last-known-good. It was briefly raised to 900s to fit.
+    /// </para>
+    /// <para>
+    /// A sweep no longer costs points. Discovery is a conditional REST request that
+    /// answers 304 when nothing changed, and GraphQL is spent only on pull requests whose
+    /// watermark actually moved — so cadence now buys responsiveness rather than spending
+    /// budget, and the compromise value is no longer justified. What it still costs is one
+    /// conditional REST request per repository per sweep, which is why this is 150s and
+    /// not the board's 20s.
+    /// </para>
+    /// <para>
+    /// This also sets the cache TTL, which <c>Program.cs</c> derives as 3x this value.
+    /// That is now a sensible coupling: every sweep re-verifies and rewrites, so the TTL
+    /// means "the worker has checked this repository recently", not "these bytes are
+    /// young".
+    /// </para>
+    /// </remarks>
+    public int RefreshSeconds { get; init; } = 150;
 
     /// <summary>
     /// GraphQL points left unspent for everything else on this identity. GitHub meters
     /// the 5,000/hour budget PER USER, not per token, so this worker's PAT shares a pool
     /// with any human running `gh` — and spending it to zero blocks them mid-task, with
     /// an error naming a numeric user ID rather than this dashboard.
-    /// This is the load-bearing guard, not <see cref="RefreshSeconds"/>. The cadence and
-    /// the query's fan-out are tuned against today's repo count and today's per-repo
-    /// cost; add repos or accumulate review threads and they silently go over again. The
-    /// floor does not care — it holds whatever the constants drift to, which is why it
-    /// exists. Zero disables it and restores the original drain-to-empty behaviour.
+    /// Now that spend tracks pull-request activity rather than estate size, this should
+    /// never fire. That is the point of keeping it: it is the alarm, not the mechanism.
+    /// If a sweep starts skipping repositories for budget, something has regressed —
+    /// a watermark that never matches, an unknown-watermark loop, or a query whose cost
+    /// grew — and the Warning it logs is the first sign. Zero disables it and restores
+    /// the original drain-to-empty behaviour.
     /// </summary>
     public int ReserveBudgetPoints { get; init; } = 1000;
 
