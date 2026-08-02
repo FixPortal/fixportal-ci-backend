@@ -25,7 +25,16 @@ public readonly record struct PrWatermark(Instant? UpdatedAt, string? HeadSha)
     public bool IsUnknown => UpdatedAt is null && string.IsNullOrEmpty(HeadSha);
 }
 
-/// <summary>Pull requests needing a refetch, and those that have gone away.</summary>
+/// <summary>
+/// Pull requests needing a refetch, and those that have gone away.
+/// </summary>
+/// <remarks>
+/// <see cref="Evicted"/> does not drive eviction — that falls out of the merge, which
+/// rebuilds from the still-open listing and so cannot carry a closed pull request
+/// forward. It is reported because a pill vanishing is user-visible and worth a log line;
+/// deriving removal from the listing rather than from this list keeps one source of truth
+/// for what is open.
+/// </remarks>
 public sealed record WatermarkDiff(IReadOnlyList<int> Dirty, IReadOnlyList<int> Evicted)
 {
     public static readonly WatermarkDiff Empty = new([], []);

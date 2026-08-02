@@ -161,13 +161,32 @@ public sealed class ReviewSignalEnrichmentWorker(
                 RecordGraphQlCost();
             }
 
-            _watermarks[repo.Name] = current;
-
             // Only pay for the alerts call when a configured reviewer actually reads it,
             // AND only when something is being recomputed — an unchanged sweep must cost
             // nothing at all, which is the entire point of this path.
             var needsAlerts = toFetch.Count > 0 && reviewers.Any(r => r.Source == ReviewerSource.CodeScanning);
             var alerts = needsAlerts ? await Client.GetOpenCodeScanningAlertCountsAsync(repo.Name, ct) : null;
+
+            // Commit the watermark LAST, once everything this sweep depends on has
+            // succeeded. Advancing it earlier is the subtle version of the bug this whole
+            // design exists to prevent: GetOpenCodeScanningAlertCountsAsync swallows only
+            // GitHubAuthException, so a transient transport failure propagates to the
+            // soft-fail handler below, the cache keeps last-known-good — and an
+            // already-advanced watermark would make the next diff empty, silently
+            // certifying pull requests whose freshly-fetched facts were just discarded.
+            // A brand-new pull request is the worst case: it is not in the cache, so
+            // ReviewSignalPriority cannot rescue it either, and its pills would never
+            // appear until someone touched the pull request again.
+            _watermarks[repo.Name] = current;
+
+            if (diff.Evicted.Count > 0)
+            {
+                logger.LogInformation(
+                    "PR review signals dropped for {Repo} #{Evicted}: no longer open.",
+                    repo.Name,
+                    string.Join(", #", diff.Evicted)
+                );
+            }
 
             RecordObservations(repo.Name, facts.Keys, current);
             return Merge(repo.Name, cached, current, facts, alerts, reviewers);
