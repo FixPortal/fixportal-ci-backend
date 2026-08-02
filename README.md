@@ -181,10 +181,17 @@ FixPortal's worked example, set via deployment configuration:
   "Reviewers": [
     { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high" },
     { "Name": "Gitar", "BotLogin": "gitar-bot" },
-    { "Name": "CodeQL", "Source": "CodeScanning" }
+    { "Name": "CodeQL", "Source": "CodeScanning" },
+    { "Name": "Code Quality", "BotLogin": "github-code-quality" }
   ]
 }
 ```
+
+GitHub Code Quality is a `ReviewThreads` reviewer despite sounding like a scanner:
+it writes nothing to `code-scanning/alerts` — that endpoint reports CodeQL only —
+and instead posts review threads and a `COMMENTED` review, which is the evidence
+`ReviewThreads` reads. Its login carries no `[bot]` suffix, for the same GraphQL
+reason as `ExcludedAuthors` above.
 
 Each reviewer resolves to one of **four** pill states, not three:
 
