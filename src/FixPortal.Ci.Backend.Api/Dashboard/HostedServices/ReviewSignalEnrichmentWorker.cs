@@ -73,6 +73,7 @@ public sealed class ReviewSignalEnrichmentWorker(
     // TTL expiry to no pills), so the number is logged rather than guessed at.
     private int _sweepCost;
     private int _sweepQueries;
+    private int _sweepRepos;
     private int _sweepSkippedForBudget;
     private GraphQlRateLimit? _lastRateLimit;
 
@@ -107,17 +108,21 @@ public sealed class ReviewSignalEnrichmentWorker(
             );
         }
 
-        if (_sweepQueries > 0)
-        {
-            logger.LogInformation(
-                "PR review signals sweep issued {Queries} GraphQL queries costing {Cost} point(s); {Remaining} remaining until {ResetAt}.",
-                _sweepQueries,
-                _sweepCost,
-                _lastRateLimit?.Remaining,
-                _lastRateLimit?.ResetAt
-            );
-        }
+        // Logged unconditionally, INCLUDING the zero-query case. A quiet sweep spending
+        // nothing is now the expected steady state, so if it logged nothing at all then
+        // "working perfectly" and "not running" would look identical from the outside —
+        // which is the same silence-reads-as-health defect this feature was fixed for.
+        // The line is the proof the worker is alive and the design is doing its job.
+        logger.LogInformation(
+            "PR review signals sweep issued {Queries} GraphQL queries costing {Cost} point(s) across {Repos} repo(s); {Remaining} remaining until {ResetAt}.",
+            _sweepQueries,
+            _sweepCost,
+            _sweepRepos,
+            _lastRateLimit?.Remaining,
+            _lastRateLimit?.ResetAt
+        );
 
+        _sweepRepos = 0;
         _sweepCost = 0;
         _sweepQueries = 0;
         _sweepSkippedForBudget = 0;
@@ -128,6 +133,8 @@ public sealed class ReviewSignalEnrichmentWorker(
         CancellationToken ct
     )
     {
+        _sweepRepos++;
+
         if (IsBelowReserve())
         {
             _sweepSkippedForBudget++;
