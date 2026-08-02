@@ -72,21 +72,21 @@ public class ReviewSignalsOptionsValidationTests
     }
 
     [Fact]
-    public void The_default_cadence_stays_within_the_graphql_points_budget()
+    public void The_shipped_defaults_are_the_deployed_ones()
     {
-        // Production sets no ReviewSignals__RefreshSeconds, so this compiled-in default IS
-        // the deployed cadence. At 150s it wanted 36,888 GraphQL points/hour against a
-        // 5,000 budget and spent ~51 minutes of every hour rate-limited, serving stale
-        // pills and starving the PAT that humans share. Measured cost is ~53 points per
-        // repo per sweep, halved to ~27 by the 25-PR cap; 3,600/900 = 4 sweeps/hour over
-        // ~29 repos is ~3,100/hour, which fits with headroom left for interactive use.
-        // Lowering this without re-measuring the logged sweep cost re-creates the outage.
+        // Production sets neither key, so these compiled-in defaults ARE what runs.
+        // This pins the values rather than an arithmetic budget argument: the previous
+        // version of this test multiplied cadence by repo count by per-repo cost, which
+        // the incremental design made obsolete — a sweep now spends GraphQL points only
+        // on pull requests whose watermark actually moved.
         using var provider = Provider(new Dictionary<string, string>());
 
-        var cadence = provider.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value.RefreshSeconds;
+        var options = provider.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value;
 
-        _ = cadence.Should().Be(900);
-        _ = (3600 / cadence * 29 * 27).Should().BeLessThan(5000);
+        _ = options.RefreshSeconds.Should().Be(150);
+        // The backstop must survive on the default path. A zero here would silently
+        // restore drain-to-empty, which is the failure this whole change exists to end.
+        _ = options.ReserveBudgetPoints.Should().Be(1000);
     }
 
     [Fact]

@@ -8,7 +8,11 @@ public sealed record GraphQlEnvelope<T>(T? Data, IReadOnlyList<GraphQlError>? Er
 
 public sealed record GraphQlError(string? Message);
 
-public sealed record NodeList<T>(IReadOnlyList<T>? Nodes);
+// PageInfo is optional and trailing: the per-repo sweep never asks for it on nested
+// connections, so it stays null there. The exact-PR query does ask, because once a query
+// covers one pull request instead of twenty-five, a truncated thread list is affordable
+// to detect and a silently wrong pill is not.
+public sealed record NodeList<T>(IReadOnlyList<T>? Nodes, GraphQlPageInfo? PageInfo = null);
 
 public sealed record GraphQlActor(string? Login);
 
@@ -71,6 +75,18 @@ public sealed record ReviewFactsRepository(ReviewFactsPullConnection? PullReques
 public sealed record GraphQlRateLimit(int Cost, int Remaining, string? ResetAt);
 
 public sealed record ReviewFactsData(ReviewFactsRepository? Repository, GraphQlRateLimit? RateLimit);
+
+/// <summary>
+/// Response shape for the exact-PR query, whose <c>repository</c> object holds one
+/// aliased <c>pullRequest(number:)</c> field per requested pull request rather than a
+/// fixed set of properties — hence a dictionary keyed by alias. A null value means
+/// GitHub returned no such pull request (closed and re-listed, or a race with the REST
+/// listing), which is not an error.
+/// </summary>
+public sealed record ExactReviewFactsData(
+    IReadOnlyDictionary<string, ReviewFactsPull?>? Repository,
+    GraphQlRateLimit? RateLimit
+);
 
 /// <summary>
 /// Everything needed to decide one pull request's reviewer states, flattened out of

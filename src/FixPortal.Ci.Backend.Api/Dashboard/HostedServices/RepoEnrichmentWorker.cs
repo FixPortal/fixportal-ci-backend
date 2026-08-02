@@ -30,6 +30,11 @@ public abstract class RepoEnrichmentWorker<T>(
     // read each repo's workflows through it instead of re-listing them.
     protected GitHubInventoryCache Inventory { get; } = inventory;
 
+    // Exposed for the same CS9107 reason as Client above. An incremental collector needs
+    // to read its own prior value to merge into, rather than recomputing a whole repo's
+    // worth of enrichment it mostly already has.
+    protected PerRepoCache<T> Cache { get; } = cache;
+
     protected abstract bool Enabled { get; }
     protected abstract TimeSpan Cadence { get; }
     protected abstract string Name { get; }
@@ -90,7 +95,7 @@ public abstract class RepoEnrichmentWorker<T>(
             if (await SweepSafelyAsync(stoppingToken))
             {
                 // An empty result is legitimate, so a successful sweep always ends cold-start.
-                if (cache.IsEmpty)
+                if (Cache.IsEmpty)
                 {
                     logger.LogInformation(
                         "{Name} cold-start sweep completed but produced no cached values (no matching repos?); switching to steady-state cadence.",
@@ -159,7 +164,7 @@ public abstract class RepoEnrichmentWorker<T>(
                 var value = await CollectAsync(repo, ct);
                 if (value is not null)
                 {
-                    cache.Update(repo.Name, value);
+                    Cache.Update(repo.Name, value);
                 }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)

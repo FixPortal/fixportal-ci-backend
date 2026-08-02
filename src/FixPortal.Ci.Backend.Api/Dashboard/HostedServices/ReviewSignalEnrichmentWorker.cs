@@ -9,12 +9,32 @@ using NodaTime.Text;
 namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 
 /// <summary>
-/// Slow-cadence enrichment (default 900s): fetches each repo's open-PR review state in
-/// one batched GraphQL query plus one code-scanning call, and caches a per-PR signal
-/// list. Off the 20s board loop deliberately — a per-PR fetch on that cadence would
-/// exceed the PAT rate budget several times over. Disabled unless reviewers are
-/// configured, so the default deployment issues no extra requests at all.
+/// Incremental review-signal enrichment (default 150s). Each sweep asks the REST open-PR
+/// listing what changed — a conditional request that answers 304, and therefore costs
+/// nothing, when a repository is quiet — and spends GraphQL points only on the pull
+/// requests whose watermark actually moved. Disabled unless reviewers are configured, so
+/// the default deployment issues no extra requests at all.
 /// </summary>
+/// <remarks>
+/// <para>
+/// It previously swept every repository on a timer, asking for 25 pull-request slots each
+/// and paying full connection fan-out for every empty slot. Measured in production that
+/// was 1,537 GraphQL points per sweep across 29 repositories — to track 2 open pull
+/// requests — against a 5,000-points/hour budget, so it exhausted the hour in nine
+/// minutes and spent the remaining fifty-one rate-limited. Cost scaled with the size of
+/// the estate; value scales with the number of open pull requests. Nothing connected the
+/// two, which is why every attempt to fix it by retuning the cadence only moved the
+/// point at which it broke.
+/// </para>
+/// <para>
+/// Three things cover the gaps a naive watermark would leave:
+/// <see cref="ReviewSignalPriority"/> refetches non-terminal pills on a short timer
+/// (a resolved thread and a completing check both change a pill without moving
+/// <c>updated_at</c>) and every pull request on a slow one; eviction drops signals for
+/// pull requests that have closed; and the reserve floor still bounds total spend, though
+/// it should now never fire.
+/// </para>
+/// </remarks>
 public sealed class ReviewSignalEnrichmentWorker(
     GitHubOrgClient client,
     GitHubInventoryCache inventory,
@@ -55,6 +75,20 @@ public sealed class ReviewSignalEnrichmentWorker(
     private int _sweepQueries;
     private int _sweepSkippedForBudget;
     private GraphQlRateLimit? _lastRateLimit;
+
+    private static readonly IReadOnlyDictionary<int, PrWatermark> EmptyWatermarks = new Dictionary<int, PrWatermark>();
+    private static readonly IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>> EmptySignals =
+        new Dictionary<int, IReadOnlyList<ReviewSignal>>();
+    private static readonly IReadOnlyDictionary<int, PrReviewFacts> EmptyFacts = new Dictionary<int, PrReviewFacts>();
+
+    // Sweep-to-sweep state. Sweeps are sequential (RepoEnrichmentWorker.RunSweepAsync
+    // awaits each repo in turn) and this worker is a singleton, so plain dictionaries are
+    // safe. In-memory deliberately: a restart re-fetches every open PR once, which now
+    // costs a handful of points rather than a full estate sweep.
+    private readonly Dictionary<string, IReadOnlyDictionary<int, PrWatermark>> _watermarks = new(
+        StringComparer.OrdinalIgnoreCase
+    );
+    private readonly Dictionary<string, Dictionary<int, Instant>> _observedAt = new(StringComparer.OrdinalIgnoreCase);
 
     protected override void OnSweepCompleted()
     {
@@ -103,37 +137,40 @@ public sealed class ReviewSignalEnrichmentWorker(
         var reviewers = options.Value.Reviewers;
         try
         {
-            var facts = await Client.GetPullRequestReviewFactsAsync(repo.Name, ct);
-            RecordGraphQlCost();
-            if (facts.Count == 0)
+            // Discovery, on the REST budget and usually free: an unchanged repository
+            // answers 304 from the shared ETag store, which GitHub does not charge.
+            var current = await Client.ListOpenPullRequestWatermarksAsync(repo.Name, ct);
+            var previous = _watermarks.GetValueOrDefault(repo.Name) ?? EmptyWatermarks;
+            var diff = PrWatermarkDiff.Compute(previous, current);
+
+            var cached = Cache.TryGet(repo.Name, out var prior) && prior is not null ? prior : EmptySignals;
+            var observed = _observedAt.TryGetValue(repo.Name, out var seen) ? seen : [];
+
+            // Transitions the watermark cannot see (a resolved thread, a check completing
+            // on an unchanged head) get a slow forced refetch instead of never updating.
+            var due = ReviewSignalPriority
+                .SelectDue(cached, observed, ReviewSignalPriority.RefreshInterval, clock.GetCurrentInstant())
+                .Where(current.ContainsKey);
+
+            var toFetch = diff.Dirty.Union(due).ToList();
+
+            var facts =
+                toFetch.Count > 0 ? await Client.GetPullRequestReviewFactsAsync(repo.Name, toFetch, ct) : EmptyFacts;
+            if (toFetch.Count > 0)
             {
-                return new Dictionary<int, IReadOnlyList<ReviewSignal>>();
+                RecordGraphQlCost();
             }
 
-            // Only pay for the alerts call when a configured reviewer actually reads it.
-            var needsAlerts = reviewers.Any(r => r.Source == ReviewerSource.CodeScanning);
+            _watermarks[repo.Name] = current;
+
+            // Only pay for the alerts call when a configured reviewer actually reads it,
+            // AND only when something is being recomputed — an unchanged sweep must cost
+            // nothing at all, which is the entire point of this path.
+            var needsAlerts = toFetch.Count > 0 && reviewers.Any(r => r.Source == ReviewerSource.CodeScanning);
             var alerts = needsAlerts ? await Client.GetOpenCodeScanningAlertCountsAsync(repo.Name, ct) : null;
 
-            var signals = new Dictionary<int, IReadOnlyList<ReviewSignal>>();
-            foreach (var pr in facts.Values)
-            {
-                // Dependency bots are out of AI code review by policy, so their PRs carry
-                // no pills at all rather than a row of disabled ones.
-                if (options.Value.ExcludedAuthors.Contains(pr.AuthorLogin, StringComparer.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-                // A null alerts dictionary means unreadable and must stay null per PR.
-                // A present dictionary with no entry for this PR means zero open alerts.
-                var openAlerts = alerts is null ? (int?)null : alerts.GetValueOrDefault(pr.Number);
-                signals[pr.Number] = ReviewSignalFactory.Build(
-                    pr,
-                    reviewers,
-                    openAlerts,
-                    $"https://github.com/{gitHub.Value.Owner}/{repo.Name}/pull/{pr.Number}"
-                );
-            }
-            return signals;
+            RecordObservations(repo.Name, facts.Keys, current);
+            return Merge(repo.Name, cached, current, facts, alerts, reviewers);
         }
         // GitHubAuthException belongs with the soft-fail transports: a PAT missing the
         // GraphQL scope must degrade to last-known-good and let cold start converge,
@@ -156,6 +193,83 @@ public sealed class ReviewSignalEnrichmentWorker(
     /// rateLimit { remaining resetAt }, so the worker can see it is running out — before
     /// this guard it read that number, logged it, and swept again anyway.
     /// </summary>
+    /// <summary>
+    /// Stamps when each refetched pull request was observed, and forgets ones that are no
+    /// longer open. The stamps drive <see cref="ReviewSignalPriority"/>, so letting them
+    /// accumulate for closed pull requests would slowly turn the priority queue into a
+    /// leak.
+    /// </summary>
+    private void RecordObservations(
+        string repo,
+        IEnumerable<int> fetched,
+        IReadOnlyDictionary<int, PrWatermark> stillOpen
+    )
+    {
+        if (!_observedAt.TryGetValue(repo, out var observed))
+        {
+            observed = [];
+            _observedAt[repo] = observed;
+        }
+
+        foreach (var closed in observed.Keys.Where(n => !stillOpen.ContainsKey(n)).ToList())
+        {
+            _ = observed.Remove(closed);
+        }
+
+        var now = clock.GetCurrentInstant();
+        foreach (var number in fetched)
+        {
+            observed[number] = now;
+        }
+    }
+
+    /// <summary>
+    /// Last-known-good for everything still open, overwritten by whatever was refetched.
+    /// The merge is what makes the incremental path safe: an untouched pull request keeps
+    /// the signal it already had rather than being recomputed or dropped, while one that
+    /// closed disappears — fixing a pill that used to outlive its pull request.
+    /// </summary>
+    private IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>> Merge(
+        string repo,
+        IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>> cached,
+        IReadOnlyDictionary<int, PrWatermark> stillOpen,
+        IReadOnlyDictionary<int, PrReviewFacts> facts,
+        IReadOnlyDictionary<int, int>? alerts,
+        IReadOnlyList<ReviewerOptions> reviewers
+    )
+    {
+        var signals = new Dictionary<int, IReadOnlyList<ReviewSignal>>();
+        foreach (var (number, existing) in cached.Where(entry => stillOpen.ContainsKey(entry.Key)))
+        {
+            signals[number] = existing;
+        }
+
+        foreach (var pr in facts.Values)
+        {
+            // Dependency bots are out of AI code review by policy, so their PRs carry no
+            // pills at all rather than a row of disabled ones. Remove rather than skip:
+            // merging onto a prior value means a PR cached before the exclusion was
+            // configured would otherwise keep its pills forever.
+            if (options.Value.ExcludedAuthors.Contains(pr.AuthorLogin, StringComparer.OrdinalIgnoreCase))
+            {
+                _ = signals.Remove(pr.Number);
+                continue;
+            }
+
+            // A null alerts dictionary means unreadable and must stay null per PR. A
+            // present dictionary with no entry for this PR means zero open alerts.
+            var openAlerts = alerts is null ? (int?)null : alerts.GetValueOrDefault(pr.Number);
+            signals[pr.Number] = ReviewSignalFactory.Build(
+                pr,
+                reviewers,
+                openAlerts,
+                $"https://github.com/{gitHub.Value.Owner}/{repo}/pull/{pr.Number}"
+            );
+        }
+
+        return signals;
+    }
+
     private bool IsBelowReserve() =>
         IsBelowReserve(_lastRateLimit, options.Value.ReserveBudgetPoints, clock.GetCurrentInstant());
 
