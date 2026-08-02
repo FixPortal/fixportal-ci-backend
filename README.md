@@ -180,7 +180,7 @@ FixPortal's worked example, set via deployment configuration:
   "ExcludedAuthors": [ "dependabot", "dependabot[bot]", "renovate", "renovate[bot]" ],
   "Reviewers": [
     { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high" },
-    { "Name": "Gitar", "BotLogin": "gitar-app" },
+    { "Name": "Gitar", "BotLogin": "gitar-bot" },
     { "Name": "CodeQL", "Source": "CodeScanning" }
   ]
 }

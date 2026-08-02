@@ -30,7 +30,7 @@ param image string
 @description('GitHub org/owner that hosts the tracked repos.')
 param gitHubOwner string
 
-@description('Fine-grained read-only GitHub PAT (Actions: Read-only).')
+@description('Fine-grained read-only GitHub PAT (Actions, Pull requests, Contents, and Code scanning alerts: Read-only).')
 @secure()
 param gitHubToken string
 
@@ -132,6 +132,34 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'Dashboard__RefreshSeconds'
               value: string(refreshSeconds)
+            }
+            {
+              name: 'ReviewSignals__Reviewers__0__Name'
+              value: 'CodeRabbit'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__0__BotLogin'
+              value: 'coderabbitai'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__0__RequiredLabel'
+              value: 'review-high'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__1__Name'
+              value: 'Gitar'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__1__BotLogin'
+              value: 'gitar-bot'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__2__Name'
+              value: 'CodeQL'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__2__Source'
+              value: 'CodeScanning'
             }
           ], map(range(0, length(corsAllowedOrigins)), i => {
             name: 'Cors__AllowedOrigins__${i}'
