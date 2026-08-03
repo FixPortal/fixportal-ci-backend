@@ -363,7 +363,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
     private static string FactsJson(string author, bool includeSuccessfulCodeScanningCheck)
     {
         var contexts = includeSuccessfulCodeScanningCheck
-            ? """[{"name":"CodeQL","conclusion":"SUCCESS","checkSuite":{"app":{"slug":"github-code-scanning"}}}]"""
+            ? """[{"name":"CodeQL","conclusion":"SUCCESS","checkSuite":{"app":{"slug":"github-advanced-security"}}}]"""
             : "[]";
         // The exact-PR query aliases one pullRequest field per requested number, so the
         // response is an alias-keyed object rather than a pullRequests connection.

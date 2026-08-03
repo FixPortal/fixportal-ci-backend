@@ -153,13 +153,13 @@ public class GitHubReviewFactsTests
             Pull(
                 checks:
                 [
-                    new GraphQlContext("SUCCESS", new GraphQlCheckSuite(new GraphQlApp("github-code-scanning"))),
+                    new GraphQlContext("SUCCESS", new GraphQlCheckSuite(new GraphQlApp("github-advanced-security"))),
                     new GraphQlContext("FAILURE", new GraphQlCheckSuite(new GraphQlApp("some-app"))),
                 ]
             )
         );
 
-        _ = facts.SuccessfulCheckAppSlugs.Should().Contain("github-code-scanning");
+        _ = facts.SuccessfulCheckAppSlugs.Should().Contain("github-advanced-security");
         _ = facts.SuccessfulCheckAppSlugs.Should().NotContain("some-app");
     }
 
@@ -182,14 +182,17 @@ public class GitHubReviewFactsTests
             Pull(
                 threads: [Thread("CodeRabbitAI", false)],
                 labels: [new GraphQlLabel("Review-High")],
-                checks: [new GraphQlContext("SUCCESS", new GraphQlCheckSuite(new GraphQlApp("GitHub-Code-Scanning")))]
+                checks:
+                [
+                    new GraphQlContext("SUCCESS", new GraphQlCheckSuite(new GraphQlApp("GitHub-Advanced-Security"))),
+                ]
             )
         );
 
         _ = facts.UnresolvedThreadsByAuthor.ContainsKey("coderabbitai").Should().BeTrue();
         _ = facts.HeadParticipatingAuthors.Contains("coderabbitai").Should().BeTrue();
         _ = facts.Labels.Contains("review-high").Should().BeTrue();
-        _ = facts.SuccessfulCheckAppSlugs.Contains("github-code-scanning").Should().BeTrue();
+        _ = facts.SuccessfulCheckAppSlugs.Contains("github-advanced-security").Should().BeTrue();
     }
 
     [Fact]

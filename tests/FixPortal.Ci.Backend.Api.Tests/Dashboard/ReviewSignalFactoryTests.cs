@@ -77,7 +77,9 @@ public class ReviewSignalFactoryTests
             RequiredLabel = "review-high",
         };
 
-        _ = Only(gated, Facts(checkApps: ["github-code-scanning"]), 2).State.Should().Be(ReviewSignalState.Disabled);
+        _ = Only(gated, Facts(checkApps: ["github-advanced-security"]), 2)
+            .State.Should()
+            .Be(ReviewSignalState.Disabled);
     }
 
     [Fact]
@@ -172,7 +174,7 @@ public class ReviewSignalFactoryTests
         ReviewSignalState expected
     )
     {
-        var facts = Facts(checkApps: ["github-code-scanning"]);
+        var facts = Facts(checkApps: ["github-advanced-security"]);
         var expectedCount = alerts > 0 ? alerts : (int?)null;
         var expectedUrl = alerts > 0 ? $"{PrUrl}/checks" : null;
 
@@ -189,7 +191,21 @@ public class ReviewSignalFactoryTests
     public void Code_scanning_is_pending_when_alerts_could_not_be_read()
     {
         // null openAlerts = endpoint unavailable. Must not render as a clean scan.
-        _ = Only(CodeQl, Facts(checkApps: ["github-code-scanning"])).State.Should().Be(ReviewSignalState.Pending);
+        _ = Only(CodeQl, Facts(checkApps: ["github-advanced-security"])).State.Should().Be(ReviewSignalState.Pending);
+    }
+
+    [Theory]
+    // Pins the real-world value AND the compatibility value: a test that asserted the magic
+    // string against the same magic string baked into the factory would prove only that
+    // someone typed it twice. "github-advanced-security" is what GitHub actually emits for
+    // CodeQL check runs today (verified 2026-08-03 by GraphQL against live PRs); the previous
+    // fixtures asserted the historical "github-code-scanning" slug against itself, which is
+    // exactly how the permanent-Pending bug shipped with a fully green test suite.
+    [InlineData("github-advanced-security")]
+    [InlineData("github-code-scanning")]
+    public void Zero_alerts_is_clean_for_either_accepted_code_scanning_app_slug(string appSlug)
+    {
+        _ = Only(CodeQl, Facts(checkApps: [appSlug]), 0).State.Should().Be(ReviewSignalState.Clean);
     }
 
     [Fact]
