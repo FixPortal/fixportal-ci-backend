@@ -8,10 +8,11 @@ public sealed record GraphQlEnvelope<T>(T? Data, IReadOnlyList<GraphQlError>? Er
 
 public sealed record GraphQlError(string? Message);
 
-// PageInfo is optional and trailing: the per-repo sweep never asks for it on nested
-// connections, so it stays null there. The exact-PR query does ask, because once a query
-// covers one pull request instead of twenty-five, a truncated thread list is affordable
-// to detect and a silently wrong pill is not.
+// PageInfo is optional and trailing. The per-repo sweep asks for it only on the comments
+// connection, whose truncation would silently promote a pill to Clean; the exact-PR query
+// asks for it everywhere, because once a query covers one pull request instead of
+// twenty-five, a truncated thread list is affordable to detect and a silently wrong pill
+// is not.
 public sealed record NodeList<T>(IReadOnlyList<T>? Nodes, GraphQlPageInfo? PageInfo = null);
 
 public sealed record GraphQlActor(string? Login);
@@ -26,6 +27,13 @@ public sealed record GraphQlReview(GraphQlActor? Author, GraphQlCommit? Commit);
 // latter, or a thread opened on commit 1 would report the head oid and wrongly
 // count as head participation.
 public sealed record GraphQlComment(GraphQlActor? Author, GraphQlCommit? OriginalCommit);
+
+// An ISSUE comment on the pull request, distinct from GraphQlComment (a REVIEW comment,
+// which anchors to a commit). Issue comments carry no commit reference at all, so
+// head-scoping them is a timestamp comparison against the head commit's committedDate --
+// see CollectHeadCommentAuthors. CreatedAt stays a raw ISO-8601 string: the GraphQL
+// serializer options are deliberately NodaTime-free, same as GraphQlRateLimit.ResetAt.
+public sealed record GraphQlIssueComment(GraphQlActor? Author, string? CreatedAt);
 
 public sealed record GraphQlThread(bool IsResolved, NodeList<GraphQlComment>? Comments);
 
@@ -42,7 +50,9 @@ public sealed record GraphQlRollup(NodeList<GraphQlContext>? Contexts);
 
 // Oid is populated at every usage site (the review/comment commit ref and the head
 // commit under commits(last: 1)); StatusCheckRollup is only populated on the latter.
-public sealed record GraphQlCommit(string? Oid, GraphQlRollup? StatusCheckRollup);
+// CommittedDate is populated only on the head commit under commits(last: 1); the
+// review/comment commit refs do not request it and leave it null.
+public sealed record GraphQlCommit(string? Oid, GraphQlRollup? StatusCheckRollup, string? CommittedDate = null);
 
 public sealed record GraphQlCommitNode(GraphQlCommit? Commit);
 
@@ -52,14 +62,16 @@ public sealed record ReviewFactsPull(
     NodeList<GraphQlLabel>? Labels,
     NodeList<GraphQlReview>? Reviews,
     NodeList<GraphQlThread>? ReviewThreads,
-    NodeList<GraphQlCommitNode>? Commits
+    NodeList<GraphQlCommitNode>? Commits,
+    NodeList<GraphQlIssueComment>? Comments = null
 );
 
-// hasNextPage only — the open-PR connection is deliberately capped at the 50 most
-// recently updated (see ReviewFactsQuery in GitHubOrgClient), and the flag exists so
-// an overflowing repo is observable rather than silently truncated. endCursor is not
-// queried: there is no cursor pagination to consume it.
-public sealed record GraphQlPageInfo(bool HasNextPage);
+// hasNextPage for connections fetched with `first:`; hasPreviousPage for the comments
+// connection, which is fetched with `last:` to get the most RECENT comments, so its
+// overflow is at the opposite end. Reading the wrong flag fails silently -- it logs
+// nothing and reports a clean pill. endCursor is not queried: there is no cursor
+// pagination to consume it.
+public sealed record GraphQlPageInfo(bool HasNextPage, bool HasPreviousPage = false);
 
 public sealed record ReviewFactsPullConnection(IReadOnlyList<ReviewFactsPull>? Nodes, GraphQlPageInfo? PageInfo);
 
@@ -130,11 +142,18 @@ public sealed record ReviewFactsBatch(
 /// a passing check or a stale review from three pushes ago, and neither is evidence it
 /// ran against what is actually on the PR now.
 /// </param>
+/// <param name="HeadCommentAuthors">
+/// Authors of ISSUE comments created strictly after the head commit. Separate from
+/// <paramref name="HeadParticipatingAuthors"/> because it is weaker evidence: a comment
+/// proves the reviewer spoke, not that it reviewed this diff. Only a reviewer explicitly
+/// configured with CommentsCountAsParticipation may act on it.
+/// </param>
 public sealed record PrReviewFacts(
     int Number,
     string AuthorLogin,
     IReadOnlySet<string> Labels,
     IReadOnlyDictionary<string, int> UnresolvedThreadsByAuthor,
     IReadOnlySet<string> HeadParticipatingAuthors,
+    IReadOnlySet<string> HeadCommentAuthors,
     IReadOnlySet<string> SuccessfulCheckAppSlugs
 );

@@ -16,12 +16,16 @@ public class GitHubReviewFactsTests
     // care about commit-scoping override it explicitly.
     private const string HeadOid = "head-sha";
 
+    private const string HeadCommittedAt = "2026-08-03T10:00:00Z";
+
     private static ReviewFactsPull Pull(
         IReadOnlyList<GraphQlThread>? threads = null,
         IReadOnlyList<GraphQlReview>? reviews = null,
         IReadOnlyList<GraphQlLabel>? labels = null,
         IReadOnlyList<GraphQlContext>? checks = null,
-        string? headOid = HeadOid
+        string? headOid = HeadOid,
+        IReadOnlyList<GraphQlIssueComment>? comments = null,
+        string? headCommittedAt = HeadCommittedAt
     ) =>
         new(
             181,
@@ -33,10 +37,18 @@ public class GitHubReviewFactsTests
                 ? new NodeList<GraphQlCommitNode>([])
                 : new NodeList<GraphQlCommitNode>([
                     new GraphQlCommitNode(
-                        new GraphQlCommit(headOid, new GraphQlRollup(new NodeList<GraphQlContext>(checks ?? [])))
+                        new GraphQlCommit(
+                            headOid,
+                            new GraphQlRollup(new NodeList<GraphQlContext>(checks ?? [])),
+                            headCommittedAt
+                        )
                     ),
-                ])
+                ]),
+            new NodeList<GraphQlIssueComment>(comments ?? [])
         );
+
+    private static GraphQlIssueComment Comment(string author, string createdAt) =>
+        new(new GraphQlActor(author), createdAt);
 
     private static GraphQlReview Review(string author, string? commitOid = HeadOid) =>
         new(new GraphQlActor(author), commitOid is null ? null : new GraphQlCommit(commitOid, null));
@@ -178,6 +190,70 @@ public class GitHubReviewFactsTests
         _ = facts.HeadParticipatingAuthors.Contains("coderabbitai").Should().BeTrue();
         _ = facts.Labels.Contains("review-high").Should().BeTrue();
         _ = facts.SuccessfulCheckAppSlugs.Contains("github-code-scanning").Should().BeTrue();
+    }
+
+    [Fact]
+    public void A_comment_after_the_head_commit_is_head_comment_participation()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")]));
+
+        _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
+    [Fact]
+    public void A_comment_before_the_head_commit_is_stale_and_does_not_count()
+    {
+        // The bot commented, then the author pushed. That verdict is about old code.
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("gitar-bot", "2026-08-03T09:55:00Z")]));
+
+        _ = facts.HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_comment_exactly_at_the_head_commit_does_not_count()
+    {
+        // Strict >. Equal timestamps are ambiguous, and Pending is the safe direction.
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("gitar-bot", HeadCommittedAt)]));
+
+        _ = facts.HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void An_unparseable_comment_timestamp_is_skipped_rather_than_throwing()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "not-a-date"), Comment("github-code-quality", "2026-08-03T10:05:00Z")])
+        );
+
+        _ = facts.HeadCommentAuthors.Should().BeEquivalentTo("github-code-quality");
+    }
+
+    [Fact]
+    public void No_head_commit_date_means_no_comment_can_be_head_scoped()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")], headCommittedAt: null)
+        );
+
+        _ = facts.HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Comment_authors_are_matched_case_insensitively_like_every_other_login_set()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("Gitar-Bot", "2026-08-03T10:05:00Z")]));
+
+        _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
+    [Fact]
+    public void A_comment_never_leaks_into_head_review_participation()
+    {
+        // The two sets are distinct evidence channels. Only the configured flag joins them,
+        // and that decision belongs to the factory, not the mapper.
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")]));
+
+        _ = facts.HeadParticipatingAuthors.Should().BeEmpty();
     }
 }
 
