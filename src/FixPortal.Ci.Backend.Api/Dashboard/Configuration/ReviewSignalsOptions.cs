@@ -27,6 +27,14 @@ public sealed class ReviewerOptions
     /// </summary>
     public string? RequiredLabel { get; init; }
 
+    /// <summary>
+    /// When set, an issue comment from <see cref="BotLogin"/> dated after the head commit
+    /// also counts as participation. For reviewers that report findings as review threads
+    /// but announce a clean result as a plain comment: without this they hold Pending
+    /// forever, because a comment is neither a review nor a thread.
+    /// </summary>
+    public bool CommentsCountAsParticipation { get; init; }
+
     public ReviewerSource Source { get; init; } = ReviewerSource.ReviewThreads;
 }
 
@@ -115,6 +123,10 @@ internal static class ReviewSignalsOptionsRegistration
                         r.Source != ReviewerSource.ReviewThreads || !string.IsNullOrWhiteSpace(r.BotLogin)
                     ),
                 "Every ReviewSignals:Reviewers entry with Source=ReviewThreads must set a non-blank BotLogin, or it can never match and reports Pending forever."
+            )
+            .Validate(
+                o => o.Reviewers.All(r => !r.CommentsCountAsParticipation || !string.IsNullOrWhiteSpace(r.BotLogin)),
+                "Every ReviewSignals:Reviewers entry with CommentsCountAsParticipation=true must set a non-blank BotLogin, or it can never match and reports Pending forever."
             )
             .ValidateOnStart();
     }
