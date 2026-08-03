@@ -78,11 +78,7 @@ public static class ReviewSignalFactory
             return new ReviewSignal(reviewer.Name, ReviewSignalState.Outstanding, alerts, $"{prHtmlUrl}/checks");
         }
         // Zero alerts only means clean once a scan has actually completed for this PR.
-        // SuccessfulCheckAppSlugs is IReadOnlySet<string>, which doesn't declare Overlaps
-        // (that's a HashSet-only method), so match by checking each accepted slug against
-        // it. The set is built with StringComparer.OrdinalIgnoreCase, so Contains is
-        // already case-insensitive -- no redundant casing logic needed here.
-        return CodeScanningAppSlugs.Any(facts.SuccessfulCheckAppSlugs.Contains)
+        return facts.SuccessfulCheckAppSlugs.Overlaps(CodeScanningAppSlugs)
             ? new ReviewSignal(reviewer.Name, ReviewSignalState.Clean, null, null)
             : new ReviewSignal(reviewer.Name, ReviewSignalState.Pending, null, null);
     }
