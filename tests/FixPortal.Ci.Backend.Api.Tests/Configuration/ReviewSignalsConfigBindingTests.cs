@@ -57,7 +57,12 @@ public class ReviewSignalsOptionsValidationTests
         return services.BuildServiceProvider();
     }
 
-    private static Dictionary<string, string> Reviewer(string name, string? botLogin, string? source = null)
+    private static Dictionary<string, string> Reviewer(
+        string name,
+        string? botLogin,
+        string? source = null,
+        bool? commentsCountAsParticipation = null
+    )
     {
         var settings = new Dictionary<string, string> { ["ReviewSignals:Reviewers:0:Name"] = name };
         if (botLogin is not null)
@@ -67,6 +72,10 @@ public class ReviewSignalsOptionsValidationTests
         if (source is not null)
         {
             settings["ReviewSignals:Reviewers:0:Source"] = source;
+        }
+        if (commentsCountAsParticipation is { } flag)
+        {
+            settings["ReviewSignals:Reviewers:0:CommentsCountAsParticipation"] = flag ? "true" : "false";
         }
         return settings;
     }
@@ -135,5 +144,39 @@ public class ReviewSignalsOptionsValidationTests
         );
 
         _ = provider.Invoking(p => p.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value).Should().NotThrow();
+    }
+
+    [Fact]
+    public void Comment_participation_binds_from_the_env_var_shape()
+    {
+        using var provider = Provider(
+            Reviewer(name: "Gitar", botLogin: "gitar-bot", commentsCountAsParticipation: true)
+        );
+
+        var options = provider.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value;
+
+        _ = options.Reviewers[0].CommentsCountAsParticipation.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Comment_participation_without_a_bot_login_is_rejected_at_startup()
+    {
+        // The flag matches comments BY BotLogin. Set without one it can never match, and
+        // the reviewer would report Pending forever -- the same silent misconfiguration
+        // the ReviewThreads BotLogin rule exists to prevent.
+        using var provider = Provider(
+            Reviewer(
+                name: "Mystery",
+                botLogin: null,
+                source: nameof(ReviewerSource.CodeScanning),
+                commentsCountAsParticipation: true
+            )
+        );
+
+        _ = provider
+            .Invoking(p => p.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value)
+            .Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*CommentsCountAsParticipation*");
     }
 }
