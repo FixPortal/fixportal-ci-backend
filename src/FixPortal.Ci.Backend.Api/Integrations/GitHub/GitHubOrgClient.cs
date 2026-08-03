@@ -880,16 +880,15 @@ public sealed class GitHubOrgClient(
         {
             return result;
         }
-        foreach (var comment in comments?.Nodes ?? [])
+        foreach (
+            var login in (comments?.Nodes ?? [])
+                .Where(c => ParseInstant(c.CreatedAt) is { } createdAt && createdAt > headAt)
+                .Select(c => c.Author?.Login)
+                .OfType<string>()
+                .Where(login => login.Length > 0)
+        )
         {
-            if (
-                comment.Author?.Login is { Length: > 0 } login
-                && ParseInstant(comment.CreatedAt) is { } createdAt
-                && createdAt > headAt
-            )
-            {
-                _ = result.Add(login);
-            }
+            _ = result.Add(login);
         }
         return result;
     }
