@@ -7,6 +7,7 @@ using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using Microsoft.Extensions.Options;
 using NodaTime;
 using NodaTime.Serialization.SystemTextJson;
+using NodaTime.Text;
 
 // GitHub response records are instantiated and populated by System.Text.Json.
 // ReSharper disable ClassNeverInstantiated.Global
@@ -808,6 +809,7 @@ public sealed class GitHubOrgClient(
         var headOid = GetHeadOid(pull.Commits);
         var headParticipating = CollectReviewers(pull.Reviews, headOid);
         var unresolved = CollectThreadFacts(pull.ReviewThreads, headParticipating, headOid);
+        var headComments = CollectHeadCommentAuthors(pull.Comments, pull.Commits);
         var checkApps = CollectSuccessfulCheckApps(pull.Commits);
 
         return new PrReviewFacts(
@@ -816,6 +818,7 @@ public sealed class GitHubOrgClient(
             labels,
             unresolved,
             headParticipating,
+            headComments,
             checkApps
         );
     }
@@ -838,6 +841,49 @@ public sealed class GitHubOrgClient(
 
     private static bool IsHeadCommit(string? oid, string? headOid) =>
         headOid is not null && string.Equals(oid, headOid, StringComparison.Ordinal);
+
+    // An issue comment carries no commit, so "did this land on the current head?" becomes
+    // a timestamp comparison. Strict >: a comment stamped equal to the head commit is
+    // ambiguous, and Pending is the safe direction. Anything unreadable -- no head date,
+    // no timestamp, an unparseable one -- drops the author, never promotes them.
+    private static HashSet<string> CollectHeadCommentAuthors(
+        NodeList<GraphQlIssueComment>? comments,
+        NodeList<GraphQlCommitNode>? commits
+    )
+    {
+        var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (GetHeadCommittedAt(commits) is not { } headAt)
+        {
+            return result;
+        }
+        foreach (var comment in comments?.Nodes ?? [])
+        {
+            if (
+                comment.Author?.Login is { Length: > 0 } login
+                && ParseInstant(comment.CreatedAt) is { } createdAt
+                && createdAt > headAt
+            )
+            {
+                _ = result.Add(login);
+            }
+        }
+        return result;
+    }
+
+    private static Instant? GetHeadCommittedAt(NodeList<GraphQlCommitNode>? commits) =>
+        commits?.Nodes is { Count: > 0 } nodes ? ParseInstant(nodes[^1].Commit?.CommittedDate) : null;
+
+    // GitHub returns ISO-8601 UTC ("2026-08-03T10:35:48Z"). A malformed value is a fact we
+    // cannot read, not an exception: one bad timestamp must not take out a whole sweep.
+    private static Instant? ParseInstant(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+        var parsed = InstantPattern.ExtendedIso.Parse(value);
+        return parsed.Success ? parsed.Value : null;
+    }
 
     private static HashSet<string> CollectReviewers(NodeList<GraphQlReview>? reviews, string? headOid)
     {

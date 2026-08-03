@@ -34,6 +34,7 @@ public class ReviewSignalFactoryTests
             new HashSet<string>(labels ?? [], StringComparer.OrdinalIgnoreCase),
             new Dictionary<string, int>(unresolved ?? new Dictionary<string, int>(), StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(headParticipating ?? [], StringComparer.OrdinalIgnoreCase),
+            new HashSet<string>(StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(checkApps ?? [], StringComparer.OrdinalIgnoreCase)
         );
 
