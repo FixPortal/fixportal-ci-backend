@@ -308,7 +308,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
     public async Task RefreshAsync_should_hold_the_concurrency_cap_and_cancel_siblings_on_rate_limit()
     {
         var handler = new ConcurrencyProbeHandler();
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());

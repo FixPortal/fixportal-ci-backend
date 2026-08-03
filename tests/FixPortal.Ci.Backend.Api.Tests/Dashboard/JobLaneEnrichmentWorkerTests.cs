@@ -21,8 +21,12 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 // — it is protected, reached in production only through the base class's ExecuteAsync
 // loop — so pagination and the soft-fail path can be pinned without paying for the
 // base loop's 0-15s startup jitter.
-public class JobLaneEnrichmentWorkerTests
+public sealed class JobLaneEnrichmentWorkerTests : IDisposable
 {
+    private readonly List<HttpClient> _httpClients = [];
+
+    public void Dispose() => _httpClients.ForEach(client => client.Dispose());
+
     private sealed class LaneScanHandler : HttpMessageHandler
     {
         public int JobsCallCount;
@@ -84,9 +88,10 @@ public class JobLaneEnrichmentWorkerTests
             new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
     }
 
-    private static JobLaneEnrichmentWorker NewWorker(LaneScanHandler handler, int maxRunsToScan)
+    private JobLaneEnrichmentWorker NewWorker(LaneScanHandler handler, int maxRunsToScan)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        _httpClients.Add(http);
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var laneOptions = Options.Create(
             new DashboardOptions
