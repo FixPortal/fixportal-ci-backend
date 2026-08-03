@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.Json;
+using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Options;
@@ -17,12 +18,23 @@ public sealed class DashboardRefreshService(
     [FromKeyedServices("packages")] PerRepoCache<IReadOnlyList<JobSignal>> packages,
     PerRepoCache<MergedPullRequest> mergedPrs,
     PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>> reviewSignals,
+    PerRepoCache<IReadOnlyDictionary<int, PrMergeState>> mergeStates,
+    IOptions<ReviewSignalsOptions> reviewOptions,
     IOptions<GitHubOptions> gitHub,
     IClock clock,
     ILogger<DashboardRefreshService> logger
 )
 {
     private const int MaxParallelRepos = 6;
+
+    // Snapshotted once rather than read per pull request: these are startup configuration,
+    // and re-deriving the excluded-author set inside the per-repo loop would rebuild it
+    // thousands of times a cycle for a value that cannot change.
+    private readonly bool _reviewsConfigured = reviewOptions.Value.Enabled && reviewOptions.Value.Reviewers.Count > 0;
+
+    private readonly IReadOnlySet<string> _excludedAuthors = reviewOptions.Value.ExcludedAuthors.ToHashSet(
+        StringComparer.OrdinalIgnoreCase
+    );
 
     public async Task RefreshAsync(CancellationToken ct)
     {
@@ -162,7 +174,13 @@ public sealed class DashboardRefreshService(
             // only rate limits propagate and abort the batch.
             var openPrs = await TryListOpenPullRequestsAsync(repo.Name, rateLimitToken);
             _ = reviewSignals.TryGet(repo.Name, out var repoReviewSignals);
-            var pullRequests = ApplyReviewSignals(openPrs, repoReviewSignals);
+            _ = mergeStates.TryGet(repo.Name, out var repoMergeStates);
+            var pullRequests = ApplyReadyToMerge(
+                ApplyReviewSignals(openPrs, repoReviewSignals),
+                repoMergeStates,
+                _reviewsConfigured,
+                _excludedAuthors
+            );
             _ = metrics.TryGet(repo.Name, out var repoMetrics);
             _ = deploys.TryGet(repo.Name, out var repoDeploys);
             _ = packages.TryGet(repo.Name, out var repoPackages);
@@ -275,6 +293,39 @@ public sealed class DashboardRefreshService(
             merged.Add(signals.TryGetValue(pr.Number, out var prSignals) ? pr with { ReviewSignals = prSignals } : pr);
         }
         return merged;
+    }
+
+    /// <summary>
+    /// Stamps each pull request with the ready-to-merge verdict. Runs AFTER
+    /// <see cref="ApplyReviewSignals"/>, because the verdict reads the signals that step
+    /// attaches — reversing the order silently yields "unknown" for every pull request
+    /// that actually had signals, which looks like the merge-state worker being broken.
+    /// </summary>
+    public static IReadOnlyList<PullRequest> ApplyReadyToMerge(
+        IReadOnlyList<PullRequest> prs,
+        IReadOnlyDictionary<int, PrMergeState>? mergeStates,
+        bool reviewsConfigured,
+        IReadOnlySet<string> excludedAuthors
+    )
+    {
+        if (prs.Count == 0)
+        {
+            return prs;
+        }
+
+        var stamped = new List<PullRequest>(prs.Count);
+        foreach (var pr in prs)
+        {
+            PrMergeState? state = null;
+            _ = mergeStates?.TryGetValue(pr.Number, out state);
+            stamped.Add(
+                pr with
+                {
+                    ReadyToMerge = ReadyToMergeCalculator.Evaluate(pr, state, reviewsConfigured, excludedAuthors),
+                }
+            );
+        }
+        return stamped;
     }
 
     public static IReadOnlyList<RepositorySnapshot> MergeWithPrevious(

@@ -396,6 +396,98 @@ public sealed class GitHubOrgClient(
         return data?.RateLimit?.Cost ?? 0;
     }
 
+    /// <summary>
+    /// GitHub's merge verdict for the given open pull requests.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Four scalars on the pull-request node, so there is no connection fan-out and the
+    /// whole batch costs one GraphQL point — unlike the review-facts query, whose cost is
+    /// driven by nested thread and comment connections. That is why this is a separate
+    /// query rather than extra fields on the existing one: it can be swept far more often
+    /// for almost nothing, and it stays alive when review signals are switched off.
+    /// </para>
+    /// <para>
+    /// <c>mergeStateStatus</c> needs no preview Accept header (verified against the live
+    /// API on 2026-08-03). It IS computed lazily, so a pull request GitHub has not
+    /// evaluated yet answers UNKNOWN; the caller treats that as undetermined and the next
+    /// sweep picks it up.
+    /// </para>
+    /// <para>
+    /// Returns only what GitHub answered for. A requested number missing from the result
+    /// no longer exists or is no longer visible, which the caller treats as an eviction.
+    /// </para>
+    /// </remarks>
+    public async Task<IReadOnlyDictionary<int, PrMergeState>> GetPullRequestMergeStatesAsync(
+        string repo,
+        IReadOnlyCollection<int> numbers,
+        CancellationToken ct
+    )
+    {
+        var states = new Dictionary<int, PrMergeState>();
+        if (numbers.Count == 0)
+        {
+            return states;
+        }
+
+        foreach (var chunk in numbers.Distinct().Order().Chunk(ExactPrBatchSize))
+        {
+            // Aliases are built from int, so there is no injection surface here.
+            var aliases = string.Join(
+                "\n    ",
+                chunk.Select(n => $"pr{n}: pullRequest(number: {n}) {{ number isDraft mergeable mergeStateStatus }}")
+            );
+            var query = $$"""
+                query($owner: String!, $name: String!) {
+                  rateLimit { cost remaining resetAt }
+                  repository(owner: $owner, name: $name) {
+                    {{aliases}}
+                  }
+                }
+                """;
+
+            try
+            {
+                var data = await PostGraphQlAsync<MergeStateData>(
+                    query,
+                    new { owner = _gitHub.Owner, name = repo },
+                    $"{_gitHub.Owner}/{repo}",
+                    ct
+                );
+
+                LastGraphQlRateLimit = data?.RateLimit;
+
+                // A null value means GitHub returned no such pull request -- closed since
+                // the listing, not an error.
+                foreach (var pull in (data?.Repository?.Values ?? []).Where(p => p is not null))
+                {
+                    states[pull!.Number] = new PrMergeState(
+                        pull.Number,
+                        pull.IsDraft,
+                        pull.Mergeable,
+                        pull.MergeStateStatus
+                    );
+                }
+            }
+            // Soft-fail per chunk, matching the review-facts path: an unreadable pull
+            // request must leave the board showing what it last knew rather than
+            // collapsing the whole sweep. Unlike review facts there is no per-PR retry --
+            // the value here is cheap to refetch next sweep, so isolating one offender is
+            // not worth the extra queries.
+            catch (Exception ex) when (ex is HttpRequestException or GitHubAuthException)
+            {
+                logger?.LogWarning(
+                    ex,
+                    "Merge state unavailable for {Repo} ({Count} pull requests).",
+                    repo,
+                    chunk.Length
+                );
+            }
+        }
+
+        return states;
+    }
+
     // A truncated nested connection is the one failure this feature cannot absorb: a
     // missing unresolved thread turns Outstanding into a confident Clean. The per-repo
     // query could not afford to detect it; the exact-PR query can, so an over-cap pull
