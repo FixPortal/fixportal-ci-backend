@@ -262,7 +262,10 @@ public class GitHubReviewFactsTests
         // comments are fetched with `last:` to get the most RECENT ones, so overflow is at
         // the START of the connection. Asserting hasNextPage here would pass while the real
         // truncation went undetected -- silently, with a Clean pill on incomplete evidence.
-        var truncated = new NodeList<GraphQlIssueComment>([], new GraphQlPageInfo(HasNextPage: false, HasPreviousPage: true));
+        var truncated = new NodeList<GraphQlIssueComment>(
+            [],
+            new GraphQlPageInfo(HasNextPage: false, HasPreviousPage: true)
+        );
 
         _ = truncated.PageInfo!.HasPreviousPage.Should().BeTrue();
         _ = truncated.PageInfo!.HasNextPage.Should().BeFalse();
