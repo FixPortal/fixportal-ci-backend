@@ -56,7 +56,11 @@ public sealed record PullRequest(
     // Optional and trailing so every existing construction site keeps compiling and
     // an older frontend simply never sees the field. Null means "nothing to show":
     // enrichment has not run, the author is excluded, or no reviewers are configured.
-    IReadOnlyList<ReviewSignal>? ReviewSignals = null
+    IReadOnlyList<ReviewSignal>? ReviewSignals = null,
+    // Tri-state: true ready, false not ready, null not yet determined. Computed server-side
+    // because only the server can tell apart the three reasons ReviewSignals may be null.
+    // See ReadyToMergeCalculator.
+    bool? ReadyToMerge = null
 );
 
 public sealed record MergedPullRequest(

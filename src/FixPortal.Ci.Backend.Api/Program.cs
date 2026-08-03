@@ -93,6 +93,10 @@ builder
 // because the configuration binder does not honour `required`.
 builder.Services.AddReviewSignalsOptions(builder.Configuration);
 
+// Merge state has no roster to validate — it is on by default with only a cadence to
+// check — so it binds directly rather than through an extension like the one above.
+MergeStateOptions.AddMergeStateOptions(builder.Services, builder.Configuration);
+
 // CORS so the FixPortal SPA (a separate origin) can read the public snapshot.
 // Empty config -> no origins allowed (safe default until the SPA origin is set
 // via Cors__AllowedOrigins__0 in deploy config).
@@ -174,6 +178,20 @@ builder.Services.AddSingleton(sp =>
     );
 });
 
+// Given a max-age for the same reason as the review-signal cache above: a stale merge
+// verdict is worse than none. It is the one input to the board's ready-to-merge filter
+// that another pull request's merge can invalidate remotely, so an entry that has stopped
+// being refreshed must decay to "unknown" rather than keep asserting CLEAN. Three sweeps'
+// grace, matching the review-signal cache's ratio.
+builder.Services.AddSingleton(sp =>
+{
+    var mergeState = sp.GetRequiredService<IOptions<MergeStateOptions>>().Value;
+    return new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(
+        sp.GetRequiredService<IClock>(),
+        Duration.FromSeconds(3 * mergeState.RefreshSeconds)
+    );
+});
+
 // Last-known-good, no TTL — consistent with the metrics and merged-PR caches above.
 // A max-age here was ineffective: InheritEnrichment re-inherits an expired lane
 // signal from the previous snapshot every cycle (needed for cold-start continuity),
@@ -196,6 +214,7 @@ builder.Services.AddHostedService<DashboardRefreshWorker>();
 builder.Services.AddHostedService<MetricsEnrichmentWorker>();
 builder.Services.AddHostedService<MergedPrEnrichmentWorker>();
 builder.Services.AddHostedService<ReviewSignalEnrichmentWorker>();
+builder.Services.AddHostedService<MergeStateEnrichmentWorker>();
 builder.Services.AddSingleton<IHostedService>(sp => new JobLaneEnrichmentWorker(
     "deploys",
     sp.GetRequiredService<GitHubOrgClient>(),
