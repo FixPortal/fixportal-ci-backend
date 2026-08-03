@@ -17,8 +17,13 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 /// </summary>
 public static class ReviewSignalFactory
 {
-    // The GitHub App that publishes CodeQL and other code-scanning results.
-    private const string CodeScanningAppSlug = "github-code-scanning";
+    // The GitHub Apps that publish CodeQL and other code-scanning results. "github-advanced-security"
+    // is what GitHub actually emits today (verified 2026-08-03 by GraphQL against live PRs across
+    // three repos -- not one instance of the other slug in real data). "github-code-scanning" is the
+    // historical slug, kept in case a repo or enterprise hasn't moved to the newer branding. Matching
+    // both is strictly safer than betting on either. Live bug: this used to be a single const pinned
+    // to the wrong slug, so the CodeQL pill rendered Pending forever regardless of scan outcome.
+    private static readonly string[] CodeScanningAppSlugs = ["github-advanced-security", "github-code-scanning"];
 
     public static IReadOnlyList<ReviewSignal> Build(
         PrReviewFacts facts,
@@ -73,7 +78,11 @@ public static class ReviewSignalFactory
             return new ReviewSignal(reviewer.Name, ReviewSignalState.Outstanding, alerts, $"{prHtmlUrl}/checks");
         }
         // Zero alerts only means clean once a scan has actually completed for this PR.
-        return facts.SuccessfulCheckAppSlugs.Contains(CodeScanningAppSlug)
+        // SuccessfulCheckAppSlugs is IReadOnlySet<string>, which doesn't declare Overlaps
+        // (that's a HashSet-only method), so match by checking each accepted slug against
+        // it. The set is built with StringComparer.OrdinalIgnoreCase, so Contains is
+        // already case-insensitive -- no redundant casing logic needed here.
+        return CodeScanningAppSlugs.Any(facts.SuccessfulCheckAppSlugs.Contains)
             ? new ReviewSignal(reviewer.Name, ReviewSignalState.Clean, null, null)
             : new ReviewSignal(reviewer.Name, ReviewSignalState.Pending, null, null);
     }
