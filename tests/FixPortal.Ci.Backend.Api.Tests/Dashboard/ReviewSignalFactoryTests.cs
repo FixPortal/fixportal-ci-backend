@@ -233,10 +233,7 @@ public class ReviewSignalFactoryTests
     {
         // Gitar opens threads for findings AND comments a summary. Outstanding must win,
         // or a finding would be masked by the very comment that reported it.
-        var facts = Facts(
-            unresolved: new Dictionary<string, int> { ["gitar-app"] = 2 },
-            headComments: ["gitar-app"]
-        );
+        var facts = Facts(unresolved: new Dictionary<string, int> { ["gitar-app"] = 2 }, headComments: ["gitar-app"]);
 
         var signal = Only(GitarWithComments, facts);
 
@@ -247,9 +244,7 @@ public class ReviewSignalFactoryTests
     [Fact]
     public void Another_bots_head_comment_does_not_make_this_reviewer_clean()
     {
-        _ = Only(GitarWithComments, Facts(headComments: ["coderabbitai"]))
-            .State.Should()
-            .Be(ReviewSignalState.Pending);
+        _ = Only(GitarWithComments, Facts(headComments: ["coderabbitai"])).State.Should().Be(ReviewSignalState.Pending);
     }
 
     [Fact]
