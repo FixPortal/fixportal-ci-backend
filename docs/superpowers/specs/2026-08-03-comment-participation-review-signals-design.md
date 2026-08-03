@@ -149,13 +149,21 @@ comment must be updated as part of the change rather than left contradicting the
 **Truncation is detected with `hasPreviousPage`, not `hasNextPage`.** This is the one
 place the existing convention inverts. Every other connection in these queries uses
 `first:`, where overflow appears as `hasNextPage`; comments use `last:` to get the most
-recent, so overflow is at the opposite end. `GraphQlPageInfo` gains `HasPreviousPage`,
-and `WarnOnTruncatedConnections` reads the correct flag for this connection. Reading
-the wrong one fails silently — it logs nothing and reports a clean pill.
+recent, so overflow is at the opposite end, and under the Relay spec `hasNextPage` is
+only guaranteed accurate when paginating with `first:`. `GraphQlPageInfo` gains
+`HasPreviousPage`, and `WarnOnTruncatedConnections` reads the correct flag for this
+connection. This check is a diagnostic, not a safety mechanism: `last: 20` drops the
+OLDEST comments, and `HeadCommentAuthors` is built only from comments GitHub actually
+returned, so truncation can only shrink that set, and can only push a pill toward
+`Pending` — never toward a false `Clean`. Reading the wrong flag would fail silently, in
+that it would log nothing, but the failure mode is a missed author, not a certified
+pass; `hasPreviousPage` is kept because a chatty pull request deserves to be observable
+rather than mysteriously stuck, not because getting it wrong would be unsafe.
 
 ### Error handling
 
-Every failure path resolves to `Pending`, never `Clean`:
+Every path where the input needed to evaluate participation cannot be read resolves to
+`Pending`, never `Clean`:
 
 - comment connection truncated
 - comment connection absent or null
@@ -164,6 +172,34 @@ Every failure path resolves to `Pending`, never `Clean`:
 
 This matches the existing treatment of unreadable code-scanning alerts at
 `ReviewSignalFactory.cs:67-70`, where "unreadable" is `Pending` rather than `Clean`.
+
+That is the full set of paths where the input is unreadable. It is not the full set of
+paths where the resulting signal can be wrong. Two limitations are accepted rather than
+mitigated, because closing either would mean the comment-body parsing the Approach
+section above already rejected.
+
+The first is that any comment counts, not just a verdict comment. The same objection
+that ruled out trusting a successful check — "a 'review rate limited' check passes by
+design, so this would certify a pass nobody performed" — applies just as much to the
+comment channel: a Gitar comment reading "review paused, resume next week", "rate
+limited", or "reviewing this PR..." is indistinguishable, on presence alone, from an
+approval, and promotes the pill to `Clean`. Telling a status comment from a verdict
+would need comment-body parsing, which "No comment-body parsing" in Out of scope
+declines to do, for the same reason it was rejected as an alternative above: it
+couples the backend to each vendor's comment formatting, and a restyle would silently
+flip pills with nothing to detect it.
+
+The second is that `committedDate` is commit-creation time, not push time. A
+force-push that resets the branch to an earlier commit — backing out a bad push —
+leaves the head commit's date behind comments that already exist, so those stale
+comments satisfy the strict `>` and read as head-scoped. `git rebase
+--committer-date-is-author-date` has the same shape, because it deliberately keeps
+the original commit time instead of stamping a fresh one. This is distinct from an
+ordinary rebase or `--amend`, a merge of main into the branch, an edited comment
+(which keeps its original `createdAt`, so editing only makes it staler), clock skew
+(both timestamps are GitHub-server-issued), or a bot commenting before a fixup push —
+all of those advance the head commit's date past the existing comments and fail safe
+to `Pending`, so they are not listed as hazards here.
 
 ## Testing
 

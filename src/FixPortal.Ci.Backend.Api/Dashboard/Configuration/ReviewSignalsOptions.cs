@@ -31,7 +31,10 @@ public sealed class ReviewerOptions
     /// When set, an issue comment from <see cref="BotLogin"/> dated after the head commit
     /// also counts as participation. For reviewers that report findings as review threads
     /// but announce a clean result as a plain comment: without this they hold Pending
-    /// forever, because a comment is neither a review nor a thread.
+    /// forever, because a comment is neither a review nor a thread. The presence of a
+    /// comment is the whole signal -- its content is never inspected, so a status update
+    /// or a "paused, resuming later" comment counts as a pass exactly like a genuine
+    /// all-clear.
     /// </summary>
     public bool CommentsCountAsParticipation { get; init; }
 

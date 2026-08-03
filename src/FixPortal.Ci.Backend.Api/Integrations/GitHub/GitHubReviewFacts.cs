@@ -9,10 +9,14 @@ public sealed record GraphQlEnvelope<T>(T? Data, IReadOnlyList<GraphQlError>? Er
 public sealed record GraphQlError(string? Message);
 
 // PageInfo is optional and trailing. The per-repo sweep asks for it only on the comments
-// connection, whose truncation would silently promote a pill to Clean; the exact-PR query
-// asks for it everywhere, because once a query covers one pull request instead of
-// twenty-five, a truncated thread list is affordable to detect and a silently wrong pill
-// is not.
+// connection, and only as a diagnostic, not a safety mechanism: `last: 20` drops the
+// OLDEST comments, and HeadCommentAuthors is built solely from comments that were
+// actually returned, so truncation can only shrink that set -- it produces Pending, never
+// a false Clean. hasPreviousPage exists so a chatty pull request is observable rather
+// than mysteriously stuck. The exact-PR query asks for PageInfo everywhere, because once
+// a query covers one pull request instead of twenty-five, a truncated thread list is
+// affordable to detect -- and there, unlike comments, truncation IS unsafe: a missing
+// unresolved thread reads as a confident Clean.
 public sealed record NodeList<T>(IReadOnlyList<T>? Nodes, GraphQlPageInfo? PageInfo = null);
 
 public sealed record GraphQlActor(string? Login);
@@ -68,9 +72,11 @@ public sealed record ReviewFactsPull(
 
 // hasNextPage for connections fetched with `first:`; hasPreviousPage for the comments
 // connection, which is fetched with `last:` to get the most RECENT comments, so its
-// overflow is at the opposite end. Reading the wrong flag fails silently -- it logs
-// nothing and reports a clean pill. endCursor is not queried: there is no cursor
-// pagination to consume it.
+// overflow is at the opposite end -- under the Relay spec, hasNextPage is only
+// guaranteed accurate when paginating with `first:`. Reading the wrong flag here fails
+// silently: it logs nothing. But because `last:` truncation drops the OLDEST comments,
+// the cost of missing it is a missed author and a pill stuck on Pending, never a false
+// Clean. endCursor is not queried: there is no cursor pagination to consume it.
 public sealed record GraphQlPageInfo(bool HasNextPage, bool HasPreviousPage = false);
 
 public sealed record ReviewFactsPullConnection(IReadOnlyList<ReviewFactsPull>? Nodes, GraphQlPageInfo? PageInfo);

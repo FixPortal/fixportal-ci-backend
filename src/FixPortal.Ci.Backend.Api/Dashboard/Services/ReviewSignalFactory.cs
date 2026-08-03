@@ -96,12 +96,13 @@ public static class ReviewSignalFactory
 
         // A passing check is not evidence a reviewer ran: CodeRabbit's "rate limited" /
         // "review skipped" checks pass by design so they never block a protected-branch
-        // merge. Only actual participation (a review or an opened thread) counts.
-        // Two evidence channels, and the second is opt-in per reviewer. A reviewer that
-        // reports findings as threads but announces a clean result as a plain comment
-        // (Gitar, Code Quality) is otherwise pinned to Pending forever. This sits AFTER
-        // the unresolved-thread return above, so a comment can only ever promote Pending
-        // to Clean -- it can never mask an open finding.
+        // merge. Participation is a review, an opened thread, or -- for a reviewer opted
+        // into CommentsCountAsParticipation -- a head-scoped issue comment. The comment
+        // channel exists because a reviewer that reports findings as threads but
+        // announces a clean result as a plain comment (Gitar, Code Quality) would
+        // otherwise be pinned to Pending forever. This sits AFTER the unresolved-thread
+        // return above, so a comment can only ever promote Pending to Clean -- it can
+        // never mask an open finding.
         var ran =
             facts.HeadParticipatingAuthors.Contains(login)
             || reviewer.CommentsCountAsParticipation && facts.HeadCommentAuthors.Contains(login);
