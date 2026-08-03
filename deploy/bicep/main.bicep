@@ -172,6 +172,13 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ReviewSignals__Reviewers__1__BotLogin'
               value: 'gitar-bot'
             }
+            // Gitar reports findings as review threads but announces a clean result as a
+            // plain issue comment, so without this it holds Pending on every PR it passes
+            // -- on exactly the PRs that are ready to merge.
+            {
+              name: 'ReviewSignals__Reviewers__1__CommentsCountAsParticipation'
+              value: 'true'
+            }
             {
               name: 'ReviewSignals__Reviewers__2__Name'
               value: 'CodeQL'
@@ -192,6 +199,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'ReviewSignals__Reviewers__3__BotLogin'
               value: 'github-code-quality'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__3__CommentsCountAsParticipation'
+              value: 'true'
             }
           ], map(range(0, length(corsAllowedOrigins)), i => {
             name: 'Cors__AllowedOrigins__${i}'
