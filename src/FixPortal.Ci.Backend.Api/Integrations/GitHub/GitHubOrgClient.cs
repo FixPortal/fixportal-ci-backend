@@ -150,10 +150,18 @@ public sealed class GitHubOrgClient(
                     }
                   }
                 }
+                comments(last: 20) {
+                  # An issue comment is the only trace a reviewer leaves when it has
+                  # nothing to report. `last:` because only the most recent matter, which
+                  # is also why truncation shows up as hasPreviousPage, not hasNextPage.
+                  nodes { author { login } createdAt }
+                  pageInfo { hasPreviousPage }
+                }
                 commits(last: 1) {
                   nodes {
                     commit {
                       oid
+                      committedDate
                       statusCheckRollup {
                         contexts(first: 50) {
                           nodes { ... on CheckRun { conclusion checkSuite { app { slug } } } }
@@ -190,10 +198,15 @@ public sealed class GitHubOrgClient(
             }
             pageInfo { hasNextPage }
           }
+          comments(last: 20) {
+            nodes { author { login } createdAt }
+            pageInfo { hasPreviousPage }
+          }
           commits(last: 1) {
             nodes {
               commit {
                 oid
+                committedDate
                 statusCheckRollup {
                   contexts(first: 100) {
                     nodes { ... on CheckRun { conclusion checkSuite { app { slug } } } }
@@ -205,6 +218,12 @@ public sealed class GitHubOrgClient(
           }
         }
         """;
+
+    // Exposed for test: the queries are the contract between the mapper and GitHub, and a
+    // field silently dropped from one of them starves a collector without failing anything.
+    internal static string ReviewFactsQueryText => ReviewFactsQuery;
+
+    internal static string ExactPrFragmentText => ExactPrFragment;
 
     /// <summary>
     /// Aliases per exact-PR request. Aliasing does not discount anything — fan-out is
@@ -507,6 +526,11 @@ public sealed class GitHubOrgClient(
         if (pull.ReviewThreads?.PageInfo?.HasNextPage == true)
         {
             truncated.Add("reviewThreads");
+        }
+        // hasPreviousPage, not hasNextPage: comments are fetched with `last:`.
+        if (pull.Comments?.PageInfo?.HasPreviousPage == true)
+        {
+            truncated.Add("comments");
         }
         var rollup = pull.Commits?.Nodes?.FirstOrDefault()?.Commit?.StatusCheckRollup;
         if (rollup?.Contexts?.PageInfo?.HasNextPage == true)
