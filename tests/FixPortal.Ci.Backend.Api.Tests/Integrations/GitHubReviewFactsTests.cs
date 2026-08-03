@@ -255,6 +255,31 @@ public class GitHubReviewFactsTests
 
         _ = facts.HeadParticipatingAuthors.Should().BeEmpty();
     }
+
+    [Fact]
+    public void The_comments_connection_reports_truncation_on_has_previous_page()
+    {
+        // comments are fetched with `last:` to get the most RECENT ones, so overflow is at
+        // the START of the connection. Asserting hasNextPage here would pass while the real
+        // truncation went undetected -- silently, with a Clean pill on incomplete evidence.
+        var truncated = new NodeList<GraphQlIssueComment>([], new GraphQlPageInfo(HasNextPage: false, HasPreviousPage: true));
+
+        _ = truncated.PageInfo!.HasPreviousPage.Should().BeTrue();
+        _ = truncated.PageInfo!.HasNextPage.Should().BeFalse();
+    }
+
+    [Theory]
+    [InlineData("comments(last: 20)")]
+    [InlineData("createdAt")]
+    [InlineData("committedDate")]
+    [InlineData("hasPreviousPage")]
+    public void Both_review_fact_queries_request_the_comment_fields(string fragment)
+    {
+        // The mapper cannot head-scope a comment it never received. Without this, Task 2's
+        // collectors would sit correct and permanently starved of input.
+        _ = GitHubOrgClient.ReviewFactsQueryText.Should().Contain(fragment);
+        _ = GitHubOrgClient.ExactPrFragmentText.Should().Contain(fragment);
+    }
 }
 
 public class GitHubReviewFactsTransportTests
