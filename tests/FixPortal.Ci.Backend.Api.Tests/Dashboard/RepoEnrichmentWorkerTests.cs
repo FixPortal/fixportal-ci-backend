@@ -14,8 +14,12 @@ using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 
-public class RepoEnrichmentWorkerTests
+public sealed class RepoEnrichmentWorkerTests : IDisposable
 {
+    private readonly List<HttpClient> _httpClients = [];
+
+    public void Dispose() => _httpClients.ForEach(client => client.Dispose());
+
     private static GitHubRepoDto Repo(string name) =>
         new(name, $"https://github.com/FixPortal/{name}", false, false, "main");
 
@@ -127,9 +131,10 @@ public class RepoEnrichmentWorkerTests
             );
     }
 
-    private static GitHubInventoryCache NewSingleRepoInventory()
+    private GitHubInventoryCache NewSingleRepoInventory()
     {
         var http = new HttpClient(new SingleRepoHandler()) { BaseAddress = new Uri("https://api.github.com/") };
+        _httpClients.Add(http);
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());

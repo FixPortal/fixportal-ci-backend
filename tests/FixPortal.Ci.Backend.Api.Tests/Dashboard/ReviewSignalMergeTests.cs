@@ -149,8 +149,12 @@ public class ReviewSignalReserveTests
     }
 }
 
-public class ReviewSignalWorkerGatingTests
+public sealed class ReviewSignalWorkerGatingTests : IDisposable
 {
+    private readonly List<HttpClient> _httpClients = [];
+
+    public void Dispose() => _httpClients.ForEach(client => client.Dispose());
+
     // Serves the one-repo org listing so a sweep past the gate has something to
     // collect against; every other path answers an empty JSON array. Calls is
     // incremented with Interlocked, and RequestReceived fires on the first call,
@@ -182,13 +186,14 @@ public class ReviewSignalWorkerGatingTests
         }
     }
 
-    private static ReviewSignalEnrichmentWorker NewWorker(
+    private ReviewSignalEnrichmentWorker NewWorker(
         RecordingHandler handler,
         ReviewSignalsOptions options,
         TimeProvider timeProvider
     )
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        _httpClients.Add(http);
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());

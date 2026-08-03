@@ -20,8 +20,12 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 // OperationCanceledException — see PersistAndPublishAsync tests) but nothing asserts
 // the worker actually absorbs a thrown exception instead of letting it kill the
 // hosted service silently.
-public class DashboardRefreshWorkerTests
+public sealed class DashboardRefreshWorkerTests : IDisposable
 {
+    private readonly List<HttpClient> _httpClients = [];
+
+    public void Dispose() => _httpClients.ForEach(client => client.Dispose());
+
     // Captures ILogger.LogError calls so the test can wait, event-driven, for the
     // exact moment RefreshSafelyAsync's catch clause has run — rather than sleeping
     // an arbitrary "should be long enough" duration.
@@ -67,9 +71,10 @@ public class DashboardRefreshWorkerTests
             );
     }
 
-    private static DashboardRefreshService NewBrokenRefreshService(HttpMessageHandler handler)
+    private DashboardRefreshService NewBrokenRefreshService(HttpMessageHandler handler)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        _httpClients.Add(http);
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());

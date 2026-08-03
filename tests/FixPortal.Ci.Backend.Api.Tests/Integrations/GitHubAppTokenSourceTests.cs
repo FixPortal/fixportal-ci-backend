@@ -15,9 +15,12 @@ namespace FixPortal.Ci.Backend.Api.Tests.Integrations;
 // statusCheckRollup and there is no "Checks" permission to grant it. It also moves the
 // dashboard onto its own GraphQL points budget, so a sweep can no longer starve a human
 // running gh. Both make the JWT worth pinning - a malformed one fails as an opaque 401.
-public class GitHubAppTokenSourceTests
+public sealed class GitHubAppTokenSourceTests : IDisposable
 {
     private static readonly Instant Now = Instant.FromUtc(2026, 8, 2, 20, 0, 0);
+    private readonly List<HttpClient> _httpClients = [];
+
+    public void Dispose() => _httpClients.ForEach(client => client.Dispose());
 
     private static string NewPrivateKeyPem()
     {
@@ -25,14 +28,16 @@ public class GitHubAppTokenSourceTests
         return rsa.ExportPkcs8PrivateKeyPem();
     }
 
-    private static GitHubAppTokenSource Create(string pem, out RSA verifier)
+    private GitHubAppTokenSource Create(string pem, out RSA verifier)
     {
         var rsa = RSA.Create();
         rsa.ImportFromPem(pem);
         verifier = rsa;
 
+        var http = new HttpClient { BaseAddress = new Uri("https://api.github.com/") };
+        _httpClients.Add(http);
         return new GitHubAppTokenSource(
-            new HttpClient { BaseAddress = new Uri("https://api.github.com/") },
+            http,
             Options.Create(new GitHubAppOptions { AppId = "123456", PrivateKeyPem = pem }),
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "unused" }),
             new FakeClock(Now),
