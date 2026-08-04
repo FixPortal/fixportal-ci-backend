@@ -3,7 +3,7 @@ name: mutation
 on:
   workflow_dispatch:
   schedule:
-    - cron: '45 2 * * *'
+    - cron: '45 2 * * 6'
 
 concurrency:
   group: mutation-${{ github.ref }}
@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   stryker:
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
