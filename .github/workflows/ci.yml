@@ -214,7 +214,6 @@ jobs:
           jq -n \
             --arg gitHubToken "$DASHBOARD_GH_TOKEN" \
             --arg adminKey "$CI_ADMIN_KEY" \
-            --arg ideApiKey "$CI_IDE_API_KEY" \
             --arg gitHubAppPrivateKey "$DASHBOARD_GH_APP_PRIVATE_KEY" \
             '{
               "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
@@ -222,7 +221,7 @@ jobs:
               "parameters": {
                 "gitHubToken": { "value": $gitHubToken },
                 "adminKey": { "value": $adminKey },
-                "ideApiKey": { "value": $ideApiKey },
+                "ideApiKey": { "value": env.CI_IDE_API_KEY },
                 "gitHubAppPrivateKey": { "value": $gitHubAppPrivateKey }
               }
             }' > "$params_file"
@@ -289,8 +288,10 @@ jobs:
 
           # The integration key is only written to mode-600 curl configs: never argv,
           # logs, or response output. The wrong key is derived so it cannot match.
-          printf 'header = "X-CI-IDE-Key: %s"\n' "$CI_IDE_API_KEY" > "$curl_config"
-          printf 'header = "X-CI-IDE-Key: %sx"\n' "$CI_IDE_API_KEY" > "$wrong_key_config"
+          # @json escapes curl-config quotes and backslashes without putting the key in
+          # jq's argv; stripping its outer JSON quotes leaves a valid curl string value.
+          jq -rn 'env.CI_IDE_API_KEY | @json | "header = \"X-CI-IDE-Key: \(.[1:-1])\""' > "$curl_config"
+          jq -rn '(env.CI_IDE_API_KEY + "x") | @json | "header = \"X-CI-IDE-Key: \(.[1:-1])\""' > "$wrong_key_config"
 
           # The restart deliberately rolls no revision for a secret-only change. Probe
           # the single-revision app's shared FQDN, not probe-driven ACA state or a
@@ -323,12 +324,11 @@ jobs:
             exit 1
           fi
 
-          schema_version=$(jq -r '.schemaVersion // empty' "$response_body")
-          if [ "$schema_version" != "1" ]; then
-            echo "::error::CI IDE snapshot probe returned schemaVersion $schema_version; expected 1."
+          if ! jq -e '.schemaVersion == 1' "$response_body" > /dev/null; then
+            echo "::error::CI IDE snapshot probe did not return numeric schemaVersion 1."
             exit 1
           fi
-          echo "CI IDE snapshot: HTTP $code, ETag $etag, schemaVersion $schema_version"
+          echo "CI IDE snapshot: HTTP $code, ETag $etag, schemaVersion 1"
 
           if ! conditional_code=$(curl --config "$curl_config" -sS -o /dev/null -w '%{http_code}' --max-time 15 --header "If-None-Match: $etag" "$endpoint"); then
             echo "::error::CI IDE conditional snapshot probe failed to reach the app."
