@@ -171,6 +171,7 @@ jobs:
           DASHBOARD_GH_APP_ID: ${{ vars.DASHBOARD_GH_APP_ID }}
           DASHBOARD_GH_APP_PRIVATE_KEY: ${{ secrets.DASHBOARD_GH_APP_PRIVATE_KEY }}
           CI_ADMIN_KEY: ${{ secrets.CI_ADMIN_KEY }}
+          CI_IDE_API_KEY: ${{ secrets.CI_IDE_API_KEY }}
           ACA_ENVIRONMENT_ID: ${{ secrets.ACA_ENVIRONMENT_ID }}
           PULL_IDENTITY_ID: ${{ secrets.PULL_IDENTITY_ID }}
           CUSTOM_DOMAIN_CERT_ID: ${{ secrets.CUSTOM_DOMAIN_CERT_ID }}
@@ -180,7 +181,15 @@ jobs:
           # Secret (not a Variable) for consistency with the rest of the deploy config.
           CORS_ALLOWED_ORIGINS: ${{ secrets.CORS_ALLOWED_ORIGINS }}
         run: |
+          set -euo pipefail
           image="$ACR_LOGIN_SERVER/$IMAGE_REPO:$IMAGE_TAG"
+
+          trimmed_ide_api_key="${CI_IDE_API_KEY#"${CI_IDE_API_KEY%%[![:space:]]*}"}"
+          trimmed_ide_api_key="${trimmed_ide_api_key%"${trimmed_ide_api_key##*[![:space:]]}"}"
+          if [ -z "$trimmed_ide_api_key" ] || [ "$CI_IDE_API_KEY" != "$trimmed_ide_api_key" ]; then
+            echo "::error::CI_IDE_API_KEY must be non-empty and have no leading or trailing whitespace."
+            exit 1
+          fi
 
           if [ -n "$CUSTOM_DOMAIN_NAME" ] && [ -z "$CUSTOM_DOMAIN_CERT_ID" ]; then
             echo "CUSTOM_DOMAIN_CERT_ID must be set when CUSTOM_DOMAIN_NAME is set." >&2
@@ -205,6 +214,7 @@ jobs:
           jq -n \
             --arg gitHubToken "$DASHBOARD_GH_TOKEN" \
             --arg adminKey "$CI_ADMIN_KEY" \
+            --arg ideApiKey "$CI_IDE_API_KEY" \
             --arg gitHubAppPrivateKey "$DASHBOARD_GH_APP_PRIVATE_KEY" \
             '{
               "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
@@ -212,6 +222,7 @@ jobs:
               "parameters": {
                 "gitHubToken": { "value": $gitHubToken },
                 "adminKey": { "value": $adminKey },
+                "ideApiKey": { "value": $ideApiKey },
                 "gitHubAppPrivateKey": { "value": $gitHubAppPrivateKey }
               }
             }' > "$params_file"
@@ -241,28 +252,101 @@ jobs:
             deploy_args+=(corsAllowedOrigins="$CORS_ALLOWED_ORIGINS")
           fi
 
-          fqdn=$(az deployment group create "${deploy_args[@]}" --query "properties.outputs.fqdn.value" -o tsv)
-          if [ -z "$fqdn" ]; then
-            echo "::error::FQDN output from deployment is empty; aborting health probe."
+          deployment_output=$(az deployment group create "${deploy_args[@]}" --query '{fqdn:properties.outputs.fqdn.value,appName:properties.outputs.appName.value}' -o json)
+          fqdn=$(jq -r '.fqdn // empty' <<< "$deployment_output")
+          app_name=$(jq -r '.appName // empty' <<< "$deployment_output")
+          if [ -z "$fqdn" ] || [ -z "$app_name" ]; then
+            echo "::error::Deployment did not return both FQDN and app name; aborting health probe."
             exit 1
           fi
-          echo "FQDN=$fqdn" >> "$GITHUB_ENV"
+          {
+            echo "FQDN=$fqdn"
+            echo "APP_NAME=$app_name"
+          } >> "$GITHUB_ENV"
 
-      - name: Health probe
+      - name: Restart active revision
         run: |
-          # Probe the API snapshot endpoint directly — the root path is a redirect
-          # and would pass even if the backend is down.
+          set -euo pipefail
+          active_revision=$(az containerapp revision list --name "$APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query '[?properties.active].name | [0]' -o tsv)
+          if [ -z "$active_revision" ]; then
+            echo "::error::No active Container Apps revision found; aborting health probe."
+            exit 1
+          fi
+          az containerapp revision restart --name "$APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$active_revision"
+
+      - name: CI IDE snapshot probe
+        env:
+          CI_IDE_API_KEY: ${{ secrets.CI_IDE_API_KEY }}
+        run: |
+          set -euo pipefail
+          endpoint="https://$FQDN/api/ide/v1/snapshot"
+          curl_config=$(mktemp)
+          wrong_key_config=$(mktemp)
+          response_headers=$(mktemp)
+          response_body=$(mktemp)
+          chmod 600 "$curl_config" "$wrong_key_config"
+          trap 'rm -f "$curl_config" "$wrong_key_config" "$response_headers" "$response_body"' EXIT
+
+          # The integration key is only written to mode-600 curl configs: never argv,
+          # logs, or response output. The wrong key is derived so it cannot match.
+          printf 'header = "X-CI-IDE-Key: %s"\n' "$CI_IDE_API_KEY" > "$curl_config"
+          printf 'header = "X-CI-IDE-Key: %sx"\n' "$CI_IDE_API_KEY" > "$wrong_key_config"
+
+          # The restart deliberately rolls no revision for a secret-only change. Probe
+          # the single-revision app's shared FQDN, not probe-driven ACA state or a
+          # per-revision FQDN that is not DNS-resolvable in single-revision mode.
           for attempt in 1 2 3 4 5 6 7 8; do
-            if code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 15 "https://$FQDN/api/dashboard/snapshot"); then :; else code="000"; fi
-            echo "Attempt $attempt: HTTP $code"
-            if [ "$code" = "200" ] || [ "$code" = "204" ]; then
-              echo "Dashboard is serving at https://$FQDN/"
-              exit 0
+            if code=$(curl --config "$curl_config" -sS -D "$response_headers" -o "$response_body" -w '%{http_code}' --max-time 15 "$endpoint"); then
+              if [ "$code" = "204" ] && [ "$attempt" -lt 8 ]; then
+                echo "Attempt $attempt: HTTP 204; snapshot is not ready yet."
+                sleep 15
+                continue
+              fi
+              break
             fi
+            if [ "$attempt" -eq 8 ]; then
+              echo "::error::CI IDE snapshot probe exhausted transport retries."
+              exit 1
+            fi
+            echo "Attempt $attempt: transport failure; retrying."
             sleep 15
           done
-          echo "::error::Dashboard did not return a healthy status after deploy"
-          exit 1
+
+          if [ "$code" != "200" ]; then
+            echo "::error::CI IDE snapshot probe returned HTTP $code; expected 200."
+            exit 1
+          fi
+
+          etag=$(sed -n 's/^[Ee][Tt][Aa][Gg]:[[:space:]]*//p' "$response_headers" | tr -d '\r' | head -n 1)
+          if [[ ! "$etag" =~ ^W/\"sha256:[0-9a-f]{64}\"$ ]]; then
+            echo "::error::CI IDE snapshot probe returned an invalid ETag."
+            exit 1
+          fi
+
+          schema_version=$(jq -r '.schemaVersion // empty' "$response_body")
+          if [ "$schema_version" != "1" ]; then
+            echo "::error::CI IDE snapshot probe returned schemaVersion $schema_version; expected 1."
+            exit 1
+          fi
+          echo "CI IDE snapshot: HTTP $code, ETag $etag, schemaVersion $schema_version"
+
+          if ! conditional_code=$(curl --config "$curl_config" -sS -o /dev/null -w '%{http_code}' --max-time 15 --header "If-None-Match: $etag" "$endpoint"); then
+            echo "::error::CI IDE conditional snapshot probe failed to reach the app."
+            exit 1
+          fi
+          if [ "$conditional_code" != "304" ]; then
+            echo "::error::CI IDE conditional snapshot probe returned HTTP $conditional_code; expected 304."
+            exit 1
+          fi
+
+          if ! wrong_key_code=$(curl --config "$wrong_key_config" -sS -o /dev/null -w '%{http_code}' --max-time 15 --header "If-None-Match: $etag" "$endpoint"); then
+            echo "::error::CI IDE wrong-key snapshot probe failed to reach the app."
+            exit 1
+          fi
+          if [ "$wrong_key_code" != "401" ]; then
+            echo "::error::CI IDE wrong-key snapshot probe returned HTTP $wrong_key_code; expected 401."
+            exit 1
+          fi
 
   gate-coverage:
     name: Gate coverage
