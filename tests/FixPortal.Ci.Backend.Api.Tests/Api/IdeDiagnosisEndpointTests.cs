@@ -240,6 +240,28 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         body.Length.Should().BeLessThan(128);
     }
 
+    [Theory]
+    [InlineData("oversized central offset")]
+    [InlineData("local encryption flag")]
+    public async Task Malformed_zip_headers_return_the_fixed_rejection(string corruption)
+    {
+        var archive = Zip("hello");
+        CorruptHeader(archive, corruption);
+        var handler = new ProviderHandler(request =>
+            request.RequestUri!.Host == "api.github.com"
+                ? Redirect("https://storage.example.test/run.zip")
+                : new HttpResponseMessage(HttpStatusCode.OK) { Content = new ByteArrayContent(archive) }
+        );
+        var client = CreateClient(Snapshot(), handler);
+
+        var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        (await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
+            .Should()
+            .Be("{\"error\":\"Diagnosis provider response was rejected.\"}");
+    }
+
     private HttpClient CreateClient(DashboardSnapshot snapshot, ProviderHandler handler) =>
         CreateClient(SeedState(snapshot), handler);
 
@@ -362,6 +384,32 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
             entry.Write(Encoding.UTF8.GetBytes(text));
         }
         return stream.ToArray();
+    }
+
+    private static void CorruptHeader(byte[] archive, string corruption)
+    {
+        var signature = corruption == "oversized central offset" ? 0x06054b50u : 0x04034b50u;
+        var offset = FindSignature(archive, signature);
+        if (corruption == "oversized central offset")
+        {
+            BitConverter.GetBytes(uint.MaxValue).CopyTo(archive, offset + 16);
+            return;
+        }
+
+        archive[offset + 6] |= 1;
+    }
+
+    private static int FindSignature(byte[] bytes, uint signature)
+    {
+        var expected = BitConverter.GetBytes(signature);
+        for (var index = 0; index <= bytes.Length - expected.Length; index++)
+        {
+            if (bytes.AsSpan(index, expected.Length).SequenceEqual(expected))
+            {
+                return index;
+            }
+        }
+        throw new InvalidOperationException("ZIP signature not found.");
     }
 
     private sealed class ProviderHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler

@@ -199,17 +199,14 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
         {
             throw new InvalidDataException("Invalid diagnosis archive.");
         }
-        var offset = checked((int)BitConverter.ToUInt32(bytes[(end + 16)..]));
+        var offset = ReadOffset(bytes, end + 16);
         for (var entry = 0; entry < count; entry++)
         {
             if (offset > bytes.Length - 46 || BitConverter.ToUInt32(bytes[offset..]) != centralSignature)
             {
                 throw new InvalidDataException("Invalid diagnosis archive.");
             }
-            if ((BitConverter.ToUInt16(bytes[(offset + 8)..]) & 1) != 0)
-            {
-                throw new InvalidDataException("Encrypted diagnosis entries are unsupported.");
-            }
+            RejectEncryptedEntry(bytes, offset);
             offset = checked(
                 offset
                 + 46
@@ -218,6 +215,33 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
                 + BitConverter.ToUInt16(bytes[(offset + 32)..])
             );
         }
+    }
+
+    private static void RejectEncryptedEntry(ReadOnlySpan<byte> bytes, int centralOffset)
+    {
+        const uint localSignature = 0x04034b50;
+        var localOffset = ReadOffset(bytes, centralOffset + 42);
+        if (localOffset > bytes.Length - 30 || BitConverter.ToUInt32(bytes[localOffset..]) != localSignature)
+        {
+            throw new InvalidDataException("Invalid diagnosis archive.");
+        }
+        if (
+            (BitConverter.ToUInt16(bytes[(centralOffset + 8)..]) & 1) != 0
+            || (BitConverter.ToUInt16(bytes[(localOffset + 6)..]) & 1) != 0
+        )
+        {
+            throw new InvalidDataException("Encrypted diagnosis entries are unsupported.");
+        }
+    }
+
+    private static int ReadOffset(ReadOnlySpan<byte> bytes, int position)
+    {
+        var value = BitConverter.ToUInt32(bytes[position..]);
+        if (value > int.MaxValue)
+        {
+            throw new InvalidDataException("Invalid diagnosis archive.");
+        }
+        return (int)value;
     }
 
     private static void AppendUtf8(IncrementalHash hash, string text)
