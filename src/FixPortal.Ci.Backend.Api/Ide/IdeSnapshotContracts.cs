@@ -25,3 +25,16 @@ public sealed record IdeRun(
     string Url,
     Instant UpdatedAt
 );
+
+public sealed record IdeRunDiagnosis(
+    int SchemaVersion,
+    string Repository,
+    long RunId,
+    int Attempt,
+    string HeadSha,
+    string TextSha256,
+    bool Truncated,
+    string Excerpt
+);
+
+public sealed record IdeDiagnosisError(string Error);

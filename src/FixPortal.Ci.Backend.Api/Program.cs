@@ -5,9 +5,9 @@ using FixPortal.Ci.Backend.Api.Dashboard.Endpoints;
 using FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
+using FixPortal.Ci.Backend.Api.Ide;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using FixPortal.Ci.Backend.Api.Integrations.Lizard;
-using FixPortal.Ci.Backend.Api.Ide;
 using Microsoft.Extensions.Options;
 using NodaTime;
 using NodaTime.Serialization.SystemTextJson;
@@ -140,6 +140,9 @@ builder
             PooledConnectionLifetime = TimeSpan.FromMinutes(2),
         }
     );
+builder
+    .Services.AddHttpClient<RunDiagnosisReader>()
+    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
 builder.Services.AddSingleton<DashboardSnapshotState>();
 builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
 {

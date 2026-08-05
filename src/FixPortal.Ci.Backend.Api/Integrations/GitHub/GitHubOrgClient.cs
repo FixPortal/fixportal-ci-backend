@@ -1279,6 +1279,30 @@ public sealed class GitHubOrgClient(
 
     public static string FileName(string path) => Path.GetFileName(path);
 
+    public async Task<HttpResponseMessage> DownloadRunLogsAsync(
+        HttpClient downloadClient,
+        string repo,
+        long runId,
+        CancellationToken ct
+    )
+    {
+        var path = $"repos/{_gitHub.Owner}/{repo}/actions/runs/{runId}/logs";
+        using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(httpClient.BaseAddress!, path));
+        await AddStandardHeadersAsync(request, ct);
+
+        var response = await downloadClient.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        try
+        {
+            GuardResponse(response, path, affectsAuthState: false);
+            return response;
+        }
+        catch
+        {
+            response.Dispose();
+            throw;
+        }
+    }
+
     // affectsAuthState gates whether this request drives the global auth-error
     // health signal. Primary endpoints (repos/workflows/runs) set it on a 401/403
     // so a worker-path failure between refresh cycles still surfaces on /api/health.
