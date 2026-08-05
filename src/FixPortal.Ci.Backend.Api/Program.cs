@@ -7,6 +7,7 @@ using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using FixPortal.Ci.Backend.Api.Integrations.Lizard;
+using FixPortal.Ci.Backend.Api.Ide;
 using Microsoft.Extensions.Options;
 using NodaTime;
 using NodaTime.Serialization.SystemTextJson;
@@ -85,6 +86,14 @@ builder
     // short is almost certainly a truncated/typo'd secret — reject it at startup
     // rather than shipping a guessable admin key.
     .Validate(o => o.HasValidAdminKeyLength(), "Admin:AdminKey, when set, must be at least 16 characters.")
+    .ValidateOnStart();
+builder
+    .Services.AddOptions<IdeIntegrationOptions>()
+    .Bind(builder.Configuration.GetSection("IdeIntegration"))
+    .Validate(
+        options => options.IsValid(builder.Configuration["Admin:AdminKey"]),
+        "IdeIntegration:ApiKey, when set, must be unpadded, resolved, at least 32 characters, and distinct from Admin:AdminKey."
+    )
     .ValidateOnStart();
 
 // RefreshSeconds reaches PeriodicTimer on the enrichment worker, and zero throws
@@ -236,6 +245,11 @@ builder.Services.AddSingleton<IHostedService>(sp => new JobLaneEnrichmentWorker(
 
 var app = builder.Build();
 
+if (string.IsNullOrEmpty(app.Services.GetRequiredService<IOptions<IdeIntegrationOptions>>().Value.ApiKey))
+{
+    app.Logger.LogWarning("IdeIntegration:ApiKey is not configured; /api/ide/v1/* will return 401.");
+}
+
 var dashboardOptions = app.Services.GetRequiredService<IOptions<DashboardOptions>>().Value;
 var registeredKeys = new HashSet<string>(["deploys", "packages"], StringComparer.OrdinalIgnoreCase);
 
@@ -277,6 +291,7 @@ if (app.Environment.IsDevelopment())
 app.UseCors("FixPortalSpa");
 
 app.MapDashboardEndpoints();
+app.MapIdeEndpoints();
 
 // Unmatched API routes return 404. Non-API routes redirect permanently to the
 // canonical UI location — the CI board is now served by fixportal-simulator-frontend.
