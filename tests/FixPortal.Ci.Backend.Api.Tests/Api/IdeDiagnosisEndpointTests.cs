@@ -18,39 +18,49 @@ using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Api;
 
-public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
+    : IClassFixture<WebApplicationFactory<Program>>,
+        IDisposable
 {
     private const string IdeKey = "ide-integration-key-012345678901234";
     private const string Route = "/api/ide/v1/repositories/alpha/runs/42/diagnosis";
+    private readonly List<HttpClient> _clients = [];
+    private readonly List<WebApplicationFactory<Program>> _factories = [];
+    private readonly List<ProviderHandler> _handlers = [];
+
+    public void Dispose()
+    {
+        _clients.ForEach(client => client.Dispose());
+        _factories.ForEach(configuredFactory => configuredFactory.Dispose());
+        _handlers.ForEach(handler => handler.Dispose());
+    }
 
     [Fact]
     public async Task Authentication_precedes_reader_resolution_and_provider_use()
     {
         var resolutions = 0;
-        var handler = new ProviderHandler(_ => throw new InvalidOperationException("provider was used"));
         var state = SeedState(Snapshot());
-        var client = factory
-            .WithWebHostBuilder(builder =>
+        var configuredFactory = factory.WithWebHostBuilder(builder =>
+        {
+            Configure(builder, state);
+            _ = builder.ConfigureServices(services =>
             {
-                Configure(builder, state);
-                _ = builder.ConfigureServices(services =>
+                _ = services.RemoveAll<RunDiagnosisReader>();
+                _ = services.AddSingleton<RunDiagnosisReader>(_ =>
                 {
-                    _ = services.RemoveAll<RunDiagnosisReader>();
-                    _ = services.AddSingleton<RunDiagnosisReader>(_ =>
-                    {
-                        resolutions++;
-                        throw new InvalidOperationException("reader was resolved");
-                    });
+                    resolutions++;
+                    throw new InvalidOperationException("reader was resolved");
                 });
-            })
-            .CreateClient();
+            });
+        });
+        _factories.Add(configuredFactory);
+        var client = configuredFactory.CreateClient();
+        _clients.Add(client);
 
-        var response = await client.GetAsync(Route, TestContext.Current.CancellationToken);
+        using var response = await client.GetAsync(Route, TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         resolutions.Should().Be(0);
-        handler.Requests.Should().BeEmpty();
     }
 
     [Theory]
@@ -61,7 +71,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         var handler = new ProviderHandler(_ => throw new InvalidOperationException("provider was used"));
         var client = CreateClient(Snapshot(), handler);
 
-        var response = await client.SendAsync(
+        using var response = await client.SendAsync(
             Request($"/api/ide/v1/repositories/{repository}/runs/{runId}/diagnosis"),
             TestContext.Current.CancellationToken
         );
@@ -73,6 +83,26 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         handler.Requests.Should().BeEmpty();
     }
 
+    [Fact]
+    public async Task Diagnosis_responses_are_never_cached_and_vary_by_IDE_key()
+    {
+        var handler = SuccessfulProvider("hello");
+        var client = CreateClient(Snapshot(), handler);
+
+        using var ok = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        using var unavailable = await client.SendAsync(
+            Request("/api/ide/v1/repositories/missing/runs/42/diagnosis"),
+            TestContext.Current.CancellationToken
+        );
+        using var unauthorized = await client.GetAsync(Route, TestContext.Current.CancellationToken);
+
+        foreach (var response in new[] { ok, unavailable, unauthorized })
+        {
+            response.Headers.CacheControl!.NoStore.Should().BeTrue();
+            response.Headers.Vary.Should().ContainSingle().Which.Should().Be("X-CI-IDE-Key");
+        }
+    }
+
     [Theory]
     [InlineData("in_progress", null)]
     [InlineData("completed", "success")]
@@ -81,7 +111,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         var handler = new ProviderHandler(_ => throw new InvalidOperationException("provider was used"));
         var client = CreateClient(Snapshot(FailedRun() with { Status = status, Conclusion = conclusion }), handler);
 
-        var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
         handler.Requests.Should().BeEmpty();
@@ -107,7 +137,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         var handler = new ProviderHandler(_ => throw new InvalidOperationException("provider was used"));
         var client = CreateClient(Snapshot(run), handler);
 
-        var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
         handler.Requests.Should().BeEmpty();
@@ -119,7 +149,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         var handler = SuccessfulProvider("hello");
         var client = CreateClient(Snapshot(), handler);
 
-        var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
         var actual = await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
         var expected = await File.ReadAllBytesAsync(
             Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../Fixtures/ci-ide-diagnosis-v1.json")),
@@ -136,7 +166,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         var handler = new ProviderHandler(_ => throw new TaskCanceledException("secret provider detail"));
         var client = CreateClient(Snapshot(), handler);
 
-        var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.GatewayTimeout);
         (await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
@@ -150,7 +180,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         var handler = SuccessfulProvider("hello");
         var client = CreateClient(Snapshot(), handler);
 
-        var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         handler.Requests.Should().HaveCount(2);
@@ -175,7 +205,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         var handler = new ProviderHandler(_ => Redirect(location));
         var client = CreateClient(Snapshot(), handler);
 
-        var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
         handler.Requests.Should().ContainSingle();
@@ -191,7 +221,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         );
         var client = CreateClient(Snapshot(), handler);
 
-        var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
         handler.Requests.Should().HaveCount(2);
@@ -207,7 +237,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         var handler = new ProviderHandler(_ => new HttpResponseMessage(status));
         var client = CreateClient(state, handler);
 
-        var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.NotFound);
         state.LastAuthError.Should().Be("existing auth state");
@@ -228,7 +258,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         );
         var client = CreateClient(Snapshot(run, secret), handler);
 
-        var response = await client.SendAsync(
+        using var response = await client.SendAsync(
             Request($"/api/ide/v1/repositories/{secret}/runs/42/diagnosis"),
             TestContext.Current.CancellationToken
         );
@@ -254,7 +284,7 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
         );
         var client = CreateClient(Snapshot(), handler);
 
-        var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
 
         response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
         (await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
@@ -265,33 +295,39 @@ public class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> factory)
     private HttpClient CreateClient(DashboardSnapshot snapshot, ProviderHandler handler) =>
         CreateClient(SeedState(snapshot), handler);
 
-    private HttpClient CreateClient(DashboardSnapshotState state, ProviderHandler handler) =>
-        factory
-            .WithWebHostBuilder(builder =>
+    private HttpClient CreateClient(DashboardSnapshotState state, ProviderHandler handler)
+    {
+        _handlers.Add(handler);
+        var configuredFactory = factory.WithWebHostBuilder(builder =>
+        {
+            Configure(builder, state);
+            _ = builder.ConfigureServices(services =>
             {
-                Configure(builder, state);
-                _ = builder.ConfigureServices(services =>
+                _ = services.RemoveAll<GitHubOrgClient>();
+                _ = services.RemoveAll<RunDiagnosisReader>();
+                var githubHttp = new HttpClient(handler, disposeHandler: false)
                 {
-                    _ = services.RemoveAll<GitHubOrgClient>();
-                    _ = services.RemoveAll<RunDiagnosisReader>();
-                    var githubHttp = new HttpClient(handler, disposeHandler: false)
-                    {
-                        BaseAddress = new Uri("https://api.github.com/"),
-                    };
-                    var github = new GitHubOrgClient(
-                        githubHttp,
-                        Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "test-token" }),
-                        Options.Create(new DashboardOptions { SnapshotPath = "snapshot.json", RefreshSeconds = 60 }),
-                        new GitHubETagStore(),
-                        state
-                    );
-                    _ = services.AddSingleton(github);
-                    _ = services.AddSingleton(
-                        new RunDiagnosisReader(new HttpClient(handler, disposeHandler: false), github)
-                    );
-                });
-            })
-            .CreateClient();
+                    BaseAddress = new Uri("https://api.github.com/"),
+                };
+                _clients.Add(githubHttp);
+                var github = new GitHubOrgClient(
+                    githubHttp,
+                    Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "test-token" }),
+                    Options.Create(new DashboardOptions { SnapshotPath = "snapshot.json", RefreshSeconds = 60 }),
+                    new GitHubETagStore(),
+                    state
+                );
+                _ = services.AddSingleton(github);
+                var readerHttp = new HttpClient(handler, disposeHandler: false);
+                _clients.Add(readerHttp);
+                _ = services.AddSingleton(new RunDiagnosisReader(readerHttp, github));
+            });
+        });
+        _factories.Add(configuredFactory);
+        var client = configuredFactory.CreateClient();
+        _clients.Add(client);
+        return client;
+    }
 
     private static void Configure(IWebHostBuilder builder, DashboardSnapshotState state)
     {
