@@ -217,6 +217,10 @@ masked in the public Actions logs), so the template is reusable as-is. One-time
 bootstrap (OIDC, secrets), the full secret/variable list, and the custom-domain
 dance are all in **[operator-handoff.md](operator-handoff.md#deploying-to-azure)**.
 
+The deploy also requires the `CI_IDE_API_KEY` repository secret, with no leading
+or trailing whitespace. It becomes the `ci-ide-api-key` Container Apps secret and
+backs `IdeIntegration__ApiKey` for the authenticated `/api/ide/v1` API.
+
 To host elsewhere, the `Dockerfile` is a standard multi-stage build (non-root,
 port 8080) that runs on any container platform — only the GitHub token and owner
 are required.

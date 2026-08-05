@@ -49,6 +49,10 @@ param gitHubAppPrivateKey string = ''
 @secure()
 param adminKey string
 
+@description('Shared key for the authenticated CI IDE integration API.')
+@secure()
+param ideApiKey string
+
 @description('Background refresh cadence in seconds. ETag conditional GETs keep a tight cadence within the GitHub rate budget (304s are not billed).')
 param refreshSeconds int = 30
 
@@ -113,6 +117,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
           name: 'admin-key'
           value: adminKey
         }
+        {
+          name: 'ci-ide-api-key'
+          value: ideApiKey
+        }
       ],
       // Only declared when supplied: an empty secret value is rejected by Container Apps,
       // so the App credentials must be absent rather than blank when unconfigured.
@@ -147,6 +155,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'Admin__AdminKey'
               secretRef: 'admin-key'
+            }
+            {
+              name: 'IdeIntegration__ApiKey'
+              secretRef: 'ci-ide-api-key'
             }
             {
               name: 'Dashboard__RefreshSeconds'
@@ -234,3 +246,4 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
 }
 
 output fqdn string = app.properties.configuration.ingress.fqdn
+output appName string = app.name
