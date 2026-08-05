@@ -25,12 +25,18 @@ public class DashboardRefreshServiceRefreshAsyncTests
     {
         public bool RequestedConfiguredHistoryBound { get; private set; }
 
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
         {
             var path = request.RequestUri!.AbsolutePath;
             if (path.EndsWith("/runs", StringComparison.Ordinal))
             {
-                RequestedConfiguredHistoryBound = request.RequestUri.Query.Contains("per_page=2", StringComparison.Ordinal);
+                RequestedConfiguredHistoryBound = request.RequestUri.Query.Contains(
+                    "per_page=2",
+                    StringComparison.Ordinal
+                );
             }
             var body = path switch
             {
@@ -49,6 +55,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
         private static HttpResponseMessage JsonOk(string json) =>
             new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
     }
+
     // Tracks the maximum number of repos concurrently past the semaphore gate (i.e.
     // mid per-repo HTTP call) at any point during the refresh.
     private sealed class ConcurrencyProbeHandler : HttpMessageHandler
@@ -339,22 +346,46 @@ public class DashboardRefreshServiceRefreshAsyncTests
     {
         var state = new DashboardSnapshotState();
         using var handler = new RunHistoryHandler();
-        using var http = new HttpClient(handler, disposeHandler: false) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler, disposeHandler: false)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
-        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60, RunHistoryPageSize = 2 });
+        var dashboardOptions = Options.Create(
+            new DashboardOptions
+            {
+                SnapshotPath = "s.json",
+                RefreshSeconds = 60,
+                RunHistoryPageSize = 2,
+            }
+        );
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
         var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
         var sut = new DashboardRefreshService(
-            client, new GitHubInventoryCache(client, clock, dashboardOptions), Substitute.For<IDashboardSnapshotStore>(), state,
-            new PerRepoCache<RepoMetrics>(), new PerRepoCache<IReadOnlyList<JobSignal>>(), new PerRepoCache<IReadOnlyList<JobSignal>>(),
-            new PerRepoCache<MergedPullRequest>(), new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
-            new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(), Options.Create(new ReviewSignalsOptions()), gitHubOptions, clock,
+            client,
+            new GitHubInventoryCache(client, clock, dashboardOptions),
+            Substitute.For<IDashboardSnapshotStore>(),
+            state,
+            new PerRepoCache<RepoMetrics>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<MergedPullRequest>(),
+            new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
+            new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(),
+            Options.Create(new ReviewSignalsOptions()),
+            gitHubOptions,
+            clock,
             NullLogger<DashboardRefreshService>.Instance
         );
 
         await sut.RefreshAsync(TestContext.Current.CancellationToken);
 
-        var workflow = state.Current!.Repositories.Should().ContainSingle().Which.Workflows.Should().ContainSingle().Subject;
+        var workflow = state
+            .Current!.Repositories.Should()
+            .ContainSingle()
+            .Which.Workflows.Should()
+            .ContainSingle()
+            .Subject;
         _ = workflow.LastRun!.RunNumber.Should().Be(30);
         _ = handler.RequestedConfiguredHistoryBound.Should().BeTrue();
         _ = workflow.RecentRuns.Should().HaveCount(2);

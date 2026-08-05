@@ -155,7 +155,9 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
                                     ".github/workflows/build.yml",
                                     2,
                                     1,
-                                    includeInvalidRun ? "UPPERCASE-SHA-IS-NOT-VALID" : "cccccccccccccccccccccccccccccccccccccccc"
+                                    includeInvalidRun
+                                        ? "UPPERCASE-SHA-IS-NOT-VALID"
+                                        : "cccccccccccccccccccccccccccccccccccccccc"
                                 ),
                             ]
                         ),
@@ -175,15 +177,18 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
         var snapshot = Snapshot();
         return snapshot with
         {
-            Repositories = snapshot.Repositories
-                .Select(repository =>
+            Repositories = snapshot
+                .Repositories.Select(repository =>
                     repository.Name == "Alpha"
                         ? repository with
                         {
-                            Workflows = repository.Workflows
-                                .Select(workflow =>
+                            Workflows = repository
+                                .Workflows.Select(workflow =>
                                     workflow.File == ".github/workflows/build.yml"
-                                        ? workflow with { RecentRuns = runs }
+                                        ? workflow with
+                                        {
+                                            RecentRuns = runs,
+                                        }
                                         : workflow
                                 )
                                 .ToList(),
@@ -289,8 +294,13 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
         );
 
         var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
-        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
-        var runs = json.RootElement.GetProperty("repositories")[0].GetProperty("workflows")[0].GetProperty("recentRuns");
+        using var json = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        var runs = json
+            .RootElement.GetProperty("repositories")[0]
+            .GetProperty("workflows")[0]
+            .GetProperty("recentRuns");
 
         _ = runs.GetArrayLength().Should().Be(2);
         _ = runs.EnumerateArray().Select(run => run.GetProperty("runId").GetInt64()).Should().Equal(3, 2);
@@ -320,16 +330,17 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
         var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
         var actual = await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
         var expected = await File.ReadAllBytesAsync(
-            Path.GetFullPath(
-                Path.Combine(AppContext.BaseDirectory, "../../../Fixtures/ci-ide-snapshot-v1.json")
-            ),
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../Fixtures/ci-ide-snapshot-v1.json")),
             TestContext.Current.CancellationToken
         );
         using var json = JsonDocument.Parse(actual);
 
         _ = response.StatusCode.Should().Be(HttpStatusCode.OK);
         _ = json.RootElement.GetProperty("schemaVersion").GetInt32().Should().Be(1);
-        _ = response.Headers.ETag!.ToString().Should().Be($"W/\"{json.RootElement.GetProperty("snapshotId").GetString()}\"");
+        _ = response
+            .Headers.ETag!.ToString()
+            .Should()
+            .Be($"W/\"{json.RootElement.GetProperty("snapshotId").GetString()}\"");
         _ = actual.Should().Equal(expected);
     }
 

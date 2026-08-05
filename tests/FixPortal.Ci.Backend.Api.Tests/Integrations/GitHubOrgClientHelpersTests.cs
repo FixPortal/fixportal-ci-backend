@@ -87,9 +87,11 @@ public class GitHubOrgClientHelpersTests
     [Fact]
     public async Task GetRecentRunsAsync_maps_exact_GitHub_run_identity()
     {
-        using var http = new HttpClient(new StaticJsonHandler(
-            """{"workflow_runs":[{"id":9876543210,"run_attempt":3,"head_sha":"0123456789abcdef0123456789abcdef01234567","status":"completed","conclusion":"success","html_url":"https://github.com/acme/repo/actions/runs/9876543210","display_title":"Build","run_number":7,"head_branch":"main","event":"push","updated_at":"2026-01-01T00:00:00Z"}]}"""
-        ));
+        using var http = new HttpClient(
+            new StaticJsonHandler(
+                """{"workflow_runs":[{"id":9876543210,"run_attempt":3,"head_sha":"0123456789abcdef0123456789abcdef01234567","status":"completed","conclusion":"success","html_url":"https://github.com/acme/repo/actions/runs/9876543210","display_title":"Build","run_number":7,"head_branch":"main","event":"push","updated_at":"2026-01-01T00:00:00Z"}]}"""
+            )
+        );
         http.BaseAddress = new Uri("https://api.github.com/");
         var client = new GitHubOrgClient(
             http,
@@ -98,11 +100,16 @@ public class GitHubOrgClientHelpersTests
             new GitHubETagStore()
         );
 
-        var run = (await client.GetRecentRunsAsync(
-            "repo",
-            new GitHubWorkflowDto(3, "Build", ".github/workflows/ci.yml", "active"),
-            CancellationToken.None
-        )).Should().ContainSingle().Subject;
+        var run = (
+            await client.GetRecentRunsAsync(
+                "repo",
+                new GitHubWorkflowDto(3, "Build", ".github/workflows/ci.yml", "active"),
+                CancellationToken.None
+            )
+        )
+            .Should()
+            .ContainSingle()
+            .Subject;
 
         _ = run.ProviderRunId.Should().Be(9876543210);
         _ = run.RunAttempt.Should().Be(3);
@@ -111,10 +118,15 @@ public class GitHubOrgClientHelpersTests
 
     private sealed class StaticJsonHandler(string json) : HttpMessageHandler
     {
-        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
-            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            {
-                Content = new StringContent(json, Encoding.UTF8, "application/json"),
-            });
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) =>
+            Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(json, Encoding.UTF8, "application/json"),
+                }
+            );
     }
 }
