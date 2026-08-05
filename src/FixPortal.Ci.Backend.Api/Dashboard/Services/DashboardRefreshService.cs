@@ -164,7 +164,8 @@ public sealed class DashboardRefreshService(
                         wf.Name,
                         GitHubOrgClient.FileName(wf.Path),
                         GitHubOrgClient.ToSignalState(latest),
-                        latest
+                        latest,
+                        wfRuns
                     )
                 );
             }

@@ -35,7 +35,9 @@ public sealed record GitHubRunItem(
     string? HeadBranch,
     string? Event,
     Instant UpdatedAt,
-    long Id = 0
+    long Id = 0,
+    int? RunAttempt = null,
+    string? HeadSha = null
 );
 
 public sealed record GitHubRunsResponse(IReadOnlyList<GitHubRunItem>? WorkflowRuns);
@@ -639,7 +641,10 @@ public sealed class GitHubOrgClient(
             run.Event,
             run.UpdatedAt,
             repo,
-            FileName(workflow.Path)
+            FileName(workflow.Path),
+            run.Id,
+            run.RunAttempt,
+            run.HeadSha
         );
 
     private string GetRunUrl(GitHubRunItem run, string repo, GitHubWorkflowDto workflow)

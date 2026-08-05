@@ -21,6 +21,34 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 // cancellation cascade (DashboardRefreshService.cs:23, 80-139).
 public class DashboardRefreshServiceRefreshAsyncTests
 {
+    private sealed class RunHistoryHandler : HttpMessageHandler
+    {
+        public bool RequestedConfiguredHistoryBound { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/runs", StringComparison.Ordinal))
+            {
+                RequestedConfiguredHistoryBound = request.RequestUri.Query.Contains("per_page=2", StringComparison.Ordinal);
+            }
+            var body = path switch
+            {
+                _ when path.EndsWith("/repos", StringComparison.Ordinal) =>
+                    """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"}]""",
+                _ when path.EndsWith("/actions/workflows", StringComparison.Ordinal) =>
+                    """{"workflows":[{"id":1,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}""",
+                _ when path.EndsWith("/runs", StringComparison.Ordinal) =>
+                    """{"workflow_runs":[{"id":30,"status":"completed","conclusion":"success","html_url":"https://github.com/FixPortal/repo-a/actions/runs/30","display_title":"newest","run_number":30,"head_branch":"main","event":"push","updated_at":"2026-01-03T00:00:00Z"},{"id":20,"status":"completed","conclusion":"failure","html_url":"https://github.com/FixPortal/repo-a/actions/runs/20","display_title":"older","run_number":20,"head_branch":"main","event":"push","updated_at":"2026-01-02T00:00:00Z"}]}""",
+                _ when path.EndsWith("/pulls", StringComparison.Ordinal) => "[]",
+                _ => "[]",
+            };
+            return Task.FromResult(JsonOk(body));
+        }
+
+        private static HttpResponseMessage JsonOk(string json) =>
+            new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+    }
     // Tracks the maximum number of repos concurrently past the semaphore gate (i.e.
     // mid per-repo HTTP call) at any point during the refresh.
     private sealed class ConcurrencyProbeHandler : HttpMessageHandler
@@ -304,6 +332,33 @@ public class DashboardRefreshServiceRefreshAsyncTests
             .Subject;
         _ = pr.Number.Should().Be(181);
         _ = pr.ReviewSignals.Should().BeEquivalentTo(signals);
+    }
+
+    [Fact]
+    public async Task RefreshAsync_should_retain_bounded_recent_runs_and_keep_last_run_compatible()
+    {
+        var state = new DashboardSnapshotState();
+        using var handler = new RunHistoryHandler();
+        using var http = new HttpClient(handler, disposeHandler: false) { BaseAddress = new Uri("https://api.github.com/") };
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60, RunHistoryPageSize = 2 });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var sut = new DashboardRefreshService(
+            client, new GitHubInventoryCache(client, clock, dashboardOptions), Substitute.For<IDashboardSnapshotStore>(), state,
+            new PerRepoCache<RepoMetrics>(), new PerRepoCache<IReadOnlyList<JobSignal>>(), new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<MergedPullRequest>(), new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
+            new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(), Options.Create(new ReviewSignalsOptions()), gitHubOptions, clock,
+            NullLogger<DashboardRefreshService>.Instance
+        );
+
+        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+
+        var workflow = state.Current!.Repositories.Should().ContainSingle().Which.Workflows.Should().ContainSingle().Subject;
+        _ = workflow.LastRun!.RunNumber.Should().Be(30);
+        _ = handler.RequestedConfiguredHistoryBound.Should().BeTrue();
+        _ = workflow.RecentRuns.Should().HaveCount(2);
+        _ = workflow.RecentRuns!.Select(run => run.RunNumber).Should().Equal(30, 20);
     }
 
     [Fact]
