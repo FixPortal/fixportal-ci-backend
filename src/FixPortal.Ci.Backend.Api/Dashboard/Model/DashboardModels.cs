@@ -24,10 +24,19 @@ public sealed record WorkflowRun(
     string? Event,
     Instant UpdatedAt,
     string? Repository = null,
-    string? WorkflowFile = null
+    string? WorkflowFile = null,
+    long? ProviderRunId = null,
+    int? RunAttempt = null,
+    string? HeadSha = null
 );
 
-public sealed record WorkflowSnapshot(string Name, string File, SignalState State, WorkflowRun? LastRun);
+public sealed record WorkflowSnapshot(
+    string Name,
+    string File,
+    SignalState State,
+    WorkflowRun? LastRun,
+    IReadOnlyList<WorkflowRun>? RecentRuns = null
+);
 
 public enum ReviewSignalState
 {
