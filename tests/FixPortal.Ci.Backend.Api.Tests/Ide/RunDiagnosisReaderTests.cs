@@ -120,6 +120,20 @@ public class RunDiagnosisReaderTests
         _ = await act.Should().ThrowAsync<InvalidDataException>();
     }
 
+    [Theory]
+    [InlineData("oversized central offset")]
+    [InlineData("local encryption flag")]
+    public async Task Malformed_zip_headers_are_rejected_as_invalid_data(string corruption)
+    {
+        var archive = Zip(("job.txt", "content"u8.ToArray()));
+        CorruptHeader(archive, corruption);
+        using var content = Content(archive);
+
+        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+
+        _ = await act.Should().ThrowAsync<InvalidDataException>();
+    }
+
     [Fact]
     public async Task Invalid_utf8_is_replaced()
     {
@@ -187,6 +201,17 @@ public class RunDiagnosisReaderTests
         var central = FindSignature(archive, 0x02014b50);
         archive[local + 6] |= 1;
         archive[central + 8] |= 1;
+    }
+
+    private static void CorruptHeader(byte[] archive, string corruption)
+    {
+        if (corruption == "oversized central offset")
+        {
+            BitConverter.GetBytes(uint.MaxValue).CopyTo(archive, FindSignature(archive, 0x06054b50) + 16);
+            return;
+        }
+
+        archive[FindSignature(archive, 0x04034b50) + 6] |= 1;
     }
 
     private static int FindSignature(byte[] bytes, uint signature)
