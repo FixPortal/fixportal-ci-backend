@@ -63,6 +63,37 @@ public class RunDiagnosisReaderTests
     }
 
     [Fact]
+    public async Task Directory_entries_are_ignored_and_do_not_count_toward_the_file_limit()
+    {
+        var entries = Enumerable
+            .Range(0, 128)
+            .Select(index => ($"logs/{index}.txt", Array.Empty<byte>()))
+            .Prepend(("logs/", Array.Empty<byte>()))
+            .ToArray();
+        using var content = Content(Zip(entries));
+
+        var result = await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+
+        result.Excerpt.Should().BeEmpty();
+        result.Truncated.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task Directory_entries_do_not_relax_the_128_file_limit()
+    {
+        var entries = Enumerable
+            .Range(0, 129)
+            .Select(index => ($"logs/{index}.txt", Array.Empty<byte>()))
+            .Prepend(("logs/", Array.Empty<byte>()))
+            .ToArray();
+        using var content = Content(Zip(entries));
+
+        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+
+        _ = await act.Should().ThrowAsync<InvalidDataException>();
+    }
+
+    [Fact]
     public async Task Body_limit_is_enforced_from_reads_without_content_length()
     {
         using var content = new UnknownLengthContent(new byte[16 * 1024 * 1024 + 1]);
@@ -156,6 +187,22 @@ public class RunDiagnosisReaderTests
         result.Truncated.Should().BeTrue();
         Encoding.UTF8.GetByteCount(result.Excerpt).Should().Be(512 * 1024 - 1);
         result.Excerpt.Should().Be(new string('a', 512 * 1024 - 1));
+    }
+
+    [Fact]
+    public async Task Utf8_sequences_split_across_reader_chunks_preserve_text_and_hash()
+    {
+        var text = new string('a', 64 * 1024 - 1) + "💡tail";
+        using var content = Content(Zip(("job.txt", Encoding.UTF8.GetBytes(text))));
+
+        var result = await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+
+        result.Excerpt.Should().Be(text);
+        result
+            .TextSha256.Should()
+            .Be(
+                $"sha256:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()}"
+            );
     }
 
     private static StreamContent Content(byte[] bytes) => new(new MemoryStream(bytes));

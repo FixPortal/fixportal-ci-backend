@@ -26,6 +26,7 @@ public static class IdeEndpoints
                 IOptions<DashboardOptions> dashboard
             ) =>
             {
+                PreventSensitiveCaching(response);
                 if (!IsAuthorized(request, ide.Value.ApiKey))
                 {
                     return Results.Unauthorized();
@@ -75,6 +76,7 @@ public static class IdeEndpoints
 
     private static async Task<IResult> HandleDiagnosisAsync(HttpContext context, string repository, long runId)
     {
+        PreventSensitiveCaching(context.Response);
         var services = context.RequestServices;
         var ide = services.GetRequiredService<IOptions<IdeIntegrationOptions>>();
         if (!IsAuthorized(context.Request, ide.Value.ApiKey))
@@ -171,6 +173,12 @@ public static class IdeEndpoints
                 Encoding.UTF8.GetBytes(provided),
                 Encoding.UTF8.GetBytes(configured)
             );
+    }
+
+    private static void PreventSensitiveCaching(HttpResponse response)
+    {
+        response.Headers.CacheControl = "no-store";
+        response.Headers.Vary = "X-CI-IDE-Key";
     }
 
     private static bool IsCanonicalSha(string? sha) =>

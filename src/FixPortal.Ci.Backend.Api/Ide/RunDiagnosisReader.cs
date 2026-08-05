@@ -91,7 +91,8 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
         body.Position = 0;
 
         using var archive = new ZipArchive(body, ZipArchiveMode.Read, leaveOpen: false);
-        if (archive.Entries.Count is 0 or > MaximumEntries)
+        var files = archive.Entries.Where(entry => !string.IsNullOrEmpty(entry.Name)).ToList();
+        if (files.Count is 0 or > MaximumEntries)
         {
             throw new InvalidDataException("Invalid diagnosis archive.");
         }
@@ -102,21 +103,35 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
         long textBytes = 0;
         long expandedBytes = 0;
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var bytes = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        var chars = ArrayPool<char>.Shared.Rent(Encoding.UTF8.GetMaxCharCount(bytes.Length));
 
-        foreach (var entry in archive.Entries)
+        try
         {
-            ValidateEntryName(entry.FullName);
-
-            using var expanded = new MemoryStream();
-            await using (var input = await entry.OpenAsync(ct))
+            foreach (var entry in files)
             {
-                expandedBytes += await CopyBoundedAsync(input, expanded, MaximumExpandedBytes - expandedBytes, ct);
+                ValidateEntryName(entry.FullName);
+                var read = await ReadEntryAsync(
+                    entry,
+                    MaximumExpandedBytes - expandedBytes,
+                    hash,
+                    excerpt,
+                    excerptBytes,
+                    excerptClosed,
+                    bytes,
+                    chars,
+                    ct
+                );
+                expandedBytes += read.ExpandedBytes;
+                textBytes += read.TextBytes;
+                excerptBytes = read.ExcerptBytes;
+                excerptClosed = read.ExcerptClosed;
             }
-
-            var text = Encoding.UTF8.GetString(expanded.GetBuffer(), 0, checked((int)expanded.Length));
-            AppendUtf8(hash, text);
-            textBytes += Encoding.UTF8.GetByteCount(text);
-            AppendExcerpt(excerpt, ref excerptBytes, ref excerptClosed, text);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(bytes);
+            ArrayPool<char>.Shared.Return(chars);
         }
 
         return new(
@@ -124,6 +139,63 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
             textBytes > excerptBytes,
             excerpt.ToString()
         );
+    }
+
+    private static async Task<(
+        long ExpandedBytes,
+        long TextBytes,
+        int ExcerptBytes,
+        bool ExcerptClosed
+    )> ReadEntryAsync(
+        ZipArchiveEntry entry,
+        long remainingExpandedBytes,
+        IncrementalHash hash,
+        StringBuilder excerpt,
+        int excerptBytes,
+        bool excerptClosed,
+        byte[] bytes,
+        char[] chars,
+        CancellationToken ct
+    )
+    {
+        long expandedBytes = 0;
+        long textBytes = 0;
+        var decoder = Encoding.UTF8.GetDecoder();
+        await using var input = await entry.OpenAsync(ct);
+
+        while (true)
+        {
+            var read = await input.ReadAsync(bytes.AsMemory(0, bytes.Length), ct);
+            expandedBytes += read;
+            if (expandedBytes > remainingExpandedBytes)
+            {
+                throw new InvalidDataException("Diagnosis content exceeds its limit.");
+            }
+
+            decoder.Convert(
+                bytes.AsSpan(0, read),
+                chars,
+                flush: read == 0,
+                out var bytesUsed,
+                out var charsUsed,
+                out _
+            );
+            if (bytesUsed != read)
+            {
+                throw new InvalidDataException("Invalid diagnosis text.");
+            }
+            if (charsUsed > 0)
+            {
+                var text = new string(chars, 0, charsUsed);
+                AppendUtf8(hash, text);
+                textBytes += Encoding.UTF8.GetByteCount(text);
+                AppendExcerpt(excerpt, ref excerptBytes, ref excerptClosed, text);
+            }
+            if (read == 0)
+            {
+                return (expandedBytes, textBytes, excerptBytes, excerptClosed);
+            }
+        }
     }
 
     private static async Task<long> CopyBoundedAsync(Stream input, Stream output, long remaining, CancellationToken ct)
@@ -195,7 +267,7 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
         }
 
         var count = BitConverter.ToUInt16(bytes[(end + 10)..]);
-        if (count is 0 or > MaximumEntries)
+        if (count == 0)
         {
             throw new InvalidDataException("Invalid diagnosis archive.");
         }

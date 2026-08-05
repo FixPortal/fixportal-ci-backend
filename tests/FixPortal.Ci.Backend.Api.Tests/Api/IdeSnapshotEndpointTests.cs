@@ -14,10 +14,19 @@ using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Api;
 
-public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public sealed class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
+    : IClassFixture<WebApplicationFactory<Program>>,
+        IDisposable
 {
     private const string IdeKey = "ide-integration-key-012345678901234";
+    private readonly List<HttpClient> _clients = [];
+    private readonly List<WebApplicationFactory<Program>> _factories = [];
+
+    public void Dispose()
+    {
+        _clients.ForEach(client => client.Dispose());
+        _factories.ForEach(configuredFactory => configuredFactory.Dispose());
+    }
 
     private HttpClient CreateClient(
         DashboardSnapshot? seed,
@@ -39,30 +48,31 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
             state.Update(seed, DashboardSnapshotState.ComputePublicSnapshot(seed, seed.PublicCiTrend));
         }
 
-        var client = factory
-            .WithWebHostBuilder(builder =>
+        var configuredFactory = factory.WithWebHostBuilder(builder =>
+        {
+            _ = builder.UseSetting("GitHub:Token", "test-token");
+            if (ideKey is not null)
             {
-                _ = builder.UseSetting("GitHub:Token", "test-token");
-                if (ideKey is not null)
-                {
-                    _ = builder.UseSetting("IdeIntegration:ApiKey", ideKey);
-                }
-                if (adminKey is not null)
-                {
-                    _ = builder.UseSetting("Admin:AdminKey", adminKey);
-                }
-                if (runHistoryPageSize is not null)
-                {
-                    _ = builder.UseSetting("Dashboard:RunHistoryPageSize", runHistoryPageSize.Value.ToString());
-                }
-                _ = builder.ConfigureServices(services =>
-                {
-                    _ = services.RemoveAll<IHostedService>();
-                    _ = services.RemoveAll<DashboardSnapshotState>();
-                    _ = services.AddSingleton(state);
-                });
-            })
-            .CreateClient();
+                _ = builder.UseSetting("IdeIntegration:ApiKey", ideKey);
+            }
+            if (adminKey is not null)
+            {
+                _ = builder.UseSetting("Admin:AdminKey", adminKey);
+            }
+            if (runHistoryPageSize is not null)
+            {
+                _ = builder.UseSetting("Dashboard:RunHistoryPageSize", runHistoryPageSize.Value.ToString());
+            }
+            _ = builder.ConfigureServices(services =>
+            {
+                _ = services.RemoveAll<IHostedService>();
+                _ = services.RemoveAll<DashboardSnapshotState>();
+                _ = services.AddSingleton(state);
+            });
+        });
+        _factories.Add(configuredFactory);
+        var client = configuredFactory.CreateClient();
+        _clients.Add(client);
         return (client, state);
     }
 
@@ -221,11 +231,31 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
     {
         var client = CreateClient(Snapshot());
 
-        var missing = await client.GetAsync("/api/ide/v1/snapshot", TestContext.Current.CancellationToken);
-        var wrong = await client.SendAsync(Request("wrong-key"), TestContext.Current.CancellationToken);
+        using var missing = await client.GetAsync("/api/ide/v1/snapshot", TestContext.Current.CancellationToken);
+        using var wrong = await client.SendAsync(Request("wrong-key"), TestContext.Current.CancellationToken);
 
         _ = missing.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
         _ = wrong.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+    }
+
+    [Fact]
+    public async Task Snapshot_responses_are_never_cached_and_vary_by_IDE_key()
+    {
+        var client = CreateClient(Snapshot());
+
+        using var ok = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var unauthorized = await client.GetAsync("/api/ide/v1/snapshot", TestContext.Current.CancellationToken);
+        using var conditional = Request();
+        conditional.Headers.IfNoneMatch.Add(ok.Headers.ETag!);
+        using var notModified = await client.SendAsync(conditional, TestContext.Current.CancellationToken);
+        var emptyClient = CreateClient(seed: null);
+        using var noContent = await emptyClient.SendAsync(Request(), TestContext.Current.CancellationToken);
+
+        foreach (var response in new[] { ok, unauthorized, notModified, noContent })
+        {
+            response.Headers.CacheControl!.NoStore.Should().BeTrue();
+            response.Headers.Vary.Should().ContainSingle().Which.Should().Be("X-CI-IDE-Key");
+        }
     }
 
     [Fact]
@@ -233,7 +263,11 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
     {
         var act = () => CreateClient(Snapshot(), IdeKey, IdeKey);
 
-        _ = act.Should().Throw<Exception>();
+        _ = act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage(
+                "*IdeIntegration:ApiKey, when set, must be unpadded, resolved, at least 32 characters, and distinct from Admin:AdminKey.*"
+            );
     }
 
     [Theory]
@@ -244,7 +278,11 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
     {
         var act = () => CreateClient(Snapshot(), invalidKey);
 
-        _ = act.Should().Throw<Exception>();
+        _ = act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage(
+                "*IdeIntegration:ApiKey, when set, must be unpadded, resolved, at least 32 characters, and distinct from Admin:AdminKey.*"
+            );
     }
 
     [Fact]
@@ -252,7 +290,7 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
     {
         var client = CreateClient(Snapshot());
 
-        var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
         var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         using var json = JsonDocument.Parse(body);
 
@@ -272,7 +310,7 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
     {
         var client = CreateClient(Snapshot(includeInvalidRun: true));
 
-        var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
         var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
         using var json = JsonDocument.Parse(body);
 
@@ -293,7 +331,7 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
             runHistoryPageSize: 2
         );
 
-        var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
         using var json = JsonDocument.Parse(
             await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
         );
@@ -313,8 +351,8 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
         var firstClient = CreateClient(SnapshotWithBuildRuns(Run(2, updatedAt), Run(1, updatedAt)));
         var secondClient = CreateClient(SnapshotWithBuildRuns(Run(1, updatedAt), Run(2, updatedAt)));
 
-        var first = await firstClient.SendAsync(Request(), TestContext.Current.CancellationToken);
-        var second = await secondClient.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var first = await firstClient.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var second = await secondClient.SendAsync(Request(), TestContext.Current.CancellationToken);
         var firstBytes = await first.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
         var secondBytes = await second.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
 
@@ -327,7 +365,7 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
     {
         var client = CreateClient(Snapshot());
 
-        var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
         var actual = await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
         var expected = await File.ReadAllBytesAsync(
             Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../Fixtures/ci-ide-snapshot-v1.json")),
@@ -349,12 +387,12 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
     {
         var (client, state) = CreateClientWithState(Snapshot());
 
-        var first = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var first = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
         var firstBody = await first.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         var next = Snapshot(Instant.FromUtc(2026, 8, 5, 10, 1));
         state.Update(next, DashboardSnapshotState.ComputePublicSnapshot(next, next.PublicCiTrend));
-        var second = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var second = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
         var secondBody = await second.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
 
         _ = second.Headers.ETag.Should().Be(first.Headers.ETag);
@@ -365,11 +403,11 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
     public async Task An_authenticated_matching_etag_returns_not_modified()
     {
         var client = CreateClient(Snapshot());
-        var first = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var first = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
         using var conditional = Request();
         conditional.Headers.IfNoneMatch.Add(first.Headers.ETag!);
 
-        var response = await client.SendAsync(conditional, TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(conditional, TestContext.Current.CancellationToken);
 
         _ = response.StatusCode.Should().Be(HttpStatusCode.NotModified);
     }
@@ -378,11 +416,11 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
     public async Task A_matching_etag_never_bypasses_authentication()
     {
         var client = CreateClient(Snapshot());
-        var first = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var first = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
         using var conditional = Request("wrong-key");
         conditional.Headers.IfNoneMatch.Add(first.Headers.ETag!);
 
-        var response = await client.SendAsync(conditional, TestContext.Current.CancellationToken);
+        using var response = await client.SendAsync(conditional, TestContext.Current.CancellationToken);
 
         _ = response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
@@ -393,12 +431,22 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
         var configured = CreateClient(seed: null);
         var unconfigured = CreateClient(seed: null, ideKey: null);
 
-        var ready = await configured.SendAsync(Request(), TestContext.Current.CancellationToken);
-        var denied = await unconfigured.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var ready = await configured.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var denied = await unconfigured.SendAsync(Request(), TestContext.Current.CancellationToken);
 
         _ = ready.StatusCode.Should().Be(HttpStatusCode.NoContent);
         _ = denied.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
     }
+}
+
+[CollectionDefinition("Environment variables", DisableParallelization = true)]
+public sealed class EnvironmentVariableCollection;
+
+[Collection("Environment variables")]
+public sealed class IdeIntegrationEnvironmentVariableTests(WebApplicationFactory<Program> factory)
+    : IClassFixture<WebApplicationFactory<Program>>
+{
+    private const string IdeKey = "ide-integration-key-012345678901234";
 
     [Fact]
     public void IdeIntegration_environment_variable_path_binds_to_the_options_value()
