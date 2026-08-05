@@ -19,13 +19,18 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
 {
     private const string IdeKey = "ide-integration-key-012345678901234";
 
-    private HttpClient CreateClient(DashboardSnapshot? seed, string? ideKey = IdeKey, string? adminKey = null) =>
-        CreateClientWithState(seed, ideKey, adminKey).Client;
+    private HttpClient CreateClient(
+        DashboardSnapshot? seed,
+        string? ideKey = IdeKey,
+        string? adminKey = null,
+        int? runHistoryPageSize = null
+    ) => CreateClientWithState(seed, ideKey, adminKey, runHistoryPageSize).Client;
 
     private (HttpClient Client, DashboardSnapshotState State) CreateClientWithState(
         DashboardSnapshot? seed,
         string? ideKey = IdeKey,
-        string? adminKey = null
+        string? adminKey = null,
+        int? runHistoryPageSize = null
     )
     {
         var state = new DashboardSnapshotState();
@@ -45,6 +50,10 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
                 if (adminKey is not null)
                 {
                     _ = builder.UseSetting("Admin:AdminKey", adminKey);
+                }
+                if (runHistoryPageSize is not null)
+                {
+                    _ = builder.UseSetting("Dashboard:RunHistoryPageSize", runHistoryPageSize.Value.ToString());
                 }
                 _ = builder.ConfigureServices(services =>
                 {
@@ -161,6 +170,47 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
             null
         );
 
+    private static DashboardSnapshot SnapshotWithBuildRuns(params WorkflowRun[] runs)
+    {
+        var snapshot = Snapshot();
+        return snapshot with
+        {
+            Repositories = snapshot.Repositories
+                .Select(repository =>
+                    repository.Name == "Alpha"
+                        ? repository with
+                        {
+                            Workflows = repository.Workflows
+                                .Select(workflow =>
+                                    workflow.File == ".github/workflows/build.yml"
+                                        ? workflow with { RecentRuns = runs }
+                                        : workflow
+                                )
+                                .ToList(),
+                        }
+                        : repository
+                )
+                .ToList(),
+        };
+    }
+
+    private static WorkflowRun Run(long id, Instant updatedAt) =>
+        new(
+            "completed",
+            "success",
+            $"https://github.com/FixPortal/Alpha/actions/runs/{id}",
+            "build",
+            (int)id,
+            "main",
+            "push",
+            updatedAt,
+            "FixPortal/Alpha",
+            ".github/workflows/build.yml",
+            id,
+            1,
+            id.ToString("x40")
+        );
+
     [Fact]
     public async Task Snapshot_rejects_missing_or_wrong_key()
     {
@@ -224,6 +274,42 @@ public class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
         var workflows = json.RootElement.GetProperty("repositories")[0].GetProperty("workflows");
         _ = workflows[0].GetProperty("file").GetString().Should().Be(".github/workflows/build.yml");
         _ = workflows[0].GetProperty("recentRuns").GetArrayLength().Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Snapshot_caps_restored_history_at_the_current_configured_page_size()
+    {
+        var client = CreateClient(
+            SnapshotWithBuildRuns(
+                Run(3, Instant.FromUtc(2026, 8, 5, 9, 3)),
+                Run(2, Instant.FromUtc(2026, 8, 5, 9, 2)),
+                Run(1, Instant.FromUtc(2026, 8, 5, 9, 1))
+            ),
+            runHistoryPageSize: 2
+        );
+
+        var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        var runs = json.RootElement.GetProperty("repositories")[0].GetProperty("workflows")[0].GetProperty("recentRuns");
+
+        _ = runs.GetArrayLength().Should().Be(2);
+        _ = runs.EnumerateArray().Select(run => run.GetProperty("runId").GetInt64()).Should().Equal(3, 2);
+    }
+
+    [Fact]
+    public async Task Equivalent_tied_run_histories_have_identical_snapshot_bytes_and_etags()
+    {
+        var updatedAt = Instant.FromUtc(2026, 8, 5, 9, 3);
+        var firstClient = CreateClient(SnapshotWithBuildRuns(Run(2, updatedAt), Run(1, updatedAt)));
+        var secondClient = CreateClient(SnapshotWithBuildRuns(Run(1, updatedAt), Run(2, updatedAt)));
+
+        var first = await firstClient.SendAsync(Request(), TestContext.Current.CancellationToken);
+        var second = await secondClient.SendAsync(Request(), TestContext.Current.CancellationToken);
+        var firstBytes = await first.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
+        var secondBytes = await second.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
+
+        _ = firstBytes.Should().Equal(secondBytes);
+        _ = first.Headers.ETag.Should().Be(second.Headers.ETag);
     }
 
     [Fact]

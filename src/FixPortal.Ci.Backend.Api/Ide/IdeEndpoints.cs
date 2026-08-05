@@ -1,6 +1,7 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using Microsoft.Extensions.Options;
@@ -16,7 +17,7 @@ public static class IdeEndpoints
     {
         _ = endpoints.MapGet(
             "/api/ide/v1/snapshot",
-            (HttpRequest request, HttpResponse response, DashboardSnapshotState state, IOptions<IdeIntegrationOptions> ide) =>
+            (HttpRequest request, HttpResponse response, DashboardSnapshotState state, IOptions<IdeIntegrationOptions> ide, IOptions<DashboardOptions> dashboard) =>
             {
                 var configured = ide.Value.ApiKey;
                 var provided = request.Headers["X-CI-IDE-Key"].FirstOrDefault() ?? "";
@@ -34,7 +35,7 @@ public static class IdeEndpoints
                     return Results.NoContent();
                 }
 
-                var snapshot = Project(current);
+                var snapshot = Project(current, dashboard.Value.RunHistoryPageSize);
                 var projection = new
                 {
                     snapshot.SchemaVersion,
@@ -60,7 +61,7 @@ public static class IdeEndpoints
         return endpoints;
     }
 
-    private static IdeSnapshot Project(DashboardSnapshot snapshot) =>
+    private static IdeSnapshot Project(DashboardSnapshot snapshot, int runHistoryPageSize) =>
         new(
             1,
             "",
@@ -80,6 +81,9 @@ public static class IdeEndpoints
                                     (workflow.RecentRuns ?? [])
                                         .Where(run => IsEligible(run, workflow.File))
                                         .OrderByDescending(run => run.UpdatedAt)
+                                        .ThenByDescending(run => run.ProviderRunId)
+                                        .ThenByDescending(run => run.RunAttempt)
+                                        .Take(runHistoryPageSize)
                                         .Select(run =>
                                             new IdeRun(
                                                 run.ProviderRunId!.Value,
