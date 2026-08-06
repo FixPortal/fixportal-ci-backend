@@ -147,9 +147,7 @@ public static class IdeEndpoints
         }
         var found = repositories[0];
 
-        var matches = found
-            .Workflows.Select(workflow => (Workflow: workflow, File: CanonicalWorkflowFile(workflow.File)))
-            .Where(workflow => workflow.File is not null)
+        var matches = CanonicalWorkflows(found.Workflows)
             .SelectMany(workflow =>
                 (workflow.Workflow.RecentRuns ?? [])
                     .Where(run =>
@@ -211,14 +209,12 @@ public static class IdeEndpoints
                 .Select(repository => new IdeRepository(
                     repository.Name,
                     repository.Private,
-                    repository
-                        .Workflows.Select(workflow => (Workflow: workflow, File: CanonicalWorkflowFile(workflow.File)))
-                        .Where(workflow => workflow.File is not null)
+                    CanonicalWorkflows(repository.Workflows)
                         .OrderBy(workflow => workflow.File, StringComparer.Ordinal)
                         .Select(workflow => new IdeWorkflow(
-                            workflow.File!,
+                            workflow.File,
                             (workflow.Workflow.RecentRuns ?? [])
-                                .Where(run => IsEligible(run, workflow.File!))
+                                .Where(run => IsEligible(run, workflow.File))
                                 .OrderByDescending(run => run.UpdatedAt)
                                 .ThenByDescending(run => run.ProviderRunId)
                                 .ThenByDescending(run => run.RunAttempt)
@@ -248,6 +244,16 @@ public static class IdeEndpoints
         && run.HeadSha is { Length: 40 } sha
         && sha.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
 
+    private static IEnumerable<(WorkflowSnapshot Workflow, string File)> CanonicalWorkflows(
+        IEnumerable<WorkflowSnapshot> workflows
+    ) =>
+        workflows
+            .Select(workflow => (Workflow: workflow, File: CanonicalWorkflowFile(workflow.File)))
+            .Where(workflow => workflow.File is not null)
+            .GroupBy(workflow => workflow.File!, StringComparer.Ordinal)
+            .Where(group => group.Count() == 1)
+            .Select(group => (group.Single().Workflow, group.Key));
+
     private static string? CanonicalWorkflowFile(string? value)
     {
         if (string.IsNullOrWhiteSpace(value))
@@ -259,10 +265,12 @@ public static class IdeEndpoints
             ? value[WorkflowDirectory.Length..]
             : value;
         if (
-            file.Length == 0
+            string.IsNullOrWhiteSpace(file)
+            || file == "."
             || file.Contains('/')
             || file.Contains('\\')
             || file.Contains("..", StringComparison.Ordinal)
+            || file.Any(char.IsControl)
         )
         {
             return null;

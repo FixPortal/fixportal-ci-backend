@@ -213,6 +213,40 @@ public sealed class IdeSnapshotEndpointTests(WebApplicationFactory<Program> fact
         };
     }
 
+    private static DashboardSnapshot SnapshotWithBuildAlias(bool aliasFirst)
+    {
+        var snapshot = Snapshot();
+        return snapshot with
+        {
+            Repositories = snapshot
+                .Repositories.Select(repository =>
+                {
+                    if (repository.Name != "Alpha")
+                    {
+                        return repository;
+                    }
+
+                    var workflows = repository.Workflows.ToList();
+                    var build = workflows.Single(workflow => workflow.File == ".github/workflows/build.yml");
+                    var alias = build with
+                    {
+                        File = "build.yml",
+                        RecentRuns = build.RecentRuns!.Select(run => run with { WorkflowFile = "build.yml" }).ToList(),
+                    };
+                    if (aliasFirst)
+                    {
+                        workflows.Insert(0, alias);
+                    }
+                    else
+                    {
+                        workflows.Add(alias);
+                    }
+                    return repository with { Workflows = workflows };
+                })
+                .ToList(),
+        };
+    }
+
     private static WorkflowRun Run(long id, Instant updatedAt) =>
         new(
             "completed",
@@ -331,19 +365,24 @@ public sealed class IdeSnapshotEndpointTests(WebApplicationFactory<Program> fact
         filename.Headers.ETag.Should().Be(canonical.Headers.ETag);
     }
 
-    [Theory]
-    [InlineData("../build.yml")]
-    [InlineData("nested/build.yml")]
-    [InlineData("nested\\build.yml")]
-    [InlineData(".github/workflows/nested/build.yml")]
-    public async Task Malformed_or_nested_stored_workflow_paths_are_omitted(string workflowFile)
+    [Fact]
+    public async Task Canonical_aliases_are_omitted_as_ambiguous_with_deterministic_content_identity()
     {
-        var client = CreateClient(Snapshot(buildWorkflowFile: workflowFile));
+        var canonicalFirstClient = CreateClient(SnapshotWithBuildAlias(aliasFirst: false));
+        var filenameFirstClient = CreateClient(SnapshotWithBuildAlias(aliasFirst: true));
 
-        using var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
-        using var json = JsonDocument.Parse(
-            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        using var canonicalFirst = await canonicalFirstClient.SendAsync(
+            Request(),
+            TestContext.Current.CancellationToken
         );
+        using var filenameFirst = await filenameFirstClient.SendAsync(Request(), TestContext.Current.CancellationToken);
+        var canonicalFirstBytes = await canonicalFirst.Content.ReadAsByteArrayAsync(
+            TestContext.Current.CancellationToken
+        );
+        var filenameFirstBytes = await filenameFirst.Content.ReadAsByteArrayAsync(
+            TestContext.Current.CancellationToken
+        );
+        using var json = JsonDocument.Parse(canonicalFirstBytes);
         var workflows = json.RootElement.GetProperty("repositories")[0].GetProperty("workflows");
 
         workflows
@@ -351,6 +390,60 @@ public sealed class IdeSnapshotEndpointTests(WebApplicationFactory<Program> fact
             .Select(workflow => workflow.GetProperty("file").GetString())
             .Should()
             .Equal(".github/workflows/validate.yml");
+        canonicalFirstBytes.Should().Equal(filenameFirstBytes);
+        canonicalFirst.Headers.ETag.Should().Be(filenameFirst.Headers.ETag);
+    }
+
+    [Theory]
+    [InlineData("../build.yml")]
+    [InlineData("nested/build.yml")]
+    [InlineData("nested\\build.yml")]
+    [InlineData(".")]
+    [InlineData(" ")]
+    [InlineData("build\0.yml")]
+    [InlineData("build\u001f.yml")]
+    public async Task Invalid_basename_and_canonical_workflow_identities_are_omitted(string workflowFile)
+    {
+        foreach (var stored in new[] { workflowFile, $".github/workflows/{workflowFile}" })
+        {
+            var client = CreateClient(Snapshot(buildWorkflowFile: stored));
+
+            using var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+            using var json = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+            );
+            var workflows = json.RootElement.GetProperty("repositories")[0].GetProperty("workflows");
+
+            workflows
+                .EnumerateArray()
+                .Select(workflow => workflow.GetProperty("file").GetString())
+                .Should()
+                .Equal(".github/workflows/validate.yml");
+        }
+    }
+
+    [Theory]
+    [InlineData("Build Name.yml")]
+    [InlineData("\u00fcber.yml")]
+    [InlineData("CI;release.yml")]
+    public async Task Valid_direct_child_basenames_are_preserved(string workflowFile)
+    {
+        foreach (var stored in new[] { workflowFile, $".github/workflows/{workflowFile}" })
+        {
+            var client = CreateClient(Snapshot(buildWorkflowFile: stored));
+
+            using var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+            using var json = JsonDocument.Parse(
+                await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+            );
+            var projected = json
+                .RootElement.GetProperty("repositories")[0]
+                .GetProperty("workflows")
+                .EnumerateArray()
+                .Single(workflow => workflow.GetProperty("file").GetString() == $".github/workflows/{workflowFile}");
+
+            projected.GetProperty("recentRuns").GetArrayLength().Should().Be(1);
+        }
     }
 
     [Fact]

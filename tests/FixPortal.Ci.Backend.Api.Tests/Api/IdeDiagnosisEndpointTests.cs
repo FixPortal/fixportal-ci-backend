@@ -178,6 +178,18 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
     }
 
     [Fact]
+    public async Task Diagnosis_fails_closed_when_workflow_aliases_have_the_same_canonical_identity()
+    {
+        var handler = new ProviderHandler(_ => throw new InvalidOperationException("provider was used"));
+        var client = CreateClient(AmbiguousSnapshot(), handler);
+
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+
+        response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Provider_timeout_returns_a_fixed_gateway_timeout()
     {
         var handler = new ProviderHandler(_ => throw new TaskCanceledException("secret provider detail"));
@@ -420,6 +432,23 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
             3,
             "cccccccccccccccccccccccccccccccccccccccc"
         );
+
+    private static DashboardSnapshot AmbiguousSnapshot()
+    {
+        var snapshot = Snapshot();
+        var repository = snapshot.Repositories.Single();
+        var workflow = repository.Workflows.Single();
+        return snapshot with
+        {
+            Repositories =
+            [
+                repository with
+                {
+                    Workflows = [workflow, workflow with { File = "build.yml", RecentRuns = [] }],
+                },
+            ],
+        };
+    }
 
     private static ProviderHandler SuccessfulProvider(string text) =>
         new(request =>
