@@ -12,6 +12,8 @@ namespace FixPortal.Ci.Backend.Api.Ide;
 
 public static class IdeEndpoints
 {
+    private const string WorkflowDirectory = ".github/workflows/";
+    private const int MaximumWorkflowFileBytes = 120;
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
     public static IEndpointRouteBuilder MapIdeEndpoints(this IEndpointRouteBuilder endpoints)
@@ -146,16 +148,21 @@ public static class IdeEndpoints
         var found = repositories[0];
 
         var matches = found
-            .Workflows.SelectMany(workflow =>
-                (workflow.RecentRuns ?? [])
+            .Workflows.Select(workflow => (Workflow: workflow, File: CanonicalWorkflowFile(workflow.File)))
+            .Where(workflow => workflow.File is not null)
+            .SelectMany(workflow =>
+                (workflow.Workflow.RecentRuns ?? [])
                     .Where(run =>
                         run.ProviderRunId == runId
                         && run.RunAttempt > 0
                         && run.Status == "completed"
                         && run.Conclusion == "failure"
                         && string.Equals(run.Repository, $"{owner}/{found.Name}", StringComparison.OrdinalIgnoreCase)
-                        && !string.IsNullOrWhiteSpace(run.WorkflowFile)
-                        && string.Equals(run.WorkflowFile, workflow.File, StringComparison.Ordinal)
+                        && string.Equals(
+                            CanonicalWorkflowFile(run.WorkflowFile),
+                            workflow.File,
+                            StringComparison.Ordinal
+                        )
                         && IsCanonicalSha(run.HeadSha)
                     )
                     .Select(run => (found, run))
@@ -205,11 +212,13 @@ public static class IdeEndpoints
                     repository.Name,
                     repository.Private,
                     repository
-                        .Workflows.OrderBy(workflow => workflow.File, StringComparer.Ordinal)
+                        .Workflows.Select(workflow => (Workflow: workflow, File: CanonicalWorkflowFile(workflow.File)))
+                        .Where(workflow => workflow.File is not null)
+                        .OrderBy(workflow => workflow.File, StringComparer.Ordinal)
                         .Select(workflow => new IdeWorkflow(
-                            workflow.File,
-                            (workflow.RecentRuns ?? [])
-                                .Where(run => IsEligible(run, workflow.File))
+                            workflow.File!,
+                            (workflow.Workflow.RecentRuns ?? [])
+                                .Where(run => IsEligible(run, workflow.File!))
                                 .OrderByDescending(run => run.UpdatedAt)
                                 .ThenByDescending(run => run.ProviderRunId)
                                 .ThenByDescending(run => run.RunAttempt)
@@ -235,10 +244,33 @@ public static class IdeEndpoints
     private static bool IsEligible(WorkflowRun run, string workflowFile) =>
         run.ProviderRunId > 0
         && run.RunAttempt > 0
-        && !string.IsNullOrWhiteSpace(run.WorkflowFile)
-        && string.Equals(run.WorkflowFile, workflowFile, StringComparison.Ordinal)
+        && string.Equals(CanonicalWorkflowFile(run.WorkflowFile), workflowFile, StringComparison.Ordinal)
         && run.HeadSha is { Length: 40 } sha
         && sha.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+
+    private static string? CanonicalWorkflowFile(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            return null;
+        }
+
+        var file = value.StartsWith(WorkflowDirectory, StringComparison.Ordinal)
+            ? value[WorkflowDirectory.Length..]
+            : value;
+        if (
+            file.Length == 0
+            || file.Contains('/')
+            || file.Contains('\\')
+            || file.Contains("..", StringComparison.Ordinal)
+        )
+        {
+            return null;
+        }
+
+        var canonical = $"{WorkflowDirectory}{file}";
+        return Encoding.UTF8.GetByteCount(canonical) <= MaximumWorkflowFileBytes ? canonical : null;
+    }
 
     private static JsonSerializerOptions CreateJsonOptions()
     {

@@ -161,6 +161,23 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
     }
 
     [Fact]
+    public async Task Diagnosis_resolves_a_run_from_a_production_shaped_filename_snapshot()
+    {
+        var handler = SuccessfulProvider("hello");
+        var client = CreateClient(Snapshot(workflowFile: "build.yml"), handler);
+
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        var actual = await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
+        var expected = await File.ReadAllBytesAsync(
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../Fixtures/ci-ide-diagnosis-v1.json")),
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        actual.Should().Equal(expected);
+    }
+
+    [Fact]
     public async Task Provider_timeout_returns_a_fixed_gateway_timeout()
     {
         var handler = new ProviderHandler(_ => throw new TaskCanceledException("secret provider detail"));
@@ -352,7 +369,11 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
         return state;
     }
 
-    private static DashboardSnapshot Snapshot(WorkflowRun? run = null, string repository = "Alpha") =>
+    private static DashboardSnapshot Snapshot(
+        WorkflowRun? run = null,
+        string repository = "Alpha",
+        string workflowFile = ".github/workflows/build.yml"
+    ) =>
         new(
             Instant.FromUtc(2026, 8, 5, 10, 0),
             "FixPortal",
@@ -364,10 +385,10 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
                     [
                         new WorkflowSnapshot(
                             "Build",
-                            ".github/workflows/build.yml",
+                            workflowFile,
                             SignalState.Failure,
                             null,
-                            [run ?? FailedRun(repository)]
+                            [run ?? FailedRun(repository, workflowFile)]
                         ),
                     ],
                     [],
@@ -380,7 +401,10 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
             null
         );
 
-    private static WorkflowRun FailedRun(string repository = "Alpha") =>
+    private static WorkflowRun FailedRun(
+        string repository = "Alpha",
+        string workflowFile = ".github/workflows/build.yml"
+    ) =>
         new(
             "completed",
             "failure",
@@ -391,7 +415,7 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
             "push",
             Instant.FromUtc(2026, 8, 5, 9, 0),
             $"FixPortal/{repository}",
-            ".github/workflows/build.yml",
+            workflowFile,
             42,
             3,
             "cccccccccccccccccccccccccccccccccccccccc"

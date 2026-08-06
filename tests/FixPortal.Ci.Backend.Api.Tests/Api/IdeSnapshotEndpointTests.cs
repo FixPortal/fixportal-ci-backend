@@ -79,7 +79,11 @@ public sealed class IdeSnapshotEndpointTests(WebApplicationFactory<Program> fact
     private static HttpRequestMessage Request(string key = IdeKey) =>
         new(HttpMethod.Get, "/api/ide/v1/snapshot") { Headers = { { "X-CI-IDE-Key", key } } };
 
-    private static DashboardSnapshot Snapshot(Instant? refreshedAt = null, bool includeInvalidRun = false) =>
+    private static DashboardSnapshot Snapshot(
+        Instant? refreshedAt = null,
+        bool includeInvalidRun = false,
+        string buildWorkflowFile = ".github/workflows/build.yml"
+    ) =>
         new(
             refreshedAt ?? Instant.FromUtc(2026, 8, 5, 10, 0),
             "FixPortal",
@@ -148,7 +152,7 @@ public sealed class IdeSnapshotEndpointTests(WebApplicationFactory<Program> fact
                         ),
                         new WorkflowSnapshot(
                             "Build",
-                            ".github/workflows/build.yml",
+                            buildWorkflowFile,
                             SignalState.Failure,
                             null,
                             [
@@ -162,7 +166,7 @@ public sealed class IdeSnapshotEndpointTests(WebApplicationFactory<Program> fact
                                     "push",
                                     Instant.FromUtc(2026, 8, 5, 9, 1),
                                     "FixPortal/Alpha",
-                                    ".github/workflows/build.yml",
+                                    buildWorkflowFile,
                                     2,
                                     1,
                                     includeInvalidRun
@@ -303,6 +307,69 @@ public sealed class IdeSnapshotEndpointTests(WebApplicationFactory<Program> fact
         var workflows = repositories[0].GetProperty("workflows");
         _ = workflows[0].GetProperty("file").GetString().Should().Be(".github/workflows/build.yml");
         _ = workflows[1].GetProperty("file").GetString().Should().Be(".github/workflows/validate.yml");
+    }
+
+    [Fact]
+    public async Task Stored_workflow_filenames_project_to_the_canonical_IDE_contract_without_changing_content_identity()
+    {
+        var canonicalClient = CreateClient(Snapshot());
+        var filenameClient = CreateClient(Snapshot(buildWorkflowFile: "build.yml"));
+
+        using var canonical = await canonicalClient.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var filename = await filenameClient.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var json = JsonDocument.Parse(
+            await filename.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        var build = json
+            .RootElement.GetProperty("repositories")[0]
+            .GetProperty("workflows")
+            .EnumerateArray()
+            .Single(workflow => workflow.GetProperty("file").GetString() == ".github/workflows/build.yml");
+
+        filename.StatusCode.Should().Be(HttpStatusCode.OK);
+        build.GetProperty("recentRuns").EnumerateArray().Single().GetProperty("runId").GetInt64().Should().Be(2);
+        filename.Headers.ETag.Should().Be(canonical.Headers.ETag);
+    }
+
+    [Theory]
+    [InlineData("../build.yml")]
+    [InlineData("nested/build.yml")]
+    [InlineData("nested\\build.yml")]
+    [InlineData(".github/workflows/nested/build.yml")]
+    public async Task Malformed_or_nested_stored_workflow_paths_are_omitted(string workflowFile)
+    {
+        var client = CreateClient(Snapshot(buildWorkflowFile: workflowFile));
+
+        using var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var json = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        var workflows = json.RootElement.GetProperty("repositories")[0].GetProperty("workflows");
+
+        workflows
+            .EnumerateArray()
+            .Select(workflow => workflow.GetProperty("file").GetString())
+            .Should()
+            .Equal(".github/workflows/validate.yml");
+    }
+
+    [Fact]
+    public async Task Workflow_file_over_the_IDE_contract_UTF8_limit_is_omitted()
+    {
+        var workflowFile = new string('\u00e9', 61) + ".yml";
+        var client = CreateClient(Snapshot(buildWorkflowFile: workflowFile));
+
+        using var response = await client.SendAsync(Request(), TestContext.Current.CancellationToken);
+        using var json = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        var workflows = json.RootElement.GetProperty("repositories")[0].GetProperty("workflows");
+
+        workflows
+            .EnumerateArray()
+            .Select(workflow => workflow.GetProperty("file").GetString())
+            .Should()
+            .Equal(".github/workflows/validate.yml");
     }
 
     [Fact]
