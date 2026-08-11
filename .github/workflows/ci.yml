@@ -23,6 +23,7 @@ jobs:
   backend:
     name: Backend (.NET)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: read
@@ -54,7 +55,7 @@ jobs:
         run: dotnet build FixPortal.Ci.Backend.slnx --configuration Release --no-restore
 
       - name: Test
-        run: dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build --logger "trx;LogFilePrefix=test-results" --results-directory ./TestResults
+        run: dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build --logger "trx;LogFilePrefix=test-results" --results-directory ./TestResults --blame-hang-timeout 30s --blame-hang-dump-type none
 
       - name: Upload test results
         if: always()
