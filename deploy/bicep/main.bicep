@@ -208,40 +208,34 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ReviewSignals__Reviewers__2__PublicOnly'
               value: 'true'
             }
-            // GitHub Code Quality is a ReviewThreads reviewer, not a CodeScanning one:
-            // it publishes nothing to code-scanning/alerts (that endpoint returns CodeQL
-            // only), and instead posts review threads plus a COMMENTED review. Its
-            // GraphQL login carries no `[bot]` suffix, matching how ExcludedAuthors is
-            // documented. No RequiredLabel — unlike CodeRabbit it runs on every PR.
-            {
-              name: 'ReviewSignals__Reviewers__3__Name'
-              value: 'Code Quality'
-            }
-            {
-              name: 'ReviewSignals__Reviewers__3__BotLogin'
-              value: 'github-code-quality'
-            }
-            {
-              name: 'ReviewSignals__Reviewers__3__CommentsCountAsParticipation'
-              value: 'true'
-            }
-            {
-              name: 'ReviewSignals__Reviewers__3__PublicOnly'
-              value: 'true'
-            }
+            // NO 'Code Quality' REVIEWER, deliberately -- and it is not an oversight that
+            // this list is shorter than the pill roster used to be.
+            //
+            // It was configured as a ReviewThreads reviewer posting under a
+            // 'github-code-quality' login. Observed 2026-08-12 on this repo's own PR #85:
+            // the run named "Code Quality: PR #85" has path
+            // 'dynamic/github-code-scanning/codeql' and its only job is 'Analyze (csharp)'.
+            // Code Quality IS the CodeQL default setup, and its findings land in
+            // code-scanning/alerts under tool CodeQL -- this repo's analysis categories are
+            // /language:actions and /language:csharp, nothing else. The CodeQL reviewer
+            // above therefore already reports it, while an entry keyed on a login that
+            // never posts could only hold Pending. On a public repo that blocks the
+            // ready-to-merge verdict: the exact bug this change fixes, relocated from the
+            // private repos to the public ones.
+            //
             // Repository-scoped, not pull-request scoped: the secret-scanning alerts route
             // takes no ref filter, so an open alert shows on every open PR in that repo.
             // Deliberate -- a leaked credential is not fixed by merging somewhere else.
             {
-              name: 'ReviewSignals__Reviewers__4__Name'
+              name: 'ReviewSignals__Reviewers__3__Name'
               value: 'Secret Scanning'
             }
             {
-              name: 'ReviewSignals__Reviewers__4__Source'
+              name: 'ReviewSignals__Reviewers__3__Source'
               value: 'SecretScanning'
             }
             {
-              name: 'ReviewSignals__Reviewers__4__PublicOnly'
+              name: 'ReviewSignals__Reviewers__3__PublicOnly'
               value: 'true'
             }
           ], map(range(0, length(corsAllowedOrigins)), i => {
