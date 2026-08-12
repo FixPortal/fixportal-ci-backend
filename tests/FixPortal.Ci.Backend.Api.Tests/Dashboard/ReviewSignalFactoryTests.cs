@@ -259,6 +259,57 @@ public class ReviewSignalFactoryTests
         _ = Only(SecretScanning, Facts(), openSecretAlerts: 0).State.Should().Be(ReviewSignalState.Clean);
     }
 
+    private static readonly ReviewerOptions CodeQuality = new()
+    {
+        Name = "Code Quality",
+        BotLogin = "github-code-quality",
+        CodeScanningCheckCountsAsParticipation = true,
+    };
+
+    [Fact]
+    public void A_silent_reviewer_delivered_by_the_scan_pipeline_is_clean_once_the_scan_check_passes()
+    {
+        // Code Quality publishes findings as review threads but says NOTHING when it finds
+        // nothing, so no review, thread or comment exists on a clean pull request. The
+        // successful code-scanning check is the only evidence available that it ran.
+        _ = Only(CodeQuality, Facts(checkApps: ["github-advanced-security"]))
+            .State.Should()
+            .Be(ReviewSignalState.Clean);
+    }
+
+    [Fact]
+    public void The_scan_check_channel_does_not_fire_without_the_opt_in()
+    {
+        var withoutFlag = new ReviewerOptions { Name = "Code Quality", BotLogin = "github-code-quality" };
+
+        _ = Only(withoutFlag, Facts(checkApps: ["github-advanced-security"]))
+            .State.Should()
+            .Be(ReviewSignalState.Pending);
+    }
+
+    [Fact]
+    public void A_passing_scan_check_never_masks_an_open_code_quality_finding()
+    {
+        // The regression that matters: the check says "the scan ran", never "the scan was
+        // happy". Unresolved threads are decided first and must still win, or a green
+        // pipeline would turn every outstanding finding into a clean pill.
+        var facts = Facts(
+            unresolved: new Dictionary<string, int> { ["github-code-quality"] = 2 },
+            checkApps: ["github-advanced-security"]
+        );
+
+        var signal = Only(CodeQuality, facts);
+
+        _ = signal.State.Should().Be(ReviewSignalState.Outstanding);
+        _ = signal.Count.Should().Be(2);
+    }
+
+    [Fact]
+    public void A_reviewer_with_no_scan_check_on_this_head_stays_pending()
+    {
+        _ = Only(CodeQuality, Facts()).State.Should().Be(ReviewSignalState.Pending);
+    }
+
     [Fact]
     public void A_review_threads_reviewer_with_no_bot_login_is_pending_rather_than_falsely_clean()
     {

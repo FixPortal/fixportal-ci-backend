@@ -46,6 +46,26 @@ public sealed class ReviewerOptions
     public bool CommentsCountAsParticipation { get; init; }
 
     /// <summary>
+    /// When true, a successful code-scanning check on the head commit is itself evidence
+    /// this reviewer ran, even though it left no review, thread or comment.
+    /// </summary>
+    /// <remarks>
+    /// For GitHub Code Quality, which is delivered BY the code-scanning pipeline — its
+    /// workflow run is named "Code Quality: PR #n" but its path is
+    /// <c>dynamic/github-code-scanning/codeql</c> — while publishing its findings as
+    /// review threads rather than alerts. It says nothing at all when it finds nothing,
+    /// so every other participation channel here reads a clean pull request exactly like
+    /// a reviewer that never ran, and the pill would hold Pending on precisely the pull
+    /// requests that are ready to merge. The check is the missing evidence: it only
+    /// succeeds once the pipeline has actually completed on this head.
+    ///
+    /// Narrow on purpose. This says "the scan ran", never "the scan was happy" — the
+    /// unresolved-thread check above still decides Outstanding, and runs first, so a
+    /// green check can never mask an open finding.
+    /// </remarks>
+    public bool CodeScanningCheckCountsAsParticipation { get; init; }
+
+    /// <summary>
     /// When true, this reviewer applies to public repositories only and is omitted
     /// entirely from a private repository's signals — no pill, and nothing for the
     /// ready-to-merge verdict to wait on.

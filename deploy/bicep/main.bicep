@@ -208,34 +208,46 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ReviewSignals__Reviewers__2__PublicOnly'
               value: 'true'
             }
-            // NO 'Code Quality' REVIEWER, deliberately -- and it is not an oversight that
-            // this list is shorter than the pill roster used to be.
-            //
-            // It was configured as a ReviewThreads reviewer posting under a
-            // 'github-code-quality' login. Observed 2026-08-12 on this repo's own PR #85:
-            // the run named "Code Quality: PR #85" has path
-            // 'dynamic/github-code-scanning/codeql' and its only job is 'Analyze (csharp)'.
-            // Code Quality IS the CodeQL default setup, and its findings land in
-            // code-scanning/alerts under tool CodeQL -- this repo's analysis categories are
-            // /language:actions and /language:csharp, nothing else. The CodeQL reviewer
-            // above therefore already reports it, while an entry keyed on a login that
-            // never posts could only hold Pending. On a public repo that blocks the
-            // ready-to-merge verdict: the exact bug this change fixes, relocated from the
-            // private repos to the public ones.
-            //
+            // GitHub Code Quality is a ReviewThreads reviewer, and its two halves come from
+            // different places -- both observed on this repo's PR #85 (2026-08-12):
+            //   * Findings arrive as REVIEW THREADS under login 'github-code-quality'
+            //     (two on that PR), and NOT as alerts: code-scanning/alerts returned 0 open
+            //     at the same moment. So the CodeQL reviewer above does not cover it.
+            //   * It is nonetheless delivered BY the code-scanning pipeline -- the run named
+            //     "Code Quality: PR #85" has path dynamic/github-code-scanning/codeql -- and
+            //     it says NOTHING when it finds nothing. Hence
+            //     CodeScanningCheckCountsAsParticipation: the successful scan check is the
+            //     only available evidence it ran on a clean pull request. Without it the
+            //     pill holds Pending on exactly the PRs that are ready to merge.
+            {
+              name: 'ReviewSignals__Reviewers__3__Name'
+              value: 'Code Quality'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__3__BotLogin'
+              value: 'github-code-quality'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__3__CodeScanningCheckCountsAsParticipation'
+              value: 'true'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__3__PublicOnly'
+              value: 'true'
+            }
             // Repository-scoped, not pull-request scoped: the secret-scanning alerts route
             // takes no ref filter, so an open alert shows on every open PR in that repo.
             // Deliberate -- a leaked credential is not fixed by merging somewhere else.
             {
-              name: 'ReviewSignals__Reviewers__3__Name'
+              name: 'ReviewSignals__Reviewers__4__Name'
               value: 'Secret Scanning'
             }
             {
-              name: 'ReviewSignals__Reviewers__3__Source'
+              name: 'ReviewSignals__Reviewers__4__Source'
               value: 'SecretScanning'
             }
             {
-              name: 'ReviewSignals__Reviewers__3__PublicOnly'
+              name: 'ReviewSignals__Reviewers__4__PublicOnly'
               value: 'true'
             }
           ], map(range(0, length(corsAllowedOrigins)), i => {
