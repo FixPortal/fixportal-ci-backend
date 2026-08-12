@@ -10,6 +10,7 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 public class ReviewSignalFactoryTests
 {
     private const string PrUrl = "https://github.com/FixPortal/repo/pull/181";
+    private const string RepoUrl = "https://github.com/FixPortal/repo";
 
     private static readonly ReviewerOptions CodeRabbit = new()
     {
@@ -29,6 +30,12 @@ public class ReviewSignalFactoryTests
 
     private static readonly ReviewerOptions CodeQl = new() { Name = "CodeQL", Source = ReviewerSource.CodeScanning };
 
+    private static readonly ReviewerOptions SecretScanning = new()
+    {
+        Name = "Secret Scanning",
+        Source = ReviewerSource.SecretScanning,
+    };
+
     private static PrReviewFacts Facts(
         IEnumerable<string>? labels = null,
         IDictionary<string, int>? unresolved = null,
@@ -46,8 +53,12 @@ public class ReviewSignalFactoryTests
             new HashSet<string>(checkApps ?? [], StringComparer.OrdinalIgnoreCase)
         );
 
-    private static ReviewSignal Only(ReviewerOptions reviewer, PrReviewFacts facts, int? openAlerts = null) =>
-        ReviewSignalFactory.Build(facts, [reviewer], openAlerts, PrUrl)[0];
+    private static ReviewSignal Only(
+        ReviewerOptions reviewer,
+        PrReviewFacts facts,
+        int? openAlerts = null,
+        int? openSecretAlerts = null
+    ) => ReviewSignalFactory.Build(facts, [reviewer], openAlerts, openSecretAlerts, PrUrl, RepoUrl)[0];
 
     [Fact]
     public void Disabled_when_the_required_label_is_absent()
@@ -211,9 +222,41 @@ public class ReviewSignalFactoryTests
     [Fact]
     public void Builds_one_signal_per_configured_reviewer_in_configuration_order()
     {
-        var signals = ReviewSignalFactory.Build(Facts(), [CodeRabbit, Gitar, CodeQl], null, PrUrl);
+        var signals = ReviewSignalFactory.Build(Facts(), [CodeRabbit, Gitar, CodeQl], null, null, PrUrl, RepoUrl);
 
         _ = signals.Select(s => s.Name).Should().Equal("CodeRabbit", "Gitar", "CodeQL");
+    }
+
+    [Theory]
+    // Unreadable stays unknown: on a repository where the product is off, GitHub 404s the
+    // route and the count arrives null. Reading that as Clean would put a green pill on a
+    // repository nothing has ever scanned.
+    [InlineData(null, ReviewSignalState.Pending)]
+    [InlineData(0, ReviewSignalState.Clean)]
+    [InlineData(3, ReviewSignalState.Outstanding)]
+    public void Secret_scanning_maps_its_alert_count_to_a_state(int? openSecretAlerts, ReviewSignalState expected)
+    {
+        _ = Only(SecretScanning, Facts(), openSecretAlerts: openSecretAlerts).State.Should().Be(expected);
+    }
+
+    [Fact]
+    public void Secret_scanning_links_to_the_repository_alert_list_not_the_pull_request()
+    {
+        // Repo-scoped by nature -- the alerts route takes no ref filter -- so the link must
+        // land where the alert actually lives, not on a pull request that merely inherits it.
+        var signal = Only(SecretScanning, Facts(), openSecretAlerts: 2);
+
+        _ = signal.Count.Should().Be(2);
+        _ = signal.HtmlUrl.Should().Be($"{RepoUrl}/security/secret-scanning");
+    }
+
+    [Fact]
+    public void Secret_scanning_needs_no_per_pull_request_run_to_report_clean()
+    {
+        // Unlike code scanning, which waits for a completed check on this head: secret
+        // scanning is continuous, so the endpoint answering IS the evidence it ran. Facts
+        // carry no check apps here on purpose.
+        _ = Only(SecretScanning, Facts(), openSecretAlerts: 0).State.Should().Be(ReviewSignalState.Clean);
     }
 
     [Fact]

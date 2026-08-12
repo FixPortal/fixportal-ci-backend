@@ -169,7 +169,8 @@ Each entry in `Reviewers` is:
 | `Name` | Display label on the pill, e.g. `"CodeRabbit"`. |
 | `BotLogin` | The reviewing bot's GitHub login. Required when `Source` is `ReviewThreads`; matched against unresolved review-thread authors and PR participants. |
 | `RequiredLabel` | When set, this reviewer only applies to pull requests carrying that label — how CodeRabbit is scoped to HIGH-tier PRs only. Absent means every pull request. |
-| `Source` | `ReviewThreads` (default) reads unresolved review-thread authorship; `CodeScanning` reads open code-scanning alert counts on the PR's head ref instead (used for CodeQL) and ignores `BotLogin`. |
+| `Source` | `ReviewThreads` (default) reads unresolved review-thread authorship; `CodeScanning` reads open code-scanning alert counts on the PR's head ref instead (used for CodeQL) and ignores `BotLogin`; `SecretScanning` reads the repository's open secret-scanning alert count and likewise ignores `BotLogin`. |
+| `PublicOnly` | When `true`, the reviewer is omitted entirely on private repositories — no pill, and nothing for the ready-to-merge verdict to wait on. For GitHub's scanning products, which are paid on private repos and free on public ones. |
 
 FixPortal's worked example, set via deployment configuration:
 
@@ -181,11 +182,21 @@ FixPortal's worked example, set via deployment configuration:
   "Reviewers": [
     { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high" },
     { "Name": "Gitar", "BotLogin": "gitar-bot" },
-    { "Name": "CodeQL", "Source": "CodeScanning" },
-    { "Name": "Code Quality", "BotLogin": "github-code-quality" }
+    { "Name": "CodeQL", "Source": "CodeScanning", "PublicOnly": true },
+    { "Name": "Code Quality", "BotLogin": "github-code-quality", "PublicOnly": true },
+    { "Name": "Secret Scanning", "Source": "SecretScanning", "PublicOnly": true }
   ]
 }
 ```
+
+The last three carry `PublicOnly` because GitHub's scanning products are paid on
+private repositories and were switched off org-wide on 2026-08-04. Their
+endpoints answer 403/404 on a private repo, which this worker reads as
+`Pending` — a state such a repo can never leave, so every private pull request
+was pinned to "not ready" and the board's Ready-to-merge pill disappeared
+estate-wide. `SecretScanning` is repository-scoped rather than PR-scoped: the
+alerts route takes no ref filter, so one open alert reports on every open pull
+request in that repository.
 
 GitHub Code Quality is a `ReviewThreads` reviewer despite sounding like a scanner:
 it writes nothing to `code-scanning/alerts` — that endpoint reports CodeQL only —

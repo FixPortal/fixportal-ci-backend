@@ -154,7 +154,12 @@ public sealed class ReviewSignalEnrichmentWorker(
             return null;
         }
 
-        var reviewers = options.Value.Reviewers;
+        // Visibility decides the roster, once, here — everything downstream (which
+        // endpoints get called, which pills exist, what the ready-to-merge verdict waits
+        // on) follows from this one list. GitHub's scanning products are free on public
+        // repositories and off on private ones, so a PublicOnly reviewer on a private repo
+        // is not "pending", it is absent.
+        var reviewers = options.Value.Reviewers.Where(r => !r.PublicOnly || !repo.Private).ToList();
         try
         {
             // Discovery, on the REST budget and usually free: an unchanged repository
@@ -184,8 +189,7 @@ public sealed class ReviewSignalEnrichmentWorker(
             // Only pay for the alerts call when a configured reviewer actually reads it,
             // AND only when something is being recomputed — an unchanged sweep must cost
             // nothing at all, which is the entire point of this path.
-            var needsAlerts = toFetch.Count > 0 && reviewers.Any(r => r.Source == ReviewerSource.CodeScanning);
-            var alerts = needsAlerts ? await Client.GetOpenCodeScanningAlertCountsAsync(repo.Name, ct) : null;
+            var (alerts, secretAlerts) = await FetchScanAlertsAsync(repo.Name, reviewers, toFetch.Count > 0, ct);
 
             // Commit the watermark LAST, once everything this sweep depends on has
             // succeeded. Advancing it earlier is the subtle version of the bug this whole
@@ -215,7 +219,7 @@ public sealed class ReviewSignalEnrichmentWorker(
             }
 
             RecordObservations(repo.Name, facts.Keys, current);
-            return Merge(repo.Name, cached, current, facts, alerts, reviewers);
+            return Merge(repo.Name, cached, current, facts, alerts, secretAlerts, reviewers);
         }
         // GitHubAuthException belongs with the soft-fail transports: a PAT missing the
         // GraphQL scope must degrade to last-known-good and let cold start converge,
@@ -230,6 +234,33 @@ public sealed class ReviewSignalEnrichmentWorker(
             logger.LogWarning(ex, "Failed to fetch review signals for {Repo}; keeping last-known-good.", repo.Name);
             return null;
         }
+    }
+
+    /// <summary>
+    /// The scanning-alert counts the configured roster actually reads. Both calls are
+    /// skipped unless a reviewer of that source survived the visibility filter AND
+    /// something is being recomputed this sweep — an unchanged sweep must cost nothing,
+    /// which is the entire point of the incremental path.
+    /// </summary>
+    private async Task<(IReadOnlyDictionary<int, int>? Alerts, int? SecretAlerts)> FetchScanAlertsAsync(
+        string repo,
+        IReadOnlyList<ReviewerOptions> reviewers,
+        bool recomputing,
+        CancellationToken ct
+    )
+    {
+        if (!recomputing)
+        {
+            return (null, null);
+        }
+
+        var alerts = reviewers.Any(r => r.Source == ReviewerSource.CodeScanning)
+            ? await Client.GetOpenCodeScanningAlertCountsAsync(repo, ct)
+            : null;
+        var secretAlerts = reviewers.Any(r => r.Source == ReviewerSource.SecretScanning)
+            ? await Client.GetOpenSecretScanningAlertCountAsync(repo, ct)
+            : null;
+        return (alerts, secretAlerts);
     }
 
     /// <summary>
@@ -280,6 +311,7 @@ public sealed class ReviewSignalEnrichmentWorker(
         IReadOnlyDictionary<int, PrWatermark> stillOpen,
         IReadOnlyDictionary<int, PrReviewFacts> facts,
         IReadOnlyDictionary<int, int>? alerts,
+        int? secretAlerts,
         IReadOnlyList<ReviewerOptions> reviewers
     )
     {
@@ -304,11 +336,14 @@ public sealed class ReviewSignalEnrichmentWorker(
             // A null alerts dictionary means unreadable and must stay null per PR. A
             // present dictionary with no entry for this PR means zero open alerts.
             var openAlerts = alerts is null ? (int?)null : alerts.GetValueOrDefault(pr.Number);
+            var repoHtmlUrl = $"https://github.com/{gitHub.Value.Owner}/{repo}";
             signals[pr.Number] = ReviewSignalFactory.Build(
                 pr,
                 reviewers,
                 openAlerts,
-                $"https://github.com/{gitHub.Value.Owner}/{repo}/pull/{pr.Number}"
+                secretAlerts,
+                $"{repoHtmlUrl}/pull/{pr.Number}",
+                repoHtmlUrl
             );
         }
 

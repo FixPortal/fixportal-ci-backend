@@ -284,9 +284,23 @@ public class ReviewSignalEnrichmentWorkerCollectTests
           "head":{"sha":"sha"}}]
         """;
 
-    private sealed class RoutingHandler(string factsJson, HttpStatusCode alertsStatus, string alertsJson)
-        : HttpMessageHandler
+    private sealed class RoutingHandler(
+        string factsJson,
+        HttpStatusCode alertsStatus,
+        string alertsJson,
+        bool repoPrivate = false
+    ) : HttpMessageHandler
     {
+        // Every path the scanning products live behind, so a test can assert the
+        // visibility filter stopped the request rather than merely dropped the pill.
+        public bool ScanningEndpointCalled { get; private set; }
+
+        // The completion signal for a sweep that makes no alerts call at all: with a
+        // PublicOnly reviewer filtered out on a private repo, AlertsRequestReceived never
+        // fires, and waiting on it would fail the test for the very reason it passes.
+        public TaskCompletionSource GraphQlRequestReceived { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         // The alerts endpoint is always the LAST network call CollectAsync makes for
         // every scenario this class drives (every test configures a CodeScanning
         // reviewer, so needsAlerts is always true) — it is therefore the real
@@ -301,11 +315,19 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         {
             var path = request.RequestUri!.AbsolutePath;
             var isAlertsRequest = path.Contains("code-scanning/alerts", StringComparison.Ordinal);
+            if (isAlertsRequest || path.Contains("secret-scanning/alerts", StringComparison.Ordinal))
+            {
+                ScanningEndpointCalled = true;
+            }
+            if (path == "/graphql")
+            {
+                GraphQlRequestReceived.TrySetResult();
+            }
             var (status, body) = path switch
             {
                 _ when path.EndsWith("/repos", StringComparison.Ordinal) => (
                     HttpStatusCode.OK,
-                    $$"""[{"name":"{{RepoName}}","html_url":"https://github.com/FixPortal/{{RepoName}}","private":false,"archived":false,"default_branch":"main"}]"""
+                    $$"""[{"name":"{{RepoName}}","html_url":"https://github.com/FixPortal/{{RepoName}}","private":{{(repoPrivate ? "true" : "false")}},"archived":false,"default_branch":"main"}]"""
                 ),
                 "/graphql" => (HttpStatusCode.OK, factsJson),
                 _ when isAlertsRequest => (alertsStatus, alertsJson),
@@ -379,7 +401,8 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 
     private static async Task<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>> RunOneSweepAsync(
         RoutingHandler handler,
-        ReviewSignalsOptions options
+        ReviewSignalsOptions options,
+        bool expectAlertsCall = true
     )
     {
         using var http = new HttpClient(handler);
@@ -411,10 +434,8 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             TestContext.Current.CancellationToken
         );
         timeProvider.Advance(TimeSpan.FromSeconds(15));
-        await handler.AlertsRequestReceived.Task.WaitAsync(
-            TimeSpan.FromSeconds(30),
-            TestContext.Current.CancellationToken
-        );
+        var lastCall = expectAlertsCall ? handler.AlertsRequestReceived.Task : handler.GraphQlRequestReceived.Task;
+        await lastCall.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
         // The alerts response landing does not itself prove RunSweepAsync's
         // cache.Update has run yet — a few more continuations (JSON parsing,
@@ -491,6 +512,77 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         var signals = await RunOneSweepAsync(handler, options);
 
         _ = signals.ContainsKey(181).Should().BeFalse();
+    }
+
+    // The bug this pair exists for: GitHub's scanning products are paid on private
+    // repositories and were switched off org-wide, so their endpoints 403/404 there. That
+    // reads as Pending, Pending is not Clean or Disabled, and ReadyToMergeCalculator
+    // therefore returned false for every pull request in all 20 private repos -- the
+    // "Ready to merge" pill vanished estate-wide with no code change to explain it.
+    [Theory]
+    [InlineData(ReviewerSource.CodeScanning)]
+    [InlineData(ReviewerSource.SecretScanning)]
+    public async Task A_public_only_reviewer_is_omitted_entirely_on_a_private_repository(ReviewerSource source)
+    {
+        var handler = new RoutingHandler(
+            FactsJson("chris", includeSuccessfulCodeScanningCheck: true),
+            HttpStatusCode.OK,
+            "[]",
+            repoPrivate: true
+        );
+        var options = new ReviewSignalsOptions
+        {
+            Reviewers =
+            [
+                new ReviewerOptions
+                {
+                    Name = "Scanner",
+                    Source = source,
+                    PublicOnly = true,
+                },
+                // A second, unscoped reviewer proves the filter is selective rather than a
+                // blanket "private repos get no pills", and gives the sweep something to
+                // write so the assertion is not vacuous.
+                new ReviewerOptions
+                {
+                    Name = "Gitar",
+                    BotLogin = "gitar-app",
+                    CommentsCountAsParticipation = true,
+                },
+            ],
+        };
+
+        var signals = await RunOneSweepAsync(handler, options, expectAlertsCall: false);
+
+        _ = signals[181].Select(s => s.Name).Should().Equal("Gitar");
+        // Not just an absent pill: the filtered reviewer must cost no request either.
+        _ = handler.ScanningEndpointCalled.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task A_public_only_reviewer_still_reports_on_a_public_repository()
+    {
+        var handler = new RoutingHandler(
+            FactsJson("chris", includeSuccessfulCodeScanningCheck: true),
+            HttpStatusCode.OK,
+            "[]"
+        );
+        var options = new ReviewSignalsOptions
+        {
+            Reviewers =
+            [
+                new ReviewerOptions
+                {
+                    Name = "CodeQL",
+                    Source = ReviewerSource.CodeScanning,
+                    PublicOnly = true,
+                },
+            ],
+        };
+
+        var signals = await RunOneSweepAsync(handler, options);
+
+        _ = signals[181].Single(s => s.Name == "CodeQL").State.Should().Be(ReviewSignalState.Clean);
     }
 
     [Fact]
