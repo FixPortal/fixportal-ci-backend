@@ -110,9 +110,15 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
 
         var restored = GitHubAppTokenSource.NormalisePem(mangled);
 
-        using var rsa = RSA.Create();
-        var act = () => rsa.ImportFromPem(restored);
-        _ = act.Should().NotThrow();
+        // Imported eagerly rather than inside the assertion lambda: a lambda capturing the
+        // using variable outlives it on paper, which is what AccessToDisposedClosure warns
+        // about. The import is the thing under test, so running it here loses nothing.
+        var import = () =>
+        {
+            using var key = RSA.Create();
+            key.ImportFromPem(restored);
+        };
+        _ = import.Should().NotThrow();
     }
 
     [Fact]

@@ -24,8 +24,10 @@ public class SnapshotPathResolutionTests
 
         try
         {
-            using var parentFactory = new WebApplicationFactory<Program>();
-            using var factory = parentFactory.WithWebHostBuilder(builder =>
+            // WebApplicationFactory implements IAsyncDisposable; disposing it synchronously
+            // blocks the host's async teardown on the calling thread.
+            await using var parentFactory = new WebApplicationFactory<Program>();
+            await using var factory = parentFactory.WithWebHostBuilder(builder =>
             {
                 _ = builder.UseContentRoot(contentRoot);
                 _ = builder.UseSetting("GitHub:Owner", "FixPortal");

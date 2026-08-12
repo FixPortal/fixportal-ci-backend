@@ -59,7 +59,7 @@ public sealed class ReviewSignalEnrichmentWorker(
 {
     // No reviewers configured means the feature is off: the base class logs once and
     // the worker idles without issuing a single request.
-    protected override bool Enabled => options.Value.Enabled && options.Value.Reviewers.Count > 0;
+    protected override bool Enabled => options.Value is { Enabled: true, Reviewers.Count: > 0 };
 
     protected override TimeSpan Cadence => TimeSpan.FromSeconds(options.Value.RefreshSeconds);
 

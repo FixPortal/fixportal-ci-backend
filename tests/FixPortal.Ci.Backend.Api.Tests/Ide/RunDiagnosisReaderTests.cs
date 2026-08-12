@@ -1,6 +1,5 @@
 using System.IO.Compression;
 using System.Net;
-using System.Net.Http.Headers;
 using System.Text;
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Ide;
@@ -13,7 +12,7 @@ public class RunDiagnosisReaderTests
     [Fact]
     public async Task Text_entries_are_accepted_and_hash_is_stable()
     {
-        using var content = Content(Zip(("job.txt", Encoding.UTF8.GetBytes("hello"))));
+        using var content = Content(Zip(("job.txt", "hello"u8.ToArray())));
 
         var result = await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
 
@@ -33,7 +32,8 @@ public class RunDiagnosisReaderTests
     {
         using var content = Content(Zip((name, "log"u8.ToArray())));
 
-        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var act = async () => await read;
 
         _ = await act.Should().ThrowAsync<InvalidDataException>();
     }
@@ -45,7 +45,8 @@ public class RunDiagnosisReaderTests
         ReplaceEntryName(archive, "x.txt"u8);
         using var content = Content(archive);
 
-        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var act = async () => await read;
 
         _ = await act.Should().ThrowAsync<InvalidDataException>();
     }
@@ -57,7 +58,8 @@ public class RunDiagnosisReaderTests
             Zip(Enumerable.Range(0, 129).Select(index => ($"{index}.txt", Array.Empty<byte>())).ToArray())
         );
 
-        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var act = async () => await read;
 
         _ = await act.Should().ThrowAsync<InvalidDataException>();
     }
@@ -88,7 +90,8 @@ public class RunDiagnosisReaderTests
             .ToArray();
         using var content = Content(Zip(entries));
 
-        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var act = async () => await read;
 
         _ = await act.Should().ThrowAsync<InvalidDataException>();
     }
@@ -99,7 +102,8 @@ public class RunDiagnosisReaderTests
         using var content = new UnknownLengthContent(new byte[16 * 1024 * 1024 + 1]);
         content.Headers.ContentLength.Should().BeNull();
 
-        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var act = async () => await read;
 
         _ = await act.Should().ThrowAsync<InvalidDataException>();
     }
@@ -110,7 +114,8 @@ public class RunDiagnosisReaderTests
         var archive = ZipExpanded(32 * 1024 * 1024 + 1);
         using var content = Content(archive);
 
-        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var act = async () => await read;
 
         _ = await act.Should().ThrowAsync<InvalidDataException>();
     }
@@ -134,7 +139,8 @@ public class RunDiagnosisReaderTests
     {
         using var content = Content(Zip((name, "content"u8.ToArray())));
 
-        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var act = async () => await read;
 
         _ = await act.Should().ThrowAsync<InvalidDataException>();
     }
@@ -146,7 +152,8 @@ public class RunDiagnosisReaderTests
         SetEncryptionFlags(archive);
         using var content = Content(archive);
 
-        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var act = async () => await read;
 
         _ = await act.Should().ThrowAsync<InvalidDataException>();
     }
@@ -160,7 +167,8 @@ public class RunDiagnosisReaderTests
         CorruptHeader(archive, corruption);
         using var content = Content(archive);
 
-        var act = async () => await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var act = async () => await read;
 
         _ = await act.Should().ThrowAsync<InvalidDataException>();
     }

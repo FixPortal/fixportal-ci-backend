@@ -16,7 +16,9 @@ public static class IdeEndpoints
     private const int MaximumWorkflowFileBytes = 120;
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
-    public static IEndpointRouteBuilder MapIdeEndpoints(this IEndpointRouteBuilder endpoints)
+    // void rather than a fluent return: Program.cs calls this once and never chains, so a
+    // returned builder is a value nothing reads.
+    public static void MapIdeEndpoints(this IEndpointRouteBuilder endpoints)
     {
         _ = endpoints.MapGet(
             "/api/ide/v1/snapshot",
@@ -72,8 +74,6 @@ public static class IdeEndpoints
         );
 
         _ = endpoints.MapGet("/api/ide/v1/repositories/{repository}/runs/{runId:long}/diagnosis", HandleDiagnosisAsync);
-
-        return endpoints;
     }
 
     private static async Task<IResult> HandleDiagnosisAsync(HttpContext context, string repository, long runId)
@@ -152,9 +152,7 @@ public static class IdeEndpoints
                 (workflow.Workflow.RecentRuns ?? [])
                     .Where(run =>
                         run.ProviderRunId == runId
-                        && run.RunAttempt > 0
-                        && run.Status == "completed"
-                        && run.Conclusion == "failure"
+                        && run is { RunAttempt: > 0, Status: "completed", Conclusion: "failure" }
                         && string.Equals(run.Repository, $"{owner}/{found.Name}", StringComparison.OrdinalIgnoreCase)
                         && string.Equals(
                             CanonicalWorkflowFile(run.WorkflowFile),
@@ -238,8 +236,7 @@ public static class IdeEndpoints
         );
 
     private static bool IsEligible(WorkflowRun run, string workflowFile) =>
-        run.ProviderRunId > 0
-        && run.RunAttempt > 0
+        run is { ProviderRunId: > 0, RunAttempt: > 0 }
         && string.Equals(CanonicalWorkflowFile(run.WorkflowFile), workflowFile, StringComparison.Ordinal)
         && run.HeadSha is { Length: 40 } sha
         && sha.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');

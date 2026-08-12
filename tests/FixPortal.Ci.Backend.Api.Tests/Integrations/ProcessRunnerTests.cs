@@ -84,9 +84,12 @@ public class ProcessRunnerTests
         // zombie-process state, so a PID looked up only *after* RunAsync throws would
         // already have vanished from the process table on a successful kill — that
         // false negative is exactly what a naive "check after the throw" would hit.
+        // Stopwatch, not a wall-clock read: this is an elapsed-time budget against a live
+        // OS process, so it wants a monotonic source. A wall clock can step backwards under
+        // an NTP correction, which on a shared runner turns a bounded poll into a hang.
         int? childId = null;
-        var captureDeadline = DateTime.UtcNow.AddMilliseconds(250);
-        while (childId is null && DateTime.UtcNow < captureDeadline)
+        var captureTimer = Stopwatch.StartNew();
+        while (childId is null && captureTimer.Elapsed < TimeSpan.FromMilliseconds(250))
         {
             // A foreign ping/sleep could appear on a shared runner inside this window,
             // so don't take an arbitrary new match: pick the most recently started one,
@@ -116,8 +119,8 @@ public class ProcessRunnerTests
         // milliseconds; the un-killed 60s ping/sleep would still be alive throughout
         // this entire window, so seeing it gone here is proof TryKill actually ran.
         var stillRunning = true;
-        var deadline = DateTime.UtcNow.AddSeconds(10);
-        while (stillRunning && DateTime.UtcNow < deadline)
+        var exitTimer = Stopwatch.StartNew();
+        while (stillRunning && exitTimer.Elapsed < TimeSpan.FromSeconds(10))
         {
             try
             {

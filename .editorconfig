@@ -52,3 +52,28 @@ max_line_length = 120
 csharp_prefer_braces = true:error
 dotnet_style_predefined_type_for_locals_parameters_members = true:error
 dotnet_style_predefined_type_for_member_access = true:error
+
+#### ReSharper / InspectCode: reflection the analyzer cannot see ####
+#
+# These three inspections are correct about the SYNTAX and wrong about the PROGRAM:
+# nothing in C# reads these members, because a serializer or the configuration binder
+# does, by reflection. Acting on them would delete fields from a published wire
+# contract or break option binding, so they are silenced where that is provably the
+# case — scoped per file, never globally, so the same inspection still fires on
+# ordinary code that genuinely has an unused member.
+
+# IDE API wire contracts. Every positional property is serialized by System.Text.Json
+# and consumed by fixportal-ide; none is read by this codebase.
+[src/FixPortal.Ci.Backend.Api/Ide/IdeSnapshotContracts.cs]
+resharper_not_accessed_positional_property_global_highlighting = none
+
+# GitHub REST/GraphQL response DTOs. Constructed exclusively by the deserializer, and
+# their properties are read through the mapped domain types.
+[src/FixPortal.Ci.Backend.Api/Integrations/GitHub/{GitHubMergeState,GitHubReviewFacts}.cs]
+resharper_class_never_instantiated_global_highlighting = none
+resharper_not_accessed_positional_property_global_highlighting = none
+
+# Options classes. Microsoft.Extensions.Configuration binds through the init setters,
+# so making them get-only would silently stop the values binding at all.
+[src/FixPortal.Ci.Backend.Api/{Ide/IdeIntegrationOptions,Dashboard/Configuration/MergeStateOptions}.cs]
+resharper_auto_property_can_be_made_get_only_global_highlighting = none

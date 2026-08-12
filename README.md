@@ -237,7 +237,8 @@ permission — see [operator-handoff.md](operator-handoff.md#github).
 ## Deployment
 
 CI deploys to **Azure Container Apps** on every push to `main`. The publish job
-builds the image once on Blacksmith, pushes `sha-<full commit SHA>` to GHCR, and
+builds the image once on a GitHub-hosted `ubuntu-latest` runner, pushes
+`sha-<full commit SHA>` to GHCR, and
 the deploy job imports that exact image into ACR before
 `deploy/bicep/main.bicep` ships it. The Bicep template
 and workflow carry **no** subscription, registry, or resource identifiers — those
@@ -277,8 +278,25 @@ dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build
 
 ## Contributing
 
-PRs welcome. Branch from `main`; CI runs formatting, build, xUnit tests, and
-CodeQL on every PR. Stryker runs nightly and on manual dispatch.
+PRs welcome. Branch from `main`; CI runs actionlint, formatting, build and xUnit
+tests on every PR, and CodeQL runs through GitHub's default setup. Stryker runs
+weekly (Saturdays, 02:45 UTC) and on manual dispatch.
+
+### GitHub Code Quality is enabled here, deliberately
+
+The estate default is **not-configured** — the paid GitHub scanning products were
+switched off org-wide on 2026-08-04 as a cost decision. This repository is a
+documented exception, on three grounds:
+
+- It is **public**, where Code Quality and CodeQL are free. The cost decision that
+  turned them off applies to private repositories.
+- The board's **Code Quality review pill** reads this product's review threads.
+  With it not-configured on a public repo, that pill has no source and the
+  repository this dashboard is built from would misreport its own review state.
+- **AI findings are disabled** (`ai_findings_option: disabled`), which is the half
+  that carries a per-use charge. Current state: `configured`, `csharp`, weekly.
+
+Turning it off is therefore a deliberate decision to make, not a drift to correct.
 
 ```
 dotnet tool restore

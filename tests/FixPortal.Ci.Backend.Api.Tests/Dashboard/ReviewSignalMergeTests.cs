@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Net;
 using System.Text;
 using AwesomeAssertions;
@@ -443,8 +444,10 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         // thread-pool turn. This is the "poll-until-condition helper with a generous
         // timeout" the house rule explicitly allows as the final settle, now gated
         // behind a real completion signal rather than being the only wait in the test.
-        var deadline = DateTime.UtcNow + TimeSpan.FromSeconds(30);
-        while (!cache.TryGet(RepoName, out _) && DateTime.UtcNow < deadline)
+        // Stopwatch rather than a wall-clock read: a monotonic source for an elapsed-time
+        // budget, so an NTP step cannot stretch or collapse the settle window.
+        var settleTimer = Stopwatch.StartNew();
+        while (!cache.TryGet(RepoName, out _) && settleTimer.Elapsed < TimeSpan.FromSeconds(30))
         {
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
@@ -594,7 +597,10 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         // indefinitely instead of settling into the steady cadence.
         var handler = new GraphQlAuthFailHandler();
         var timeProvider = new TrackingFakeTimeProvider();
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        // Property set after the using declaration, not in an object initializer: an
+        // initializer that throws leaves the instance unassigned and therefore undisposed.
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
