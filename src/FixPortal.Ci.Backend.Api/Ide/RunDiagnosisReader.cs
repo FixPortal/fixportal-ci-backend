@@ -90,7 +90,7 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
         RejectEncryptedEntries(body.GetBuffer().AsSpan(0, checked((int)body.Length)));
         body.Position = 0;
 
-        using var archive = new ZipArchive(body, ZipArchiveMode.Read, leaveOpen: false);
+        await using var archive = new ZipArchive(body, ZipArchiveMode.Read, leaveOpen: false);
         var files = archive.Entries.Where(entry => !string.IsNullOrEmpty(entry.Name)).ToList();
         if (files.Count is 0 or > MaximumEntries)
         {
@@ -198,7 +198,9 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
         }
     }
 
-    private static async Task<long> CopyBoundedAsync(Stream input, Stream output, long remaining, CancellationToken ct)
+    // Returns nothing: the copied count is only ever needed for the bound check below, and
+    // no caller reads it.
+    private static async Task CopyBoundedAsync(Stream input, Stream output, long remaining, CancellationToken ct)
     {
         if (remaining < 0)
         {
@@ -214,7 +216,7 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
                 var read = await input.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
                 if (read == 0)
                 {
-                    return copied;
+                    return;
                 }
                 if (copied + read > remaining)
                 {

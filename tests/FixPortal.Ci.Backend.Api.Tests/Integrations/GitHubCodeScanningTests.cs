@@ -132,7 +132,8 @@ public class GitHubCodeScanningTests
                 new HttpResponseMessage(HttpStatusCode.Forbidden),
             ])
         );
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var logger = new CapturingLogger<GitHubOrgClient>();
         var client = CreateClient(http, logger);
 

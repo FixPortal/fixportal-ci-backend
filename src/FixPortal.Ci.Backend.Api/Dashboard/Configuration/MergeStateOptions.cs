@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Options;
-
 namespace FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 
 /// <summary>

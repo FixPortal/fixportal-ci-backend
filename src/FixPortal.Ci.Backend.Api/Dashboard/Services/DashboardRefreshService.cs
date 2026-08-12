@@ -30,7 +30,7 @@ public sealed class DashboardRefreshService(
     // Snapshotted once rather than read per pull request: these are startup configuration,
     // and re-deriving the excluded-author set inside the per-repo loop would rebuild it
     // thousands of times a cycle for a value that cannot change.
-    private readonly bool _reviewsConfigured = reviewOptions.Value.Enabled && reviewOptions.Value.Reviewers.Count > 0;
+    private readonly bool _reviewsConfigured = reviewOptions.Value is { Enabled: true, Reviewers.Count: > 0 };
 
     private readonly IReadOnlySet<string> _excludedAuthors = reviewOptions.Value.ExcludedAuthors.ToHashSet(
         StringComparer.OrdinalIgnoreCase

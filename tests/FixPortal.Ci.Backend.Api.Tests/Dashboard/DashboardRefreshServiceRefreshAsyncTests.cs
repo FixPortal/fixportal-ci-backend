@@ -46,7 +46,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
                     """{"workflows":[{"id":1,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}""",
                 _ when path.EndsWith("/runs", StringComparison.Ordinal) =>
                     """{"workflow_runs":[{"id":30,"status":"completed","conclusion":"success","html_url":"https://github.com/FixPortal/repo-a/actions/runs/30","display_title":"newest","run_number":30,"head_branch":"main","event":"push","updated_at":"2026-01-03T00:00:00Z"},{"id":20,"status":"completed","conclusion":"failure","html_url":"https://github.com/FixPortal/repo-a/actions/runs/20","display_title":"older","run_number":20,"head_branch":"main","event":"push","updated_at":"2026-01-02T00:00:00Z"}]}""",
-                _ when path.EndsWith("/pulls", StringComparison.Ordinal) => "[]",
+                // No "/pulls" arm: it returned the same "[]" as the default below.
                 _ => "[]",
             };
             return Task.FromResult(JsonOk(body));
@@ -346,10 +346,8 @@ public class DashboardRefreshServiceRefreshAsyncTests
     {
         var state = new DashboardSnapshotState();
         using var handler = new RunHistoryHandler();
-        using var http = new HttpClient(handler, disposeHandler: false)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        using var http = new HttpClient(handler, disposeHandler: false);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(
             new DashboardOptions
@@ -396,7 +394,8 @@ public class DashboardRefreshServiceRefreshAsyncTests
     public async Task RefreshAsync_should_hold_the_concurrency_cap_and_cancel_siblings_on_rate_limit()
     {
         var handler = new ConcurrencyProbeHandler();
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
