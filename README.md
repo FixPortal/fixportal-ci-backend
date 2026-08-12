@@ -199,7 +199,11 @@ alerts route takes no ref filter, so one open alert reports on every open pull
 request in that repository.
 
 **Code Quality is the awkward one, and its two halves come from different
-places.** Both observed on `fixportal-ci-backend` PR #85 (2026-08-12):
+places.** Both observed on `fixportal-ci-backend` PR #85 (2026-08-12). Note that
+the product itself has since been disabled estate-wide — see *GitHub Code Quality
+is disabled here* below — so what follows describes how the reviewer behaved
+while it ran, and explains a configuration entry that currently has no live
+input:
 
 - Its **findings are review threads** authored by `github-code-quality` — two on
   that pull request — and are *not* alerts: `code-scanning/alerts` returned `0`
@@ -282,21 +286,32 @@ PRs welcome. Branch from `main`; CI runs actionlint, formatting, build and xUnit
 tests on every PR, and CodeQL runs through GitHub's default setup. Stryker runs
 weekly (Saturdays, 02:45 UTC) and on manual dispatch.
 
-### GitHub Code Quality is enabled here, deliberately
+### GitHub Code Quality is disabled here, like the rest of the estate
 
-The estate default is **not-configured** — the paid GitHub scanning products were
-switched off org-wide on 2026-08-04 as a cost decision. This repository is a
-documented exception, on three grounds:
+Current state: `not-configured`, `ai_findings_option: disabled`, as on all eight
+public FixPortal repositories since 2026-08-12.
 
-- It is **public**, where Code Quality and CodeQL are free. The cost decision that
-  turned them off applies to private repositories.
-- The board's **Code Quality review pill** reads this product's review threads.
-  With it not-configured on a public repo, that pill has no source and the
-  repository this dashboard is built from would misreport its own review state.
-- **AI findings are disabled** (`ai_findings_option: disabled`), which is the half
-  that carries a per-use charge. Current state: `configured`, `csharp`, weekly.
+This section previously argued the opposite — that this repository was a
+documented exception because Code Quality is free on public repositories, and
+that only the paid private-repository products were switched off org-wide on
+2026-08-04. **That premise was wrong.** Code Quality is a paid product
+regardless of repository visibility, so it had been billing on all eight public
+repositories. The 2026-08-12 GitHub estate audit found it enabled on every one
+of them and it was disabled across the board.
 
-Turning it off is therefore a deliberate decision to make, not a drift to correct.
+The note is kept rather than deleted because it was the artefact a later audit
+would have read to justify re-enabling it.
+
+One real consequence survives the correction, and it is a **known gap, not a
+resolved point**: the board's Code Quality review pill reads this product's
+review threads, so with the product not-configured that pill now has no source
+on any public repository. `CodeScanningCheckCountsAsParticipation` describes how
+the reviewer behaved while it was enabled and is retained for that reason; it
+has no live input today. The `PublicOnly` reviewer entry likewise no longer
+resolves to a running product.
+
+Re-enabling Code Quality anywhere costs money and needs an explicit decision on
+the current charges. Do not re-enable it on free-tier grounds.
 
 ```
 dotnet tool restore
