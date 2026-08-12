@@ -144,9 +144,16 @@ public static class ReviewSignalFactory
         // otherwise be pinned to Pending forever. This sits AFTER the unresolved-thread
         // return above, so a comment can only ever promote Pending to Clean -- it can
         // never mask an open finding.
+        // The third channel is for a reviewer that says nothing at all when it finds
+        // nothing (Code Quality). It is delivered by the code-scanning pipeline, so a
+        // successful code-scanning check on this head proves it ran; without this it
+        // reads identically to a reviewer that never ran, and holds Pending on exactly
+        // the pull requests that are ready to merge.
         var ran =
             facts.HeadParticipatingAuthors.Contains(login)
-            || reviewer.CommentsCountAsParticipation && facts.HeadCommentAuthors.Contains(login);
+            || reviewer.CommentsCountAsParticipation && facts.HeadCommentAuthors.Contains(login)
+            || reviewer.CodeScanningCheckCountsAsParticipation
+                && facts.SuccessfulCheckAppSlugs.Overlaps(CodeScanningAppSlugs);
         return ran
             ? new ReviewSignal(reviewer.Name, ReviewSignalState.Clean, null, null)
             : new ReviewSignal(reviewer.Name, ReviewSignalState.Pending, null, null);

@@ -23,8 +23,20 @@ namespace FixPortal.Ci.Backend.Api.Tests.Integrations;
 /// Outstanding. The state a leaked credential must never produce is Clean, and Clean
 /// requires a first page that answers with zero alerts.
 /// </remarks>
-public class GitHubSecretScanningPaginationTests
+public sealed class GitHubSecretScanningPaginationTests : IDisposable
 {
+    // Every HttpClient this fixture hands to a client, so the test owns their lifetime
+    // rather than leaving them to the finalizer. Flagged by GitHub Code Quality on PR #85.
+    private readonly List<HttpClient> _clients = [];
+
+    public void Dispose()
+    {
+        foreach (var client in _clients)
+        {
+            client.Dispose();
+        }
+    }
+
     private sealed class PagedSecretAlertsHandler(HttpStatusCode secondPageStatus) : HttpMessageHandler
     {
         public List<string> Queries { get; } = [];
@@ -54,9 +66,10 @@ public class GitHubSecretScanningPaginationTests
             new(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
     }
 
-    private static GitHubOrgClient ClientFor(HttpMessageHandler handler)
+    private GitHubOrgClient ClientFor(HttpMessageHandler handler)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        _clients.Add(http);
         return new GitHubOrgClient(
             http,
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
