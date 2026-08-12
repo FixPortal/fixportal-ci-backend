@@ -110,9 +110,11 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
 
         var restored = GitHubAppTokenSource.NormalisePem(mangled);
 
-        // Imported eagerly rather than inside the assertion lambda: a lambda capturing the
-        // using variable outlives it on paper, which is what AccessToDisposedClosure warns
-        // about. The import is the thing under test, so running it here loses nothing.
+        // The RSA key is created AND disposed inside the delegate, which NotThrow() invokes.
+        // Previously the key was a `using` local in the method body and the lambda closed
+        // over it, which is what AccessToDisposedClosure warns about: the delegate outlives
+        // the using scope on paper, even though the assertion happens to run it first.
+        // Owning the key inside the delegate removes the capture rather than suppressing it.
         var import = () =>
         {
             using var key = RSA.Create();
