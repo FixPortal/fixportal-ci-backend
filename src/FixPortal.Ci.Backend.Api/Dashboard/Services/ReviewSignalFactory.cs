@@ -140,7 +140,7 @@ public static class ReviewSignalFactory
         // merge. Participation is a review, an opened thread, or -- for a reviewer opted
         // into CommentsCountAsParticipation -- a head-scoped issue comment. The comment
         // channel exists because a reviewer that reports findings as threads but
-        // announces a clean result as a plain comment (Gitar, Code Quality) would
+        // announces a clean result as a plain comment (Gitar) would
         // otherwise be pinned to Pending forever. This sits AFTER the unresolved-thread
         // return above, so a comment can only ever promote Pending to Clean -- it can
         // never mask an open finding.

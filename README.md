@@ -183,13 +183,12 @@ FixPortal's worked example, set via deployment configuration:
     { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high" },
     { "Name": "Gitar", "BotLogin": "gitar-bot" },
     { "Name": "CodeQL", "Source": "CodeScanning", "PublicOnly": true },
-    { "Name": "Code Quality", "BotLogin": "github-code-quality", "PublicOnly": true },
     { "Name": "Secret Scanning", "Source": "SecretScanning", "PublicOnly": true }
   ]
 }
 ```
 
-The last three carry `PublicOnly` because GitHub's scanning products are paid on
+The last two carry `PublicOnly` because GitHub's scanning products are paid on
 private repositories and were switched off org-wide on 2026-08-04. Their
 endpoints answer 403/404 on a private repo, which this worker reads as
 `Pending` — a state such a repo can never leave, so every private pull request
@@ -198,11 +197,20 @@ estate-wide. `SecretScanning` is repository-scoped rather than PR-scoped: the
 alerts route takes no ref filter, so one open alert reports on every open pull
 request in that repository.
 
-GitHub Code Quality is a `ReviewThreads` reviewer despite sounding like a scanner:
-it writes nothing to `code-scanning/alerts` — that endpoint reports CodeQL only —
-and instead posts review threads and a `COMMENTED` review, which is the evidence
-`ReviewThreads` reads. Its login carries no `[bot]` suffix, for the same GraphQL
-reason as `ExcludedAuthors` above.
+**There is no separate Code Quality reviewer, and adding one back is a
+mistake.** It was previously configured as a `ReviewThreads` reviewer with a
+`github-code-quality` login. Observed on `fixportal-ci-backend` PR #85
+(2026-08-12): the workflow run named "Code Quality: PR #85" has path
+`dynamic/github-code-scanning/codeql` and its only job is `Analyze (csharp)`.
+Code Quality *is* the CodeQL default setup, and its findings arrive as
+code-scanning alerts under tool `CodeQL`, which the CodeQL reviewer above
+already counts. A second entry keyed on a login that never posts can only hold
+`Pending`, which on a public repository blocks the ready-to-merge verdict.
+
+`CommentsCountAsParticipation` exists for Gitar, which reports findings as review
+threads but announces a clean result as a plain issue comment — without the flag
+it holds `Pending` on exactly the pull requests that are ready to merge. The
+comment's presence is the whole signal; its content is never inspected.
 
 Each reviewer resolves to one of **four** pill states, not three:
 
