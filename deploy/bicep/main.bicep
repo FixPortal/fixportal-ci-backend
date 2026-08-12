@@ -191,6 +191,11 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ReviewSignals__Reviewers__1__CommentsCountAsParticipation'
               value: 'true'
             }
+            // The three GitHub scanning products below are PublicOnly: paid on private
+            // repositories and switched off org-wide on 2026-08-04, free and enabled on
+            // public ones. Without the flag their endpoints 403/404 on every private repo,
+            // which reads as Pending -- a state a private repo can never leave, so it
+            // pinned every private pull request to "not ready".
             {
               name: 'ReviewSignals__Reviewers__2__Name'
               value: 'CodeQL'
@@ -198,6 +203,10 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             {
               name: 'ReviewSignals__Reviewers__2__Source'
               value: 'CodeScanning'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__2__PublicOnly'
+              value: 'true'
             }
             // GitHub Code Quality is a ReviewThreads reviewer, not a CodeScanning one:
             // it publishes nothing to code-scanning/alerts (that endpoint returns CodeQL
@@ -214,6 +223,25 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               name: 'ReviewSignals__Reviewers__3__CommentsCountAsParticipation'
+              value: 'true'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__3__PublicOnly'
+              value: 'true'
+            }
+            // Repository-scoped, not pull-request scoped: the secret-scanning alerts route
+            // takes no ref filter, so an open alert shows on every open PR in that repo.
+            // Deliberate -- a leaked credential is not fixed by merging somewhere else.
+            {
+              name: 'ReviewSignals__Reviewers__4__Name'
+              value: 'Secret Scanning'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__4__Source'
+              value: 'SecretScanning'
+            }
+            {
+              name: 'ReviewSignals__Reviewers__4__PublicOnly'
               value: 'true'
             }
           ], map(range(0, length(corsAllowedOrigins)), i => {

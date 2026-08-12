@@ -29,13 +29,15 @@ public static class ReviewSignalFactory
         PrReviewFacts facts,
         IReadOnlyList<ReviewerOptions> reviewers,
         int? openAlerts,
-        string prHtmlUrl
+        int? openSecretAlerts,
+        string prHtmlUrl,
+        string repoHtmlUrl
     )
     {
         var signals = new List<ReviewSignal>(reviewers.Count);
         foreach (var reviewer in reviewers)
         {
-            signals.Add(BuildOne(facts, reviewer, openAlerts, prHtmlUrl));
+            signals.Add(BuildOne(facts, reviewer, openAlerts, openSecretAlerts, prHtmlUrl, repoHtmlUrl));
         }
         return signals;
     }
@@ -44,7 +46,9 @@ public static class ReviewSignalFactory
         PrReviewFacts facts,
         ReviewerOptions reviewer,
         int? openAlerts,
-        string prHtmlUrl
+        int? openSecretAlerts,
+        string prHtmlUrl,
+        string repoHtmlUrl
     )
     {
         // Trimmed: a stray space in configuration ("review-high ") matches no real label,
@@ -56,9 +60,41 @@ public static class ReviewSignalFactory
             return new ReviewSignal(reviewer.Name, ReviewSignalState.Disabled, null, null);
         }
 
-        return reviewer.Source == ReviewerSource.CodeScanning
-            ? BuildCodeScanning(facts, reviewer, openAlerts, prHtmlUrl)
-            : BuildReviewThreads(facts, reviewer, prHtmlUrl);
+        return reviewer.Source switch
+        {
+            ReviewerSource.CodeScanning => BuildCodeScanning(facts, reviewer, openAlerts, prHtmlUrl),
+            ReviewerSource.SecretScanning => BuildSecretScanning(reviewer, openSecretAlerts, repoHtmlUrl),
+            _ => BuildReviewThreads(facts, reviewer, prHtmlUrl),
+        };
+    }
+
+    /// <summary>
+    /// Repository-scoped, unlike every other source here: the secret-scanning alerts
+    /// endpoint takes no ref filter, so an open alert anywhere in the repository shows on
+    /// every open pull request in it. That is a coarser claim than the other pills make,
+    /// and it is the true one — a leaked credential is not fixed by merging elsewhere.
+    /// </summary>
+    /// <remarks>
+    /// Zero alerts is Clean without the "did it run" check the code-scanning path needs,
+    /// because here the endpoint answering IS that evidence: GitHub 404s the route when
+    /// secret scanning is disabled, and scanning is continuous rather than per-commit, so
+    /// there is no per-pull-request run to wait for.
+    /// </remarks>
+    private static ReviewSignal BuildSecretScanning(ReviewerOptions reviewer, int? openSecretAlerts, string repoHtmlUrl)
+    {
+        // Unreadable (scanning disabled, or the token lacks the scope) is unknown, not clean.
+        if (openSecretAlerts is not { } alerts)
+        {
+            return new ReviewSignal(reviewer.Name, ReviewSignalState.Pending, null, null);
+        }
+        return alerts > 0
+            ? new ReviewSignal(
+                reviewer.Name,
+                ReviewSignalState.Outstanding,
+                alerts,
+                $"{repoHtmlUrl}/security/secret-scanning"
+            )
+            : new ReviewSignal(reviewer.Name, ReviewSignalState.Clean, null, null);
     }
 
     private static ReviewSignal BuildCodeScanning(

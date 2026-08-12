@@ -11,6 +11,13 @@ public enum ReviewerSource
 
     /// <summary>Open code-scanning alerts on the pull request's head ref.</summary>
     CodeScanning,
+
+    /// <summary>
+    /// Open secret-scanning alerts on the repository. Repository-scoped, not pull-request
+    /// scoped: the alerts endpoint takes no ref filter, so every open pull request in a
+    /// repository with an open secret alert reports the same Outstanding count.
+    /// </summary>
+    SecretScanning,
 }
 
 public sealed class ReviewerOptions
@@ -37,6 +44,23 @@ public sealed class ReviewerOptions
     /// all-clear.
     /// </summary>
     public bool CommentsCountAsParticipation { get; init; }
+
+    /// <summary>
+    /// When true, this reviewer applies to public repositories only and is omitted
+    /// entirely from a private repository's signals — no pill, and nothing for the
+    /// ready-to-merge verdict to wait on.
+    /// </summary>
+    /// <remarks>
+    /// For GitHub's own scanning products, which are paid on private repositories and
+    /// free on public ones. With them switched off org-wide (2026-08-04) their endpoints
+    /// answer 403/404 on every private repository, which this factory reads as Pending —
+    /// correct in isolation, but Pending is not a state a private repository can ever
+    /// leave, so it pinned every private pull request to "not ready" and the Ready to
+    /// merge pill disappeared estate-wide. Omitting beats reporting Disabled here: a
+    /// permanently grey pill on 20 of 28 repositories is noise, and absence is documented
+    /// in the board's legend.
+    /// </remarks>
+    public bool PublicOnly { get; init; }
 
     public ReviewerSource Source { get; init; } = ReviewerSource.ReviewThreads;
 }

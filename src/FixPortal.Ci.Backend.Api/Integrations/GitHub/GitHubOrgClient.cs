@@ -104,6 +104,9 @@ public sealed record CodeScanningInstanceDto(string? Ref);
 
 public sealed record CodeScanningAlertDto(CodeScanningInstanceDto? MostRecentInstance);
 
+// Only the count matters, but a payload shape is still needed to deserialize the list.
+public sealed record SecretScanningAlertDto(int Number);
+
 public sealed class GitHubOrgClient(
     HttpClient httpClient,
     IOptions<GitHubOptions> gitHub,
@@ -244,6 +247,9 @@ public sealed class GitHubOrgClient(
     // the warning is emitted once rather than on every sweep. Concurrent because
     // nothing guarantees the enrichment sweep is the only caller.
     private readonly ConcurrentDictionary<string, byte> _codeScanningWarned = new(StringComparer.OrdinalIgnoreCase);
+
+    // Same one-warning-per-repo discipline for the secret-scanning endpoint.
+    private readonly ConcurrentDictionary<string, byte> _secretScanningWarned = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>
     /// Rate-limit accounting reported by the most recent GraphQL query. GraphQL is
@@ -810,6 +816,75 @@ public sealed class GitHubOrgClient(
             page++;
         }
         return Bucket(all);
+    }
+
+    /// <summary>
+    /// Count of open secret-scanning alerts for a repo. Returns NULL when the endpoint
+    /// cannot be read — the token lacks "Secret scanning alerts: read", or the product is
+    /// not enabled on this repository (private repos, where it is paid) — which the caller
+    /// must render as "not yet reviewed", never as clean. Zero means the endpoint answered
+    /// and nothing is open.
+    /// </summary>
+    /// <remarks>
+    /// Repo-scoped and not bucketed by pull request, unlike the code-scanning counterpart:
+    /// the REST route accepts no ref filter, so there is nothing to attribute an alert to
+    /// a pull request with.
+    /// </remarks>
+    public async Task<int?> GetOpenSecretScanningAlertCountAsync(string repo, CancellationToken ct)
+    {
+        var total = 0;
+        var page = 1;
+        while (true)
+        {
+            List<SecretScanningAlertDto>? batch;
+            try
+            {
+                // affectsAuthState: false — a missing secret-scanning scope 403s here and
+                // must not flip /api/health, exactly as the code-scanning listing does.
+                batch = await SendAsync<List<SecretScanningAlertDto>>(
+                    $"repos/{_gitHub.Owner}/{repo}/secret-scanning/alerts?state=open&per_page=100&page={page}",
+                    ct,
+                    affectsAuthState: false
+                );
+            }
+            catch (GitHubAuthException ex)
+            {
+                if (_secretScanningWarned.TryAdd(repo, 0))
+                {
+                    logger?.LogWarning(
+                        ex,
+                        "Secret-scanning alerts are unreadable for {Repo}; the Secret Scanning reviewer will stay Pending until the PAT gains \"Secret scanning alerts: read\" (or the product is enabled on the repo).",
+                        repo
+                    );
+                }
+                return null;
+            }
+
+            if (_secretScanningWarned.TryRemove(repo, out _))
+            {
+                logger?.LogInformation(
+                    "Secret-scanning alerts are readable again for {Repo}; the earlier permission warning has cleared.",
+                    repo
+                );
+            }
+
+            // SendAsync maps 404 to default(T) — the product is off for this repository.
+            // Page 1 cannot distinguish "off" from "empty", so it stays unknown; a later
+            // page going missing means the listing ended, and what was counted stands.
+            if (batch is null)
+            {
+                return page == 1 ? null : total;
+            }
+
+            total += batch.Count;
+            if (batch.Count < 100)
+            {
+                break;
+            }
+
+            page++;
+        }
+        return total;
     }
 
     private static Dictionary<int, int> Bucket(IReadOnlyList<CodeScanningAlertDto> alerts)

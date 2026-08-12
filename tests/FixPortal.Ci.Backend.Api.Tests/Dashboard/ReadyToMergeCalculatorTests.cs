@@ -45,6 +45,17 @@ public class ReadyToMergeCalculatorTests
     }
 
     [Fact]
+    public void An_empty_signal_list_is_ready_rather_than_unknown()
+    {
+        // What a private repository now produces when every configured reviewer is
+        // PublicOnly: an empty list, not a null one. Empty means "the enrichment ran and
+        // no reviewer applies here", which is ready; null means "enrichment has not
+        // reached this pull request", which is unknown. Collapsing the two would restore
+        // the estate-wide vanished-pill bug in a different disguise.
+        ReadyToMergeCalculator.Evaluate(Pr(signals: []), Merge(), true, NoBots).Should().BeTrue();
+    }
+
+    [Fact]
     public void Disabled_signals_do_not_block()
     {
         ReadyToMergeCalculator
