@@ -17,20 +17,110 @@ check. Python does not care about CRLF, so the failure mode is designed out rath
 patched per repo.
 """
 import os
+import re
 import sys
 
-try:
-    import yaml
-except ImportError:
-    # Deliberately fails rather than installing PyYAML here. This script decides merge
-    # eligibility for every pull request, so fetching an unpinned package from PyPI at
-    # CI time would put an arbitrary-at-install-time dependency in the gating path.
-    # PyYAML ships with GitHub's ubuntu images; a runner without it is a runner-image
-    # problem, and should be loud.
-    sys.exit(
-        "python3 cannot import yaml. Provide PyYAML in the runner image rather than "
-        "installing it at CI time -- this script gates merges."
-    )
+
+ID = r"[A-Za-z_][A-Za-z0-9_-]*"
+# A job key may be quoted -- `"security-scan":` is valid Actions syntax. The previous
+# unquoted-only pattern silently dropped such a job from the `jobs` dict, so it could
+# never appear in `set(jobs) - set(needs)` and the gate reported full coverage over a
+# quality job it was not gating. That is a fail-OPEN result, the one outcome this
+# script exists to prevent, so anything unclassifiable at job indentation now exits.
+JOB = re.compile(rf"""^\ \ (?:'({ID})'|"({ID})"|({ID}))\s*:\s*(?:\#.*)?$""", re.VERBOSE)
+NEEDS = re.compile(r"^    needs\s*:\s*(.*?)\s*$")
+# Block sequence items may sit at the key's own indentation (4) or be indented under it
+# (6), and may be quoted. Both forms are valid YAML; accepting only unquoted 6-space
+# items dropped entries, which ENLARGES `missing` and reddens a valid workflow.
+BLOCK_NEED = re.compile(rf"""^\s{{4,}}-\s*(?:'({ID})'|"({ID})"|({ID}))\s*(?:\#.*)?$""", re.VERBOSE)
+COMMENT_OR_BLANK = re.compile(r"^\s*(?:\#.*)?$")
+
+
+def _first_group(match):
+    return next(g for g in match.groups() if g is not None)
+
+
+def strip_comment(line):
+    """Drop a trailing comment. Naive by design: a '#' inside a quoted scalar is not a
+    shape this file's job/needs grammar admits, and guessing at YAML quoting rules here
+    would be less predictable than the explicit exit below."""
+    return line.split("#", 1)[0]
+
+
+def parse_need_ids(value):
+    value = strip_comment(value).strip()
+    if value.startswith("[") and value.endswith("]"):
+        values = value[1:-1].split(",")
+    else:
+        values = [value]
+    ids = [item.strip().strip("'\"") for item in values if item.strip()]
+    if any(not re.fullmatch(ID, item) for item in ids):
+        sys.exit(f"unsupported needs value: {value}")
+    return ids
+
+
+def read_gate_contract(lines, gate_job):
+    try:
+        # `jobs: # comment` is valid and used to fail the equality outright, returning no
+        # jobs at all.
+        jobs_start = next(
+            i for i, line in enumerate(lines) if strip_comment(line).rstrip() == "jobs:"
+        )
+    except StopIteration:
+        return {}, []
+
+    jobs = {}
+    for i in range(jobs_start + 1, len(lines)):
+        line = lines[i].rstrip("\r\n")
+        if line.strip() and not line.startswith((" ", "#")):
+            break
+        if COMMENT_OR_BLANK.match(line):
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if indent != 2:
+            continue
+        match = JOB.match(line)
+        if not match:
+            # Fail closed. An unrecognised construct at job indentation (an anchor, a
+            # merge key, a multi-line key) means this parser does not understand the
+            # workflow, and "does not understand" must never render as "all accounted
+            # for".
+            sys.exit(
+                f"unparsable line at job indentation (line {i + 1}): {line.strip()}\n"
+                "This gate refuses to report coverage it cannot verify. Simplify the job "
+                "key, or extend assert_gate_coverage.py to understand this form."
+            )
+        jobs[_first_group(match)] = i
+
+    if gate_job not in jobs:
+        return jobs, []
+
+    gate_start = jobs[gate_job] + 1
+    gate_end = min((i for i in jobs.values() if i >= gate_start), default=len(lines))
+    for i in range(gate_start, gate_end):
+        match = NEEDS.match(lines[i].rstrip("\r\n"))
+        if not match:
+            continue
+        if strip_comment(match.group(1)).strip():
+            return jobs, parse_need_ids(match.group(1))
+
+        needs = []
+        for line in lines[i + 1 : gate_end]:
+            line = line.rstrip("\r\n")
+            item = BLOCK_NEED.match(line)
+            if item:
+                needs.append(_first_group(item))
+                continue
+            # Skip comments and blanks BEFORE testing indentation: a comment sitting at
+            # the key's own indentation used to end the sequence early and silently
+            # truncate `needs`.
+            if COMMENT_OR_BLANK.match(line):
+                continue
+            if len(line) - len(line.lstrip(" ")) <= 4:
+                break
+        return jobs, needs
+
+    return jobs, []
 
 
 def main(argv):
@@ -41,17 +131,12 @@ def main(argv):
     gate_job = argv[2] if len(argv) > 2 else os.environ.get("GATE_JOB", "ci-gate")
 
     with open(workflow_path, encoding="utf-8") as handle:
-        workflow = yaml.safe_load(handle)
+        jobs, needs = read_gate_contract(handle.readlines(), gate_job)
 
-    jobs = (workflow or {}).get("jobs") or {}
     if not jobs:
         sys.exit(f"{workflow_path}: no jobs found -- refusing to report coverage over nothing.")
     if gate_job not in jobs:
         sys.exit(f"{workflow_path}: no '{gate_job}' job found.")
-
-    needs = (jobs[gate_job] or {}).get("needs") or []
-    if isinstance(needs, str):
-        needs = [needs]
 
     exempt = set(os.environ.get("GATE_EXEMPT", "").replace(",", " ").split())
 
