@@ -37,17 +37,48 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Policy file must be tracked and unignored
+      - name: Policy file must be tracked, unignored, and usable
         run: |
-          if ! git ls-files --error-unmatch .claude/review-policy.json >/dev/null 2>&1; then
-            echo "::error file=.claude/review-policy.json::Review policy is untracked, so every PR in this repo would tier NORMAL. Restore and commit it."
+          set -euo pipefail
+          policy=.claude/review-policy.json
+
+          if ! git ls-files --error-unmatch "$policy" >/dev/null 2>&1; then
+            echo "::error file=$policy::Review policy is untracked, so every PR in this repo would tier NORMAL. Restore and commit it."
             exit 1
           fi
+
           # --no-index is load-bearing: without it, check-ignore consults the index and
           # never reports a TRACKED file as ignored, so this would pass unconditionally
           # and guard nothing.
-          if git check-ignore --no-index -q .claude/review-policy.json; then
-            echo "::error file=.gitignore::.gitignore now excludes .claude/review-policy.json, which silently drops every PR in this repo to NORMAL. Restore the '!.claude/review-policy.json' negation."
+          if git check-ignore --no-index -q "$policy"; then
+            echo "::error file=.gitignore::.gitignore now excludes $policy, which silently drops every PR in this repo to NORMAL. Restore the '!.claude/review-policy.json' negation."
             exit 1
           fi
-          echo "Review policy is tracked and unignored."
+
+          # Existence is not usability. An automated rollout once EMPTIED this file across
+          # 21 repos; every repo then had no policy and tiered every PR NORMAL, and the
+          # first version of this guard passed the whole time — an empty file is still
+          # tracked and still unignored. Content is checked here for that reason.
+          if [ ! -s "$policy" ]; then
+            echo "::error file=$policy::Review policy is EMPTY, so every PR in this repo tiers NORMAL. Restore it from history."
+            exit 1
+          fi
+          if ! jq -e . "$policy" >/dev/null 2>&1; then
+            echo "::error file=$policy::Review policy is not valid JSON, so the tiering hook cannot read it and every PR falls back to NORMAL."
+            exit 1
+          fi
+          if ! jq -e 'has("high") and (.high | type == "array")' "$policy" >/dev/null; then
+            echo "::error file=$policy::Review policy has no 'high' array. Nothing can tier HIGH, so the policy is inert."
+            exit 1
+          fi
+          # The review control plane must stay HIGH in every repo: this file decides which
+          # reviewers a PR needs, and .coderabbit.yaml can silence a reviewer outright.
+          for required in .claude/review-policy.json .coderabbit.yaml; do
+            if ! jq -e --arg r "$required" '.high | index($r)' "$policy" >/dev/null; then
+              echo "::error file=$policy::'$required' is missing from the high list. An edit to it would get the lighter review."
+              exit 1
+            fi
+          done
+
+          echo "Review policy is tracked, unignored, parseable, and tiers its own control plane HIGH."
+          jq -c '{version, high: (.high | length), low: (.low | length)}' "$policy"
