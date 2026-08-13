@@ -119,7 +119,7 @@ data immediately instead of blanking.
   Secrets, so the template is reusable as-is. One-time OIDC bootstrap +
   secret/variable list live in `operator-handoff.md`.
 - **CI quality gates:** `ci.yml` (format, build, test, CodeQL, GHCR publish, ACA
-  deploy), `mutation.yml` (nightly/manual Stryker mutation testing), Dependabot.
+  deploy), `mutation.yml` (weekly/manual Stryker mutation testing), Dependabot.
 
 ## Where to start reading
 
