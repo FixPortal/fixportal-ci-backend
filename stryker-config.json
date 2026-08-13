@@ -1,10 +1,6 @@
 {
   "stryker-config": {
-    "solution": "FixPortal.Ci.Backend.slnx",
-    "project": "src/FixPortal.Ci.Backend.Api/FixPortal.Ci.Backend.Api.csproj",
-    "test-projects": [
-      "tests/FixPortal.Ci.Backend.Api.Tests/FixPortal.Ci.Backend.Api.Tests.csproj"
-    ],
+    "project": "FixPortal.Ci.Backend.Api.csproj",
     "reporters": [
       "progress",
       "html",
