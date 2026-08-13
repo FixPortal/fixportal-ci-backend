@@ -42,13 +42,14 @@ jobs:
         run: dotnet tool restore
 
       - name: Run Stryker
-        run: dotnet stryker --config-file stryker-config.json
+        working-directory: tests/FixPortal.Ci.Backend.Api.Tests
+        run: dotnet stryker --config-file ../../stryker-config.json
 
       - name: Summarize mutation report
         if: always()
         shell: pwsh
         run: |
-          $latest = Get-ChildItem StrykerOutput -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          $latest = Get-ChildItem tests/FixPortal.Ci.Backend.Api.Tests/StrykerOutput -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
           if (-not $latest) { throw "No StrykerOutput directory found." }
           $report = Join-Path $latest.FullName 'reports/mutation-report.json'
           $jsonSummary = Join-Path $latest.FullName 'reports/mutation-summary.json'
@@ -60,12 +61,12 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: mutation-summary
-          path: StrykerOutput/**/reports/mutation-summary.*
+          path: tests/FixPortal.Ci.Backend.Api.Tests/StrykerOutput/**/reports/mutation-summary.*
 
       - name: Upload mutation report
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: mutation-report
-          path: StrykerOutput/**
+          path: tests/FixPortal.Ci.Backend.Api.Tests/StrykerOutput/**
           if-no-files-found: error
