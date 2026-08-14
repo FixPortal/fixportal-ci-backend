@@ -10,7 +10,7 @@
 
 ## Global Constraints
 
-- Work only on `reviewer-findings-batch1` in the dedicated review worktree.
+- Work only on `reviewer-findings-batch22` in the dedicated review worktree.
 - Assert with AwesomeAssertions and match the existing test style.
 - Do not change review-connection truncation behavior; it is an acknowledged design choice.
 - Do not change secret-scanning pagination; a partial non-zero count cannot produce a false clean result.
