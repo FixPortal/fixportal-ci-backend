@@ -30,14 +30,13 @@
 - Modify: `docs/architecture/overview.md`
 - Modify: `docs/operator-handoff.md`
 
-- [ ] Extend the existing failed-refresh merge test with `ReadyToMerge = true`, prove it fails, then change `WithoutReviewSignals` to clear both `ReviewSignals` and `ReadyToMerge`.
+- [ ] Extend the existing failed-refresh merge test with `ReadyToMerge = true`, prove it fails, then change `WithoutHeadScopedReviewState` to clear both `ReviewSignals` and `ReadyToMerge`.
 - [ ] Extend the admin snapshot endpoint test to require `Cache-Control: private, no-store` and `Vary: X-Admin-Key`, prove it fails, then set those headers before authorization, matching the IDE endpoint pattern.
 - [ ] Add a two-page code-scanning test where page one is full and page two fails, prove the current method returns a misleading partial result, then return `null` for any failed page.
 - [ ] Remove the root README YAML frontmatter that GitHub renders as a table.
 - [ ] Correct living refresh intervals to 20 seconds and 150 seconds, CORS keys to `Cors:AllowedOrigins`, endpoint descriptions/routes, the active-scanning example, and troubleshooting timing.
 - [ ] Document the public projection, private admin endpoint, health endpoint, and IDE v1 snapshot/diagnosis endpoints concisely with their authentication/cache contracts.
 - [ ] Correct the living architecture overview for current review/merge/IDE flows and remove brittle generated degree counts without rewriting historical records or changing diagram format.
-- [ ] Correct the operator handoff to describe separate backend/frontend images, anonymous pulls of the currently public GHCR images, portable repository-relative links, and support for either a GitHub organization or user owner.
+- [ ] Correct the operator handoff to describe separate backend/frontend images, anonymous pulls of the currently public GHCR images, portable repository-relative links, and GitHub organization ownership.
 - [ ] Run CSharpier check, the full test suite with NuGet audit disabled only if the private-feed audit endpoint remains unreachable, and a Release build.
 - [ ] Commit the completed task locally; do not push.
-

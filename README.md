@@ -129,9 +129,10 @@ against a local API, see [fixportal-ci-frontend](https://github.com/FixPortal/fi
 
 ## Configuration
 
-All settings live in `src/FixPortal.Ci.Backend.Api/appsettings.json` under
-`GitHub`, `Dashboard`, `ReviewSignals`, `MergeState`, `Admin`, `IdeIntegration`,
-and `Cors`. The one most forks change is
+Settings are bound from configuration. `src/FixPortal.Ci.Backend.Api/appsettings.json`
+supplies the `GitHub`, `Dashboard`, and `ReviewSignals` defaults; `MergeState`,
+`Admin`, `IdeIntegration`, and `Cors` use code defaults unless host configuration
+sets them. The one most forks change is
 `GitHub:Owner`. Any value can be overridden by an environment variable using
 `__` for `:` (e.g. `GitHub__Token`). The full table — owner, token, refresh cadences, archived/
 reusable/CodeQL filters, metrics, merged-PR tracking, and job lanes — is
