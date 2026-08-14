@@ -177,9 +177,9 @@ builder.Services.AddSingleton<PerRepoCache<MergedPullRequest>>();
 // Metrics/Deploys/Packages/LastMergedPr — so it cannot. MergeWithPrevious CAN: it
 // substitutes a failed repo's whole prior RepositorySnapshot, PullRequests included,
 // and chains it forward every cycle, which would outlive this TTL entirely; it
-// therefore strips ReviewSignals from anything it reinstates (see
-// DashboardRefreshService.WithoutReviewSignals). With both closed, an expired entry
-// genuinely produces ReviewSignals = null rather than persisting through the
+// therefore strips head-scoped review state from anything it reinstates (see
+// DashboardRefreshService.WithoutHeadScopedReviewState). With both closed, an expired entry
+// genuinely produces no review-derived state rather than persisting through the
 // "ineffective TTL" path the comment below documents for the job-lane caches.
 builder.Services.AddSingleton(sp =>
 {

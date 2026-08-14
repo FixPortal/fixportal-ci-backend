@@ -46,6 +46,30 @@ public class SnapshotRestoreServiceTests
             null
         );
 
+    private static DashboardSnapshot SnapshotWithHeadScopedReviewState()
+    {
+        var snapshot = SnapshotWithPrivateRepo();
+        var publicRepo = snapshot.Repositories[0] with
+        {
+            PullRequests =
+            [
+                new PullRequest(
+                    181,
+                    "Review-derived state must not survive restore",
+                    "author",
+                    "https://github.com/FixPortal/public-repo/pull/181",
+                    false,
+                    Instant.FromUtc(2026, 6, 1, 0, 0),
+                    [new ReviewSignal("Gitar", ReviewSignalState.Clean, null, null)]
+                )
+                {
+                    ReadyToMerge = true,
+                },
+            ],
+        };
+        return snapshot with { Repositories = [publicRepo, snapshot.Repositories[1]] };
+    }
+
     [Fact]
     public async Task StartingAsync_should_re_derive_the_public_view_and_exclude_private_repos()
     {
@@ -69,6 +93,29 @@ public class SnapshotRestoreServiceTests
             _ = state.Public.Should().NotBeNull();
             _ = state.Public!.Repositories.Should().ContainSingle(r => r.Name == "public-repo");
             _ = state.Public.Repositories.Should().NotContain(r => r.Name == "private-repo");
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public async Task StartingAsync_should_strip_head_scoped_review_state_from_a_persisted_snapshot()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
+        var store = new FileDashboardSnapshotStore(path);
+        await store.SaveAsync(SnapshotWithHeadScopedReviewState(), TestContext.Current.CancellationToken);
+        try
+        {
+            var state = new DashboardSnapshotState();
+            var sut = new SnapshotRestoreService(store, state, NullLogger<SnapshotRestoreService>.Instance);
+
+            await sut.StartingAsync(TestContext.Current.CancellationToken);
+
+            var pullRequest = state.Current!.Repositories[0].PullRequests.Should().ContainSingle().Which;
+            _ = pullRequest.ReviewSignals.Should().BeNull();
+            _ = pullRequest.ReadyToMerge.Should().BeNull();
         }
         finally
         {

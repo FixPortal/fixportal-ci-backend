@@ -22,9 +22,19 @@ public sealed class SnapshotRestoreService(
             var restored = await store.LoadAsync(cancellationToken);
             if (restored is not null)
             {
+                var sanitized = restored with
+                {
+                    Repositories =
+                    [
+                        .. restored.Repositories.Select(DashboardRefreshService.WithoutHeadScopedReviewState),
+                    ],
+                };
                 // Prefer the persisted public trend (accurate, public-only); fall
                 // back to the lossy reclassification for pre-PublicCiTrend snapshots.
-                state.Update(restored, DashboardSnapshotState.ComputePublicSnapshot(restored, restored.PublicCiTrend));
+                state.Update(
+                    sanitized,
+                    DashboardSnapshotState.ComputePublicSnapshot(sanitized, sanitized.PublicCiTrend)
+                );
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
