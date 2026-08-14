@@ -35,8 +35,10 @@ public static class DashboardEndpoints
         // the key is absent, wrong, or not configured (fail-closed).
         _ = endpoints.MapGet(
             "/api/dashboard/snapshot/admin",
-            (HttpRequest request, DashboardSnapshotState state, IOptions<AdminOptions> admin) =>
+            (HttpRequest request, HttpResponse response, DashboardSnapshotState state, IOptions<AdminOptions> admin) =>
             {
+                response.Headers.CacheControl = "private, no-store";
+                response.Headers.Vary = "X-Admin-Key";
                 var configured = admin.Value.AdminKey;
                 var provided = request.Headers["X-Admin-Key"].FirstOrDefault() ?? "";
                 if (

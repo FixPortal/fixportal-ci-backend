@@ -12,7 +12,8 @@ The backend for a read-only, **org-wide** CI/CD status board. Point it at a
 GitHub org and it auto-discovers every non-archived repo and workflow, polls the
 GitHub Actions API **server-side** with a read-only PAT, and exposes one snapshot
 of build / deploy / package / PR / code-metrics signals over
-`GET /api/dashboard/snapshot`. A single deployable ASP.NET Core **minimal API**
+`GET /api/dashboard/snapshot`. That anonymous endpoint is the public projection;
+the private admin and IDE contracts are separately authenticated. A single deployable ASP.NET Core **minimal API**
 on .NET 10, **no database** — all state is an in-memory snapshot with a
 last-known-good file backstop. The board UI is a separate concern: any client
 can fetch this API cross-origin — the open-source `@fix-portal/ci-frontend`
@@ -24,7 +25,7 @@ board is one such UI.
 GitHub Actions API  (read-only PAT)
         │  poll / clone
         ▼
-  Integrations/GitHub/GitHubOrgClient ...... the single upstream gateway (god node, ~28 edges)
+  Integrations/GitHub/GitHubOrgClient ...... the single upstream gateway
         │   repos · workflows · runs · jobs · merged PRs
         │   wrapped by the rate-limit-conservation layer:
         │     GitHubETagStore (conditional GET / If-None-Match → 304)
@@ -33,16 +34,19 @@ GitHub Actions API  (read-only PAT)
         ▼
   Dashboard/HostedServices/*  ............... background workers, independent cadences
         RepoEnrichmentWorker (abstract base)
-          ├─ DashboardRefreshWorker      60s  → DashboardRefreshService builds snapshot + 24h CI trend
+          ├─ DashboardRefreshWorker      20s  → DashboardRefreshService builds snapshot + 24h CI trend
           ├─ MetricsEnrichmentWorker     12h  → LizardScanner (NLOC / cyclomatic complexity)
-          ├─ MergedPrEnrichmentWorker     5m  → org's most-recently-merged PR
-          └─ JobLaneEnrichmentWorker      —   → named lanes (Deploys / Packages) from matching jobs
+          ├─ MergedPrEnrichmentWorker    150s → org's most-recently-merged PR
+          ├─ JobLaneEnrichmentWorker     150s → named lanes (Deploys / Packages) from matching jobs
+          ├─ ReviewSignalEnrichmentWorker 150s → incremental PR reviewer/scanning signals
+          └─ MergeStateEnrichmentWorker  120s → GitHub merge verdicts for open PRs
         │   write_to
         ▼
   Dashboard/Services/DashboardSnapshotState  in-memory last-known-good snapshot
         │   .ComputePublicSnapshot() ........ privacy projection — excludes private repos
         ▼
-  Dashboard/Endpoints/DashboardEndpoints ... GET /api/dashboard/snapshot (the contract)
+  Dashboard/Endpoints/DashboardEndpoints ... public snapshot, private admin snapshot, health
+  Ide/IdeEndpoints ........................ authenticated IDE v1 snapshot + diagnosis
         │   non-API routes → 301 redirect to www.fixportal.org/ci
         ▼
   board UI (any snapshot consumer) ......... fetches this API cross-origin (CORS)
@@ -56,24 +60,33 @@ data immediately instead of blanking.
 
 ## Load-bearing seams (what the graph gets right)
 
-- **`GitHubOrgClient` is the genuine god node** (~28 edges) — and unlike the
-  false-gods in the frontends, this one is real: it is the *single* gateway to
-  every GitHub Actions API call. Every worker depends on it. It is also the
-  largest class; graphify flags low cohesion (0.08) and suggests splitting — a
-  legitimate refactor target, not a measurement artifact.
+- **`GitHubOrgClient` is the central upstream gateway**: it is the *single*
+  gateway to every GitHub Actions API call. Every worker depends on it. It is
+  also the largest class; its breadth is a legitimate refactor target, not a
+  measurement artifact.
 - **The rate-limit-conservation layer is the reason this scales to a whole org.**
   ETag conditional GETs (`GitHubETagStore`) + TTL inventory cache
   (`GitHubInventoryCache`, single-flight so concurrent callers collapse into one
-  fetch) + `PerRepoCache`. Without these, polling N repos every 60s would exhaust
+  fetch) + `PerRepoCache`. Without these, polling N repos every 20s would exhaust
   the GitHub rate limit. This is rationale-backed in `operator-handoff.md`.
 - **`DashboardSnapshotState` + `ComputePublicSnapshot()` is the trust boundary.**
   The in-memory snapshot holds everything; the public projection strips private
   repos before the anonymous endpoint serves it. Get this projection wrong and
   private repo names leak. It is the security-critical method in the service.
+- **Review and merge facts are intentionally separate.** `ReviewSignalEnrichmentWorker`
+  is enabled only with a reviewer roster and incrementally refreshes changed PRs;
+  `MergeStateEnrichmentWorker` always refreshes GitHub's merge verdict for open
+  PRs. `DashboardRefreshService` combines both cached slices with the fresh PR
+  list, and removes both review pills and ready-to-merge verdicts when a failed
+  refresh republishes last-known-good data.
+- **IDE data is a private projection, not an alternate public board.**
+  `IdeEndpoints` authenticates `X-CI-IDE-Key` before projecting the snapshot or
+  reading a diagnosis. Both routes use `no-store` and vary by that key; the IDE
+  snapshot additionally provides an ETag for conditional requests.
 - **The enrichment-worker pattern is the extension seam.** `RepoEnrichmentWorker`
-  is the abstract base; each cadenced worker inherits it and writes its slice into
-  the shared snapshot on its own timer. Adding a new signal = a new worker, no
-  change to the endpoint or the refresh loop.
+  is the abstract base; each cadenced worker refreshes its cached slice on its
+  own timer, and the refresh service publishes the combined snapshot. Adding a
+  new signal = a new worker, no change to the endpoint contract.
 - **Last-known-good is a deliberate resilience choice** — a failed refresh keeps
   the prior snapshot rather than blanking the board. Rationale-backed.
 
@@ -99,8 +112,8 @@ data immediately instead of blanking.
 
 ## Layers (from the understand-anything graph)
 
-1. **API Layer** — `Program.cs` (composition root: DI wiring, CORS, non-API redirect) + `DashboardEndpoints`
-2. **Background Workers** — `RepoEnrichmentWorker` base + the 4 cadenced workers + `SnapshotRestoreService`
+1. **API Layer** — `Program.cs` (composition root: DI wiring, CORS, non-API redirect) + `DashboardEndpoints` + `IdeEndpoints`
+2. **Background Workers** — `RepoEnrichmentWorker` base + dashboard, metrics, merged-PR, job-lane, review-signal and merge-state workers + `SnapshotRestoreService`
 3. **Domain Services** — `DashboardRefreshService`, `DashboardSnapshotState`, `FileDashboardSnapshotStore`/`IDashboardSnapshotStore`, `GitHubInventoryCache`, `PerRepoCache`, `DashboardModels`
 4. **External Integrations** — `GitHubOrgClient` + `GitHubETagStore` (GitHub); `LizardScanner` + `ProcessRunner` (Lizard)
 5. **Configuration** — strongly-typed Options (`GitHubOptions`, `DashboardOptions`, `JobLaneOptions`, `AdminOptions`) + appsettings + csproj/sln/build props

@@ -426,6 +426,20 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     }
 
     [Fact]
+    public async Task Admin_snapshot_should_prevent_shared_cache_reuse_before_authorization()
+    {
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey);
+
+        var response = await client.GetAsync("/api/dashboard/snapshot/admin", TestContext.Current.CancellationToken);
+
+        var cacheControl = response.Headers.CacheControl;
+        _ = cacheControl.Should().NotBeNull();
+        _ = cacheControl!.Private.Should().BeTrue();
+        _ = cacheControl.NoStore.Should().BeTrue();
+        _ = response.Headers.Vary.Should().ContainSingle().Which.Should().Be("X-Admin-Key");
+    }
+
+    [Fact]
     public async Task Admin_snapshot_should_return_401_when_the_key_is_wrong()
     {
         var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey);

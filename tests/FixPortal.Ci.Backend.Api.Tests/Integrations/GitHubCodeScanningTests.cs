@@ -102,6 +102,24 @@ public class GitHubCodeScanningTests
         _ = handler.Urls[1].Should().Contain("page=2");
     }
 
+    [Fact]
+    public async Task Returns_unavailable_when_a_later_code_scanning_page_cannot_be_read()
+    {
+        var firstPage =
+            "["
+            + string.Join(",", Enumerable.Repeat("""{"most_recent_instance":{"ref":"refs/pull/181/head"}}""", 100))
+            + "]";
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([JsonOk(firstPage), new HttpResponseMessage(HttpStatusCode.NotFound)])
+        );
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+
+        var counts = await CreateClient(http).GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
+
+        _ = counts.Should().BeNull();
+        _ = handler.Urls.Should().HaveCount(2);
+    }
+
     private static HttpResponseMessage JsonOk(string body) =>
         new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
 

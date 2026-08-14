@@ -362,7 +362,10 @@ public sealed class DashboardRefreshService(
             ? prior
             : prior with
             {
-                PullRequests = [.. prior.PullRequests.Select(pr => pr with { ReviewSignals = null })],
+                PullRequests =
+                [
+                    .. prior.PullRequests.Select(pr => pr with { ReviewSignals = null, ReadyToMerge = null }),
+                ],
             };
 
     // On cold start the enrichment caches (metrics/deploys/packages) are empty until the
