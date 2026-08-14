@@ -1,7 +1,7 @@
 # Operator Handoff
 
 This backend polls the **GitHub Actions API for every repository owned by a
-GitHub organization or user**, normalizes the results into a JSON snapshot, and
+GitHub organization**, normalizes the results into a JSON snapshot, and
 serves the API. It is read-only with deep links out to the underlying runs.
 
 The dashboard is two separately published images: this backend API and the
@@ -12,9 +12,10 @@ development, use the frontend repository and point it at the backend on
 
 ## Configuration model
 
-Every setting lives in `appsettings.json` under `GitHub`, `Dashboard`,
-`ReviewSignals`, `MergeState`, `Admin`, `IdeIntegration`, or `Cors`. A host
-overrides any value with an environment variable whose name is
+Settings are bound from configuration. `appsettings.json` supplies the
+`GitHub`, `Dashboard`, and `ReviewSignals` defaults; `MergeState`, `Admin`,
+`IdeIntegration`, and `Cors` use code defaults unless host configuration sets
+them. A host overrides any value with an environment variable whose name is
 the config path with `:` replaced by `__` (double underscore) — e.g.
 `GitHub:Token` becomes `GitHub__Token`. The Azure deployment uses environment
 variables for its secrets, owner, refresh cadence, allowed origins, and production
@@ -23,7 +24,7 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 
 | Setting | Default | What it does |
 |---|---|---|
-| `GitHub:Owner` | `FixPortal` | The GitHub organization or user whose repositories are enumerated. **The one setting most forks change.** |
+| `GitHub:Owner` | `FixPortal` | The GitHub organization whose repositories are enumerated. **The one setting most forks change.** |
 | `GitHub:Token` | *(empty)* | Fine-grained read-only PAT (see **GitHub**). Required — the app fails fast at startup if empty. |
 | `Dashboard:RefreshSeconds` | `20` | Snapshot refresh cadence. Must be > 0. The collector issues conditional GETs (see **GitHub**), so a tight cadence stays well within the rate budget. |
 | `Dashboard:SnapshotPath` | `App_Data/dashboard-snapshot.json` | Last-known-good snapshot, relative to the content root. |
@@ -50,7 +51,7 @@ The collector needs a **fine-grained, read-only** Personal Access Token.
 1. Create it: GitHub → your avatar → **Settings** → **Developer settings** →
    **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.
 2. Scope it:
-   - **Resource owner** → the organization or user that hosts the repos (the
+   - **Resource owner** → the organization that hosts the repos (the
      `GitHub:Owner` value).
    - **Repository access** → **All repositories** (so new repos are picked up
      automatically), or **Only select repositories** to limit the board.
@@ -114,7 +115,7 @@ Or set them in the shell instead:
 # The classic or fine-grained PAT used by the C# application to read repository metrics and API data
 $env:GITHUB_TOKEN = "your_github_pat"  
 
-# The target GitHub organization or user to query (e.g., "FixPortal" or "octocat")
+# The target GitHub organization to query (e.g., "FixPortal")
 $env:GITHUB_OWNER = "FixPortal"        
 
 docker compose up -d

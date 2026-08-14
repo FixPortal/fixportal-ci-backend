@@ -75,8 +75,8 @@ data immediately instead of blanking.
   private repo names leak. It is the security-critical method in the service.
 - **Review and merge facts are intentionally separate.** `ReviewSignalEnrichmentWorker`
   is enabled only with a reviewer roster and incrementally refreshes changed PRs;
-  `MergeStateEnrichmentWorker` always refreshes GitHub's merge verdict for open
-  PRs. `DashboardRefreshService` combines both cached slices with the fresh PR
+  `MergeStateEnrichmentWorker`, enabled by default, refreshes GitHub's merge
+  verdict for open PRs. `DashboardRefreshService` combines both cached slices with the fresh PR
   list, and removes both review pills and ready-to-merge verdicts when a failed
   refresh republishes last-known-good data.
 - **IDE data is a private projection, not an alternate public board.**
