@@ -1,0 +1,171 @@
+{
+  "refreshedAt": "2026-06-01T12:30:00Z",
+  "org": "FixPortal",
+  "repositories": [
+    {
+      "name": "public-repo",
+      "htmlUrl": "https://github.com/FixPortal/public-repo",
+      "private": false,
+      "workflows": [
+        {
+          "name": "CI",
+          "file": "ci.yml",
+          "state": "success",
+          "lastRun": {
+            "status": "completed",
+            "conclusion": "success",
+            "htmlUrl": "https://github.com/FixPortal/public-repo/actions/runs/101",
+            "title": "CI #101",
+            "runNumber": 101,
+            "branch": "main",
+            "event": "push",
+            "updatedAt": "2026-06-01T12:00:00Z",
+            "repository": "FixPortal/public-repo",
+            "workflowFile": ".github/workflows/ci.yml",
+            "providerRunId": 101,
+            "runAttempt": 2,
+            "headSha": "abc123"
+          },
+          "recentRuns": [
+            {
+              "status": "completed",
+              "conclusion": "success",
+              "htmlUrl": "https://github.com/FixPortal/public-repo/actions/runs/101",
+              "title": "CI #101",
+              "runNumber": 101,
+              "branch": "main",
+              "event": "push",
+              "updatedAt": "2026-06-01T12:00:00Z",
+              "repository": "FixPortal/public-repo",
+              "workflowFile": ".github/workflows/ci.yml",
+              "providerRunId": 101,
+              "runAttempt": 2,
+              "headSha": "abc123"
+            },
+            {
+              "status": "completed",
+              "conclusion": "failure",
+              "htmlUrl": "https://github.com/FixPortal/public-repo/actions/runs/100",
+              "title": "CI #100",
+              "runNumber": 100,
+              "branch": "feature/widget",
+              "event": "pull_request",
+              "updatedAt": "2026-06-01T11:00:00Z",
+              "repository": "FixPortal/public-repo",
+              "workflowFile": ".github/workflows/ci.yml",
+              "providerRunId": 100,
+              "runAttempt": 1,
+              "headSha": "def456"
+            }
+          ]
+        }
+      ],
+      "pullRequests": [
+        {
+          "number": 42,
+          "title": "Add dashboard contract fixture",
+          "author": "alice",
+          "htmlUrl": "https://github.com/FixPortal/public-repo/pull/42",
+          "isDraft": false,
+          "createdAt": "2026-06-01T10:00:00Z",
+          "reviewSignals": [
+            {
+              "name": "CodeRabbit",
+              "state": "clean",
+              "count": 0,
+              "htmlUrl": "https://github.com/FixPortal/public-repo/pull/42#pullrequestreview-1"
+            },
+            {
+              "name": "CodeQL",
+              "state": "outstanding",
+              "count": 2,
+              "htmlUrl": null
+            },
+            {
+              "name": "Gitar",
+              "state": "pending",
+              "count": null,
+              "htmlUrl": null
+            },
+            {
+              "name": "Optional",
+              "state": "disabled",
+              "count": null,
+              "htmlUrl": null
+            }
+          ],
+          "readyToMerge": false
+        }
+      ],
+      "metrics": {
+        "nloc": 1234,
+        "avgComplexity": 4.5,
+        "functionCount": 200,
+        "highComplexityCount": 3,
+        "computedAt": "2026-06-01T09:00:00Z"
+      },
+      "deploys": [
+        {
+          "workflow": "Deploy",
+          "name": "deploy-production",
+          "state": "running",
+          "htmlUrl": "https://github.com/FixPortal/public-repo/actions/runs/101/job/1",
+          "updatedAt": "2026-06-01T12:15:00Z"
+        }
+      ],
+      "packages": [
+        {
+          "workflow": "Package",
+          "name": "publish-nuget",
+          "state": "failure",
+          "htmlUrl": "https://github.com/FixPortal/public-repo/actions/runs/100/job/2",
+          "updatedAt": "2026-06-01T11:15:00Z"
+        }
+      ],
+      "lastMergedPr": {
+        "number": 41,
+        "title": "Ship package",
+        "author": "bob",
+        "repo": "public-repo",
+        "htmlUrl": "https://github.com/FixPortal/public-repo/pull/41",
+        "mergedAt": "2026-06-01T08:00:00Z"
+      }
+    }
+  ],
+  "summary": [
+    { "key": "repos", "count": 1 },
+    { "key": "workflows", "count": 1 },
+    { "key": "failing", "count": 0 },
+    { "key": "running", "count": 0 },
+    { "key": "no-ci", "count": 0 },
+    { "key": "open-prs", "count": 1 },
+    { "key": "nloc-fixportal", "count": 1234 },
+    { "key": "nloc-quickfixn", "count": 0 },
+    { "key": "deploys", "count": 1 },
+    { "key": "packages", "count": 1 },
+    { "key": "deploys-failing", "count": 0 },
+    { "key": "deploys-running", "count": 1 },
+    { "key": "packages-failing", "count": 1 }
+  ],
+  "lastMergedPr": {
+    "number": 41,
+    "title": "Ship package",
+    "author": "bob",
+    "repo": "public-repo",
+    "htmlUrl": "https://github.com/FixPortal/public-repo/pull/41",
+    "mergedAt": "2026-06-01T08:00:00Z"
+  },
+  "ciTrend": [
+    {
+      "bucketStart": "2026-06-01T10:00:00Z",
+      "state": "failing",
+      "isBackfilled": false
+    },
+    {
+      "bucketStart": "2026-06-01T11:00:00Z",
+      "state": "passing",
+      "isBackfilled": true
+    }
+  ],
+  "publicCiTrend": null
+}
