@@ -1,12 +1,3 @@
----
-title: FixPortal CI Dashboard — Backend API
-date: 2026-05-31
-status: active
-repo: FixPortal/fixportal-ci-backend
-stack: .NET 10 · ASP.NET Core minimal API · NodaTime
-license: Apache-2.0
----
-
 ![Build](https://github.com/FixPortal/fixportal-ci-backend/actions/workflows/ci.yml/badge.svg)
 ![License](https://img.shields.io/github/license/FixPortal/fixportal-ci-backend)
 
@@ -52,12 +43,12 @@ open-source `@fix-portal/ci-frontend`) fetches this API cross-origin.
 graph LR
     subgraph App["ASP.NET Core API"]
         direction TB
-        RW["DashboardRefreshWorker (60s)<br/>workflows + states"]
+        RW["DashboardRefreshWorker (20s)<br/>workflows + states"]
         MW["MetricsEnrichmentWorker (12h)<br/>Lizard NLOC / CCN"]
-        PW["MergedPrEnrichmentWorker (5m)"]
-        JW["JobLaneEnrichmentWorker ×N<br/>deploys / packages"]
+        PW["MergedPrEnrichmentWorker (150s)"]
+        JW["JobLaneEnrichmentWorker ×N (150s)<br/>deploys / packages"]
         SNAP[("In-memory snapshot<br/>+ last-known-good file")]
-        API["/api/dashboard/snapshot/"]
+        API["public snapshot + private admin API"]
         RW --> SNAP
         MW --> SNAP
         PW --> SNAP
@@ -139,7 +130,8 @@ against a local API, see [fixportal-ci-frontend](https://github.com/FixPortal/fi
 ## Configuration
 
 All settings live in `src/FixPortal.Ci.Backend.Api/appsettings.json` under
-`GitHub`, `Dashboard` and `ReviewSignals`. The one most forks change is
+`GitHub`, `Dashboard`, `ReviewSignals`, `MergeState`, `Admin`, `IdeIntegration`,
+and `Cors`. The one most forks change is
 `GitHub:Owner`. Any value can be overridden by an environment variable using
 `__` for `:` (e.g. `GitHub__Token`). The full table — owner, token, refresh cadences, archived/
 reusable/CodeQL filters, metrics, merged-PR tracking, and job lanes — is
@@ -183,13 +175,12 @@ FixPortal's worked example, set via deployment configuration:
     { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high" },
     { "Name": "Gitar", "BotLogin": "gitar-bot" },
     { "Name": "CodeQL", "Source": "CodeScanning", "PublicOnly": true },
-    { "Name": "Code Quality", "BotLogin": "github-code-quality", "CodeScanningCheckCountsAsParticipation": true, "PublicOnly": true },
     { "Name": "Secret Scanning", "Source": "SecretScanning", "PublicOnly": true }
   ]
 }
 ```
 
-The last three carry `PublicOnly` because GitHub's scanning products are paid on
+The last two carry `PublicOnly` because GitHub's scanning products are paid on
 private repositories and were switched off org-wide on 2026-08-04. Their
 endpoints answer 403/404 on a private repo, which this worker reads as
 `Pending` — a state such a repo can never leave, so every private pull request
@@ -273,11 +264,11 @@ dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build
 | Symptom | Cause | Fix |
 |---|---|---|
 | Backend container exits at startup with `OptionsValidationException: GitHub:Owner must be configured` (frontend stays up) | `GITHUB_TOKEN` / `GITHUB_OWNER` not set — no `.env` in the project directory and nothing exported | `cp .env.example .env` and fill both in, then `docker compose up -d` |
-| Snapshot returns stale data after a workflow run | Refresh worker polls on a 60 s cadence; run completed between polls | Wait up to 60 s, or restart to force an immediate poll |
+| Snapshot returns stale data after a workflow run | Refresh worker polls on a 20 s cadence; run completed between polls | Wait up to 20 s, or restart to force an immediate poll |
 | Snapshot endpoint returns `204 No Content` | No snapshot yet — the first poll has not completed, or every poll has failed | Allow ~5 s after startup; if it persists, check the container logs for `GitHubAuthException` |
 | `MetricsEnrichmentWorker` logs `git clone` errors | PAT lacks **Contents** read permission | Re-issue PAT with Contents (read) and update `GitHub__Token` |
 | PRs not appearing | PAT lacks **Pull requests** read permission | Re-issue PAT with Pull requests (read) and update `GitHub__Token` |
-| CORS errors in the browser | Board UI origin not in `AllowedOrigins` | Add origin to `Dashboard:AllowedOrigins` in `appsettings.json` or via `Dashboard__AllowedOrigins__0` env var |
+| CORS errors in the browser | Board UI origin not in `Cors:AllowedOrigins` | Add origin via `Cors__AllowedOrigins__0` (or the equivalent `Cors:AllowedOrigins` configuration key) |
 | `401 Unauthorized` from GitHub API | Token expired, revoked, or the value is not a GitHub PAT (fine-grained tokens start `github_pat_`, classic ones `ghp_`) | Generate a new fine-grained PAT and update the secret or env var |
 
 ## Contributing
@@ -304,11 +295,10 @@ would have read to justify re-enabling it.
 
 One real consequence survives the correction, and it is a **known gap, not a
 resolved point**: the board's Code Quality review pill reads this product's
-review threads, so with the product not-configured that pill now has no source
-on any public repository. `CodeScanningCheckCountsAsParticipation` describes how
-the reviewer behaved while it was enabled and is retained for that reason; it
-has no live input today. The `PublicOnly` reviewer entry likewise no longer
-resolves to a running product.
+review threads, so with the product not-configured that pill has no source on
+any public repository. It is intentionally omitted from the active example
+above; `CodeScanningCheckCountsAsParticipation` documents how it behaved while
+enabled and has no live input today.
 
 Re-enabling Code Quality anywhere costs money and needs an explicit decision on
 the current charges. Do not re-enable it on free-tier grounds.
@@ -348,5 +338,9 @@ and `:sha-<full commit SHA>`.
 
 | Endpoint | Description |
 |---|---|
-| `GET /api/dashboard/snapshot` | Full org snapshot — workflows, PRs, metrics, job lanes |
+| `GET /api/dashboard/snapshot` | Anonymous public projection: private repositories are removed server-side. CORS applies; returns `204` before a snapshot exists. |
+| `GET /api/dashboard/snapshot/admin` | Full private-inclusive snapshot. Requires `X-Admin-Key`; every response is `Cache-Control: private, no-store` and `Vary: X-Admin-Key`. |
+| `GET /api/health` | Anonymous credential health: `200` healthy or `503` degraded, without exposing the underlying GitHub error. |
+| `GET /api/ide/v1/snapshot` | Full IDE projection. Requires `X-CI-IDE-Key`; `Cache-Control: no-store`, `Vary: X-CI-IDE-Key`, and supports ETag conditional requests. |
+| `GET /api/ide/v1/repositories/{repository}/runs/{runId}/diagnosis` | Failure diagnosis for an IDE snapshot run. Requires `X-CI-IDE-Key`; `Cache-Control: no-store` and `Vary: X-CI-IDE-Key`. |
 | `GET /*` (non-API) | 301 redirect to `https://www.fixportal.org/ci` |

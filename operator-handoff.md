@@ -1,20 +1,20 @@
 # Operator Handoff
 
-This dashboard is a single ASP.NET Core web app that polls the **GitHub Actions
-API for every repository in a GitHub org**, normalizes the results into a JSON
-snapshot, and serves that snapshot to a React UI. It is read-only with deep
-links out to the underlying runs.
+This backend polls the **GitHub Actions API for every repository owned by a
+GitHub organization or user**, normalizes the results into a JSON snapshot, and
+serves the API. It is read-only with deep links out to the underlying runs.
 
-The published app is self-contained: `dotnet publish` builds the Vite UI and
-bundles it into the app's `wwwroot`, so one deployment serves both the dashboard
-UI (at `/`) and the API (at `/api/...`). No separate frontend host is required.
-Local development instead runs the Vite dev server (`npm run dev`), which proxies
-`/api` to the running API on `http://localhost:5049` (the http launch profile).
+The dashboard is two separately published images: this backend API and the
+`fixportal-ci-frontend` board UI. Docker Compose runs both; the frontend's nginx
+proxies `/api` to the backend over the Compose network. For frontend source
+development, use the frontend repository and point it at the backend on
+`http://localhost:5049`.
 
 ## Configuration model
 
-Every setting lives in `appsettings.json` under the `GitHub`, `Dashboard`, or
-`ReviewSignals` section. A host overrides any value with an environment variable whose name is
+Every setting lives in `appsettings.json` under `GitHub`, `Dashboard`,
+`ReviewSignals`, `MergeState`, `Admin`, `IdeIntegration`, or `Cors`. A host
+overrides any value with an environment variable whose name is
 the config path with `:` replaced by `__` (double underscore) — e.g.
 `GitHub:Token` becomes `GitHub__Token`. The Azure deployment uses environment
 variables for its secrets, owner, refresh cadence, allowed origins, and production
@@ -23,7 +23,7 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 
 | Setting | Default | What it does |
 |---|---|---|
-| `GitHub:Owner` | `FixPortal` | The org/owner whose repositories are enumerated. **The one setting most forks change.** |
+| `GitHub:Owner` | `FixPortal` | The GitHub organization or user whose repositories are enumerated. **The one setting most forks change.** |
 | `GitHub:Token` | *(empty)* | Fine-grained read-only PAT (see **GitHub**). Required — the app fails fast at startup if empty. |
 | `Dashboard:RefreshSeconds` | `20` | Snapshot refresh cadence. Must be > 0. The collector issues conditional GETs (see **GitHub**), so a tight cadence stays well within the rate budget. |
 | `Dashboard:SnapshotPath` | `App_Data/dashboard-snapshot.json` | Last-known-good snapshot, relative to the content root. |
@@ -36,6 +36,8 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 | `Dashboard:MergedPrRefreshSeconds` | `150` | Merged-PR cadence (2.5 min). |
 | `Dashboard:JobLanes` | deploys, packages | Named lanes that surface matching workflow **jobs** (by name pattern) as their own status chips. |
 | `ReviewSignals:Reviewers` | *(empty)* | Per-reviewer status pills (CodeRabbit, Gitar, CodeQL, …) on each open PR. Empty by default — the feature is off and issues no GitHub requests until reviewers are configured. Full option reference: **[README.md § Review signals](README.md#review-signals-reviewsignals)**. |
+| `Cors:AllowedOrigins` | *(empty)* | Origins allowed to read the anonymous public snapshot; configure as `Cors__AllowedOrigins__0`, etc. |
+| `Admin:AdminKey` / `IdeIntegration:ApiKey` | *(empty)* | Shared secrets for the private admin snapshot and IDE v1 endpoints. Keep them out of source. |
 
 There is **no hardcoded repository list** — the board auto-discovers every repo
 under `GitHub:Owner` and every workflow in each, so new repos and workflows
@@ -48,8 +50,8 @@ The collector needs a **fine-grained, read-only** Personal Access Token.
 1. Create it: GitHub → your avatar → **Settings** → **Developer settings** →
    **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.
 2. Scope it:
-   - **Resource owner** → the org/owner that hosts the repos (the `GitHub:Owner`
-     value).
+   - **Resource owner** → the organization or user that hosts the repos (the
+     `GitHub:Owner` value).
    - **Repository access** → **All repositories** (so new repos are picked up
      automatically), or **Only select repositories** to limit the board.
    - **Permissions** → **Repository permissions**, all *Read-only*:
@@ -86,20 +88,11 @@ server-side in the background collector.
 
 ## Running locally via Docker Compose
 
-Both the frontend and backend can be run locally using the configuration in [docker-compose.yml](file:///D:/fix-portal/fixportal-ci-backend/docker-compose.yml). 
+Both the frontend and backend can be run locally with
+[docker-compose.yml](docker-compose.yml). The current public GHCR images can be
+pulled anonymously; no `docker login` or package-read token is required.
 
-### 1. Authenticate with GitHub Container Registry (GHCR)
-The package images are hosted privately on GHCR. Fine-grained PATs are problematic with GHCR; you must use a **GitHub Classic PAT** with the **`read:packages`** scope enabled.
-
-Log your local Docker daemon into `ghcr.io` using your **personal GitHub username** (e.g. `chris-fixportal`, **not** the organization name `FixPortal`) and your Classic PAT. On Windows, you can log in securely (without leaking the PAT in your terminal history) using this PowerShell command:
-
-```powershell
-$pat = Read-Host "GitHub classic PAT with read:packages" -AsSecureString
-$plain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($pat))
-$plain | docker login ghcr.io -u YOUR_PERSONAL_GITHUB_USERNAME_NOT_THE_ORG --password-stdin
-```
-
-### 2. Configure Environment and Run
+### Configure Environment and Run
 Once authenticated, configure the collector and start the containers. Both
 `GITHUB_TOKEN` and `GITHUB_OWNER` are **required** — the backend validates them at
 startup and exits immediately if either is missing, logging
@@ -117,14 +110,11 @@ docker compose up -d
 
 Or set them in the shell instead:
 
-> [!TIP]
-> **Token Reuse:** You can reuse the **same Classic PAT** for both pulling images and API requests. Just make sure to grant it the **`repo`** scope (or `read:org` / Actions read permissions) in addition to `read:packages`.
-
 ```powershell
 # The classic or fine-grained PAT used by the C# application to read repository metrics and API data
 $env:GITHUB_TOKEN = "your_github_pat"  
 
-# The target GitHub Organization/Owner to query (e.g., "FixPortal", NOT your personal username)
+# The target GitHub organization or user to query (e.g., "FixPortal" or "octocat")
 $env:GITHUB_OWNER = "FixPortal"        
 
 docker compose up -d
@@ -138,7 +128,7 @@ Both services publish on `127.0.0.1` only (`127.0.0.1:8082:8080` for the
 frontend, `127.0.0.1:5049:8080` for the backend) because the snapshot endpoint is
 unauthenticated and must not be offered to the LAN. If either host port is
 already taken, change the **host** side of the mapping in
-[docker-compose.yml](file:///D:/fix-portal/fixportal-ci-backend/docker-compose.yml)
+[docker-compose.yml](docker-compose.yml)
 — e.g. `"127.0.0.1:8083:8080"` — and keep the `127.0.0.1:` prefix. Do not drop it
 to bind on all interfaces.
 

@@ -89,7 +89,10 @@ public class DashboardRefreshServiceTests
                     false,
                     Instant.MinValue,
                     [new ReviewSignal("Gitar", ReviewSignalState.Clean, null, null)]
-                ),
+                )
+                {
+                    ReadyToMerge = true,
+                },
             ],
         };
         var prior = new DashboardSnapshot(Instant.MinValue, "FixPortal", [priorRepo], [], null);
@@ -98,6 +101,7 @@ public class DashboardRefreshServiceTests
 
         _ = merged[0].Workflows[0].State.Should().Be(SignalState.Success);
         _ = merged[0].PullRequests.Should().ContainSingle().Which.ReviewSignals.Should().BeNull();
+        _ = merged[0].PullRequests.Should().ContainSingle().Which.ReadyToMerge.Should().BeNull();
     }
 
     [Fact]

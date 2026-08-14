@@ -804,7 +804,7 @@ public sealed class GitHubOrgClient(
             // SendAsync maps 404 to default(T) — repo has scanning disabled entirely.
             if (batch is null)
             {
-                return page == 1 ? null : Bucket(all);
+                return null;
             }
 
             all.AddRange(batch);
