@@ -34,7 +34,7 @@ checks required by CI:
 dotnet tool restore
 dotnet csharpier format .
 dotnet build FixPortal.Ci.Backend.slnx --configuration Release
-dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build
+dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-build
 ```
 
 CI uses `dotnet csharpier check .` so it rejects unformatted C# without rewriting

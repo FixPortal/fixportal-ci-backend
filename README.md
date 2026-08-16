@@ -257,7 +257,7 @@ are required.
 dotnet tool restore
 dotnet csharpier check .
 dotnet build FixPortal.Ci.Backend.slnx --configuration Release
-dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build
+dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-build
 ```
 
 ## Troubleshooting
@@ -308,7 +308,7 @@ the current charges. Do not re-enable it on free-tier grounds.
 dotnet tool restore
 dotnet csharpier format .
 dotnet build FixPortal.Ci.Backend.slnx --configuration Release
-dotnet test FixPortal.Ci.Backend.slnx --configuration Release --no-build
+dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-build
 ```
 
 Merge style is **rebase-merge** — squash and merge commits are not used.
