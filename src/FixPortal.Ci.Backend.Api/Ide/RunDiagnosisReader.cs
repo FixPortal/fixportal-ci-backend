@@ -27,14 +27,14 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
     private const int MaximumTextBytes = 512 * 1024;
     private static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(15);
 
-    public async Task<RunDiagnosisReadResult> ReadAsync(string repository, long runId, CancellationToken ct)
+    public async Task<RunDiagnosisReadResult> ReadAsync(string repository, long runId, int attempt, CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(ProviderTimeout);
 
         try
         {
-            using var first = await gitHub.DownloadRunLogsAsync(httpClient, repository, runId, timeout.Token);
+            using var first = await gitHub.DownloadRunLogsAsync(httpClient, repository, runId, attempt, timeout.Token);
             if (first.StatusCode is HttpStatusCode.NotFound or HttpStatusCode.Gone)
             {
                 return new(RunDiagnosisReadStatus.Unavailable);
@@ -111,6 +111,14 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
             foreach (var entry in files)
             {
                 ValidateEntryName(entry.FullName);
+                // Delimit each entry: run-log zips are split per job/step, so without a
+                // header unrelated logs merge into one run-on stream and an excerpted
+                // stack trace can be attributed to the wrong step. The header is part of
+                // the hashed text and the excerpt, so TextSha256 authenticates it too.
+                var header = $"--- {entry.FullName} ---\n";
+                AppendUtf8(hash, header);
+                textBytes += Encoding.UTF8.GetByteCount(header);
+                AppendExcerpt(excerpt, ref excerptBytes, ref excerptClosed, header);
                 var read = await ReadEntryAsync(
                     entry,
                     MaximumExpandedBytes - expandedBytes,
@@ -270,6 +278,14 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
 
         var count = BitConverter.ToUInt16(bytes[(end + 10)..]);
         if (count == 0)
+        {
+            throw new InvalidDataException("Invalid diagnosis archive.");
+        }
+        // The 128-entry cap in ReadArchiveAsync counts only FILE entries, after
+        // ZipArchive has materialised every central-directory record — including
+        // directory entries. Bound the record count here, before the archive is opened,
+        // so a directory-entry-heavy archive cannot amplify allocation past the cap.
+        if (count > MaximumEntries * 2)
         {
             throw new InvalidDataException("Invalid diagnosis archive.");
         }

@@ -16,6 +16,9 @@ public static class IdeEndpoints
     private const int MaximumWorkflowFileBytes = 120;
     private static readonly JsonSerializerOptions JsonOptions = CreateJsonOptions();
 
+    // Caps concurrent diagnosis reads; see the WaitAsync site in HandleDiagnosisAsync.
+    private static readonly SemaphoreSlim DiagnosisReadGate = new(3);
+
     // void rather than a fluent return: Program.cs calls this once and never chains, so a
     // returned builder is a value nothing reads.
     public static void MapIdeEndpoints(this IEndpointRouteBuilder endpoints)
@@ -94,9 +97,21 @@ public static class IdeEndpoints
             return DiagnosisError(StatusCodes.Status404NotFound, "Diagnosis is unavailable.");
         }
 
-        var result = await services
-            .GetRequiredService<RunDiagnosisReader>()
-            .ReadAsync(match.Value.Repository.Name, runId, context.RequestAborted);
+        // Bounded concurrency: each read buffers up to 16 MB of body and 32 MB expanded
+        // on a single-replica process, so an unbounded fan-in of diagnosis requests is a
+        // memory amplifier even though every caller holds the IDE key.
+        await DiagnosisReadGate.WaitAsync(context.RequestAborted);
+        RunDiagnosisReadResult result;
+        try
+        {
+            result = await services
+                .GetRequiredService<RunDiagnosisReader>()
+                .ReadAsync(match.Value.Repository.Name, runId, match.Value.Run.RunAttempt!.Value, context.RequestAborted);
+        }
+        finally
+        {
+            _ = DiagnosisReadGate.Release();
+        }
         return result.Status switch
         {
             RunDiagnosisReadStatus.Available => DiagnosisJson(
@@ -212,7 +227,7 @@ public static class IdeEndpoints
                         .Select(workflow => new IdeWorkflow(
                             workflow.File,
                             (workflow.Workflow.RecentRuns ?? [])
-                                .Where(run => IsEligible(run, workflow.File))
+                                .Where(run => IsEligible(run, workflow.File, $"{snapshot.Org}/{repository.Name}"))
                                 .OrderByDescending(run => run.UpdatedAt)
                                 .ThenByDescending(run => run.ProviderRunId)
                                 .ThenByDescending(run => run.RunAttempt)
@@ -235,8 +250,13 @@ public static class IdeEndpoints
                 .ToList()
         );
 
-    private static bool IsEligible(WorkflowRun run, string workflowFile) =>
+    private static bool IsEligible(WorkflowRun run, string workflowFile, string qualifiedRepository) =>
         run is { ProviderRunId: > 0, RunAttempt: > 0 }
+        // IdeRun.Url is non-nullable in the v1 contract, and the diagnosis route
+        // re-matches on the owner-qualified repository name — the snapshot must not
+        // advertise a run that FindRun would then refuse.
+        && !string.IsNullOrWhiteSpace(run.HtmlUrl)
+        && string.Equals(run.Repository, qualifiedRepository, StringComparison.OrdinalIgnoreCase)
         && string.Equals(CanonicalWorkflowFile(run.WorkflowFile), workflowFile, StringComparison.Ordinal)
         && run.HeadSha is { Length: 40 } sha
         && sha.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
@@ -266,7 +286,10 @@ public static class IdeEndpoints
             || file == "."
             || file.Contains('/')
             || file.Contains('\\')
-            || file.Contains("..", StringComparison.Ordinal)
+            // Separators are already rejected above, so the only traversal token left
+            // is the literal ".." — a substring test would also reject legitimate
+            // basenames like "build..yml".
+            || file == ".."
             || file.Any(char.IsControl)
         )
         {

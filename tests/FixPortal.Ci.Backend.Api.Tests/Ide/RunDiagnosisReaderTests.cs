@@ -16,9 +16,11 @@ public class RunDiagnosisReaderTests
 
         var result = await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
 
-        result.Excerpt.Should().Be("hello");
+        // Entries are delimited with a filename header so multi-job archives cannot
+        // merge into one run-on stream; the header is part of the hashed text.
+        result.Excerpt.Should().Be("--- job.txt ---\nhello");
         result.Truncated.Should().BeFalse();
-        result.TextSha256.Should().Be("sha256:2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
+        result.TextSha256.Should().Be("sha256:fe5243bc6b2f78e2a8f5ab409622e639f0382a80d19fd2850ce43fc880b5ca24");
     }
 
     [Theory]
@@ -76,7 +78,8 @@ public class RunDiagnosisReaderTests
 
         var result = await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
 
-        result.Excerpt.Should().BeEmpty();
+        // No entry text, but each file still contributes its delimiter header.
+        result.Excerpt.Should().Be(string.Join("", Enumerable.Range(0, 128).Select(i => $"--- logs/{i}.txt ---\n")));
         result.Truncated.Should().BeFalse();
     }
 
@@ -129,7 +132,7 @@ public class RunDiagnosisReaderTests
 
         var result = await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
 
-        result.Excerpt.Should().Be("hello");
+        result.Excerpt.Should().Be("--- job.txt ---\nhello");
     }
 
     [Theory]
@@ -180,8 +183,8 @@ public class RunDiagnosisReaderTests
 
         var result = await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
 
-        result.Excerpt.Should().Be("\ufffd");
-        result.TextSha256.Should().Be("sha256:83d544ccc223c057d2bf80d3f2a32982c32c3c0db8e2674820da5064783fb097");
+        result.Excerpt.Should().Be("--- job.txt ---\n\ufffd");
+        result.TextSha256.Should().Be("sha256:e52eab1eec7650ba43e1a07654574fa6c8e3bfa2113b048b74d2a8ff4db2bbf7");
     }
 
     [Fact]
@@ -193,8 +196,9 @@ public class RunDiagnosisReaderTests
         var result = await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
 
         result.Truncated.Should().BeTrue();
-        Encoding.UTF8.GetByteCount(result.Excerpt).Should().Be(512 * 1024 - 1);
-        result.Excerpt.Should().Be(new string('a', 512 * 1024 - 1));
+        Encoding.UTF8.GetByteCount(result.Excerpt).Should().Be(512 * 1024);
+        // The 16-byte entry header spends part of the 512 KB excerpt budget first.
+        result.Excerpt.Should().Be("--- job.txt ---\n" + new string('a', 512 * 1024 - 16));
     }
 
     [Fact]
@@ -205,11 +209,12 @@ public class RunDiagnosisReaderTests
 
         var result = await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
 
-        result.Excerpt.Should().Be(text);
+        var expected = "--- job.txt ---\n" + text;
+        result.Excerpt.Should().Be(expected);
         result
             .TextSha256.Should()
             .Be(
-                $"sha256:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(text))).ToLowerInvariant()}"
+                $"sha256:{Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(expected))).ToLowerInvariant()}"
             );
     }
 
