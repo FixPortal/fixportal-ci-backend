@@ -89,7 +89,7 @@ public sealed class DashboardRefreshWorkerTests : IDisposable
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<MergedPullRequest>(),
-            new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
             new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(),
             Options.Create(new ReviewSignalsOptions()),
             gitHubOptions,

@@ -69,7 +69,13 @@ public sealed record PullRequest(
     // Tri-state: true ready, false not ready, null not yet determined. Computed server-side
     // because only the server can tell apart the three reasons ReviewSignals may be null.
     // See ReadyToMergeCalculator.
-    bool? ReadyToMerge = null
+    bool? ReadyToMerge = null,
+    // The head commit the board currently sees. Review signals and merge verdicts are
+    // earned against one head; cached copies carry the head they were computed against
+    // and are attached only when it matches this value (see CachedReviewSignals and
+    // ReadyToMergeCalculator), so a push degrades the verdict to unknown instead of
+    // republishing a verdict about a head that is gone.
+    string? HeadSha = null
 );
 
 public sealed record MergedPullRequest(

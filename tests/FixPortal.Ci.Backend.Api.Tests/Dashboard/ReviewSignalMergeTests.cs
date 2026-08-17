@@ -18,28 +18,62 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 
 public class ReviewSignalMergeTests
 {
-    private static PullRequest Pr(int number) =>
+    private const string HeadA = "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3";
+    private const string HeadB = "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12";
+
+    private static PullRequest Pr(int number, string? headSha = HeadA) =>
         new(
             number,
             $"PR {number}",
             "chris",
             $"https://github.com/FixPortal/repo/pull/{number}",
             false,
-            Instant.FromUnixTimeSeconds(1)
+            Instant.FromUnixTimeSeconds(1),
+            HeadSha: headSha
         );
 
     private static readonly IReadOnlyList<ReviewSignal> Signals = [new("Gitar", ReviewSignalState.Clean, null, null)];
+
+    private static CachedReviewSignals Cached(string? headSha = HeadA, IReadOnlyList<ReviewSignal>? signals = null) =>
+        new(headSha, signals ?? Signals);
 
     [Fact]
     public void Attaches_signals_to_the_matching_pull_request_only()
     {
         var merged = DashboardRefreshService.ApplyReviewSignals(
             [Pr(181), Pr(179)],
-            new Dictionary<int, IReadOnlyList<ReviewSignal>> { [181] = Signals }
+            new Dictionary<int, CachedReviewSignals> { [181] = Cached() }
         );
 
         _ = merged[0].ReviewSignals.Should().BeEquivalentTo(Signals);
         _ = merged[1].ReviewSignals.Should().BeNull();
+    }
+
+    // H3: a cached signal is earned against one head. A pull request pushed since the
+    // sweep must degrade to "no signals" (and so an unknown verdict) rather than
+    // republishing the previous head's Clean until the worker's next sweep.
+    [Fact]
+    public void Signals_computed_against_an_older_head_are_not_attached_after_a_push()
+    {
+        var merged = DashboardRefreshService.ApplyReviewSignals(
+            [Pr(181, HeadB)],
+            new Dictionary<int, CachedReviewSignals> { [181] = Cached(HeadA) }
+        );
+
+        _ = merged[0].ReviewSignals.Should().BeNull("the cached signals were earned against a head this PR no longer has");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void Signals_without_a_recorded_head_never_attach(string? cachedHead)
+    {
+        var merged = DashboardRefreshService.ApplyReviewSignals(
+            [Pr(181)],
+            new Dictionary<int, CachedReviewSignals> { [181] = Cached(cachedHead) }
+        );
+
+        _ = merged[0].ReviewSignals.Should().BeNull("a signal that cannot name its head cannot prove currency");
     }
 
     [Fact]
@@ -57,7 +91,7 @@ public class ReviewSignalMergeTests
     {
         var merged = DashboardRefreshService.ApplyReviewSignals(
             [Pr(181)],
-            new Dictionary<int, IReadOnlyList<ReviewSignal>> { [181] = Signals }
+            new Dictionary<int, CachedReviewSignals> { [181] = Cached() }
         );
 
         _ = merged[0].Number.Should().Be(181);
@@ -73,11 +107,11 @@ public class ReviewSignalMergeTests
     public void An_expired_review_signal_cache_entry_reads_as_a_miss_so_the_snapshot_carries_no_signals()
     {
         var clock = new FakeClock(Instant.FromUnixTimeSeconds(1000));
-        var cache = new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(
             clock,
             Duration.FromMinutes(10)
         );
-        cache.Update("repo", new Dictionary<int, IReadOnlyList<ReviewSignal>> { [181] = Signals });
+        cache.Update("repo", new Dictionary<int, CachedReviewSignals> { [181] = Cached() });
 
         clock.AdvanceMinutes(11);
 
@@ -201,7 +235,7 @@ public sealed class ReviewSignalWorkerGatingTests : IDisposable
         return new ReviewSignalEnrichmentWorker(
             client,
             new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions),
-            new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
             Options.Create(options),
             gitHubOptions,
             timeProvider,
@@ -292,9 +326,14 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         bool repoPrivate = false
     ) : HttpMessageHandler
     {
+        private int _graphQlCalls;
+        private int _alertsCalls;
+
         // Every path the scanning products live behind, so a test can assert the
         // visibility filter stopped the request rather than merely dropped the pill.
         public bool ScanningEndpointCalled { get; private set; }
+
+        public int GraphQlCalls => _graphQlCalls;
 
         // The completion signal for a sweep that makes no alerts call at all: with a
         // PublicOnly reviewer filtered out on a private repo, AlertsRequestReceived never
@@ -307,6 +346,11 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         // reviewer, so needsAlerts is always true) — it is therefore the real
         // completion signal a test can await, rather than a fixed real-time budget.
         public TaskCompletionSource AlertsRequestReceived { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // Fires on the SECOND alerts call — the completion signal for a second
+        // recomputing sweep, which is what the cold-cache recovery test (H5) awaits.
+        public TaskCompletionSource SecondAlertsRequest { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         protected override Task<HttpResponseMessage> SendAsync(
@@ -322,6 +366,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             }
             if (path == "/graphql")
             {
+                _ = Interlocked.Increment(ref _graphQlCalls);
                 GraphQlRequestReceived.TrySetResult();
             }
             var (status, body) = path switch
@@ -341,6 +386,10 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             };
             if (isAlertsRequest)
             {
+                if (Interlocked.Increment(ref _alertsCalls) == 2)
+                {
+                    SecondAlertsRequest.TrySetResult();
+                }
                 AlertsRequestReceived.TrySetResult();
             }
             return Task.FromResult(
@@ -400,7 +449,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         return template.Replace("__AUTHOR__", author).Replace("__CONTEXTS__", contexts);
     }
 
-    private static async Task<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>> RunOneSweepAsync(
+    private static async Task<IReadOnlyDictionary<int, CachedReviewSignals>> RunOneSweepAsync(
         RoutingHandler handler,
         ReviewSignalsOptions options,
         bool expectAlertsCall = true
@@ -411,7 +460,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
-        var cache = new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>();
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>();
         var timeProvider = new TrackingFakeTimeProvider();
         var worker = new ReviewSignalEnrichmentWorker(
             client,
@@ -486,7 +535,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 
         var signals = await RunOneSweepAsync(handler, options);
 
-        var signal = signals[181].Single(s => s.Name == "CodeQL");
+        var signal = signals[181].Signals.Single(s => s.Name == "CodeQL");
         _ = signal.State.Should().Be(expectedState);
         _ = signal.Count.Should().Be(expectedCount);
     }
@@ -557,7 +606,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 
         var signals = await RunOneSweepAsync(handler, options, expectAlertsCall: false);
 
-        _ = signals[181].Select(s => s.Name).Should().Equal("Gitar");
+        _ = signals[181].Signals.Select(s => s.Name).Should().Equal("Gitar");
         // Not just an absent pill: the filtered reviewer must cost no request either.
         _ = handler.ScanningEndpointCalled.Should().BeFalse();
     }
@@ -585,7 +634,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 
         var signals = await RunOneSweepAsync(handler, options);
 
-        _ = signals[181].Single(s => s.Name == "CodeQL").State.Should().Be(ReviewSignalState.Clean);
+        _ = signals[181].Signals.Single(s => s.Name == "CodeQL").State.Should().Be(ReviewSignalState.Clean);
     }
 
     [Fact]
@@ -604,7 +653,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
-        var cache = new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>();
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>();
         var worker = new ReviewSignalEnrichmentWorker(
             client,
             new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions),
@@ -646,6 +695,75 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             .RetryDelayScheduled.Task.IsCompleted.Should()
             .BeFalse("a soft-failed collect must not count as a per-repo sweep failure");
         _ = cache.IsEmpty.Should().BeTrue("a soft-failed collect keeps last-known-good — here, an empty cache");
+
+        await worker.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    // H5: the per-repo signal cache expires after 3x the refresh cadence, and a null
+    // collect (the GraphQL reserve guard holding, or a sustained soft-fail) never
+    // refreshes it. On the first sweep after recovery over a QUIET repo the state used to
+    // be self-consistently empty: clean watermarks, an empty cache read, nothing due, and
+    // an empty merge written back with a fresh timestamp — a permanent latch. A cache
+    // miss over non-empty watermarks must instead be treated as cold state: every open
+    // pull request diffs dirty and is refetched.
+    [Fact]
+    public async Task A_cache_miss_over_clean_watermarks_refetches_every_open_pull_request()
+    {
+        var handler = new RoutingHandler(FactsJson("chris", true), HttpStatusCode.OK, "[]");
+        var timeProvider = new TrackingFakeTimeProvider();
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        // The expiry clock is separate from the sweep timer: the cache entry written by
+        // sweep 1 must be OLD when sweep 2 runs, while the cadence still ticks.
+        var cacheClock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(
+            cacheClock,
+            Duration.FromSeconds(180)
+        );
+        var worker = new ReviewSignalEnrichmentWorker(
+            client,
+            new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions),
+            cache,
+            Options.Create(
+                new ReviewSignalsOptions
+                {
+                    Reviewers = [new ReviewerOptions { Name = "CodeQL", Source = ReviewerSource.CodeScanning }],
+                    RefreshSeconds = 60,
+                }
+            ),
+            gitHubOptions,
+            timeProvider,
+            new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
+            NullLogger<ReviewSignalEnrichmentWorker>.Instance
+        );
+
+        // Sweep 1 (cold start): populates the cache and commits the watermarks.
+        await worker.StartAsync(TestContext.Current.CancellationToken);
+        await timeProvider.InitialDelayScheduled.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
+        timeProvider.Advance(TimeSpan.FromSeconds(15));
+        await handler.AlertsRequestReceived.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await timeProvider.SteadyStateTimerScheduled.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
+        _ = handler.GraphQlCalls.Should().Be(1, "the cold-start sweep fetched the one dirty pull request");
+
+        // The cache entry expires (the reserve guard or a soft-fail would produce the
+        // same gap), then the next cadence tick runs over an UNCHANGED repository: same
+        // watermarks, so the diff is clean and only the cold-state treatment can spend.
+        cacheClock.Advance(Duration.FromSeconds(200));
+        timeProvider.Advance(TimeSpan.FromSeconds(60));
+        await handler.SecondAlertsRequest.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+        _ = handler
+            .GraphQlCalls.Should()
+            .Be(2, "a cache miss over committed watermarks must refetch, not settle into the empty latch");
 
         await worker.StopAsync(TestContext.Current.CancellationToken);
     }

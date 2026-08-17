@@ -118,7 +118,8 @@ public class DashboardSnapshotContractFixtureTests(WebApplicationFactory<Program
                                 new ReviewSignal("Gitar", ReviewSignalState.Pending, null, null),
                                 new ReviewSignal("Optional", ReviewSignalState.Disabled, null, null),
                             ],
-                            false
+                            false,
+                            "0beec7b5ea3f0fdbc95d0dd47f3c5bc275da8a33"
                         ),
                     ],
                     new RepoMetrics(1234, 4.5, 200, 3, Instant.FromUtc(2026, 6, 1, 9, 0)),

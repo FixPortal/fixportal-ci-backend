@@ -13,7 +13,12 @@ namespace FixPortal.Ci.Backend.Api.Integrations.GitHub;
 /// once the repository declares required status checks: without them GitHub has no
 /// opinion about CI, and every conflict-free non-draft pull request reports CLEAN.
 /// </param>
-public sealed record PrMergeState(int Number, bool IsDraft, string? Mergeable, string? MergeStateStatus)
+/// <param name="HeadSha">
+/// The head commit (<c>headRefOid</c>) this verdict was read against. A verdict earned
+/// against a different head says nothing about the current one; the ready-to-merge
+/// calculator treats a mismatch — or an absent value — as unknown, never as ready.
+/// </param>
+public sealed record PrMergeState(int Number, bool IsDraft, string? Mergeable, string? MergeStateStatus, string? HeadSha = null)
 {
     /// <summary>
     /// True only when GitHub says the pull request is mergeable with nothing outstanding.
@@ -44,7 +49,7 @@ public sealed record PrMergeState(int Number, bool IsDraft, string? Mergeable, s
 }
 
 /// <summary>GraphQL wire shape for one aliased pull request in the merge-state query.</summary>
-public sealed record MergeStatePull(int Number, bool IsDraft, string? Mergeable, string? MergeStateStatus);
+public sealed record MergeStatePull(int Number, bool IsDraft, string? Mergeable, string? MergeStateStatus, string? HeadRefOid);
 
 /// <summary>
 /// Response shape for the merge-state query. Like the review-facts equivalent, the

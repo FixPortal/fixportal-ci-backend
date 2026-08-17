@@ -184,7 +184,7 @@ builder.Services.AddSingleton<PerRepoCache<MergedPullRequest>>();
 builder.Services.AddSingleton(sp =>
 {
     var reviewSignals = sp.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value;
-    return new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(
+    return new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(
         sp.GetRequiredService<IClock>(),
         Duration.FromSeconds(3 * reviewSignals.RefreshSeconds)
     );

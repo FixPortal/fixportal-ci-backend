@@ -17,7 +17,7 @@ public sealed class DashboardRefreshService(
     [FromKeyedServices("deploys")] PerRepoCache<IReadOnlyList<JobSignal>> deploys,
     [FromKeyedServices("packages")] PerRepoCache<IReadOnlyList<JobSignal>> packages,
     PerRepoCache<MergedPullRequest> mergedPrs,
-    PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>> reviewSignals,
+    PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>> reviewSignals,
     PerRepoCache<IReadOnlyDictionary<int, PrMergeState>> mergeStates,
     IOptions<ReviewSignalsOptions> reviewOptions,
     IOptions<GitHubOptions> gitHub,
@@ -279,9 +279,16 @@ public sealed class DashboardRefreshService(
     /// enriched on a slower cadence than the board refresh, so a PR with no cached
     /// entry keeps a null field rather than blocking the cycle.
     /// </summary>
+    /// <remarks>
+    /// A cached entry attaches only when the head it was computed against matches the
+    /// head the fresh listing reports. Without that gate a pull request pushed between
+    /// sweeps would republish the previous head's Clean verdicts — and its ready-to-merge
+    /// stamp — until the enrichment worker noticed the move. A mismatch (or either side
+    /// missing its SHA) leaves ReviewSignals null, which the calculator reads as unknown.
+    /// </remarks>
     public static IReadOnlyList<PullRequest> ApplyReviewSignals(
         IReadOnlyList<PullRequest> prs,
-        IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>? signals
+        IReadOnlyDictionary<int, CachedReviewSignals>? signals
     )
     {
         if (signals is null || signals.Count == 0 || prs.Count == 0)
@@ -291,10 +298,21 @@ public sealed class DashboardRefreshService(
         var merged = new List<PullRequest>(prs.Count);
         foreach (var pr in prs)
         {
-            merged.Add(signals.TryGetValue(pr.Number, out var prSignals) ? pr with { ReviewSignals = prSignals } : pr);
+            merged.Add(
+                signals.TryGetValue(pr.Number, out var cached) && SameHead(pr.HeadSha, cached.HeadSha)
+                    ? pr with { ReviewSignals = cached.Signals }
+                    : pr
+            );
         }
         return merged;
     }
+
+    // Both sides must name the same head. Absent on either side means "cannot prove",
+    // which fails closed: the signal is simply not attached.
+    internal static bool SameHead(string? prHeadSha, string? cachedHeadSha) =>
+        !string.IsNullOrEmpty(prHeadSha)
+        && !string.IsNullOrEmpty(cachedHeadSha)
+        && string.Equals(prHeadSha, cachedHeadSha, StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Stamps each pull request with the ready-to-merge verdict. Runs AFTER

@@ -282,7 +282,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
                     """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"}]""",
                 _ when path.EndsWith("/actions/workflows", StringComparison.Ordinal) => """{"workflows":[]}""",
                 _ when path.EndsWith("/pulls", StringComparison.Ordinal) =>
-                    """[{"number":181,"title":"Add widget","user":{"login":"chris"},"html_url":"https://github.com/FixPortal/repo-a/pull/181","draft":false,"created_at":"2026-07-30T09:00:00Z"}]""",
+                    """[{"number":181,"title":"Add widget","user":{"login":"chris"},"html_url":"https://github.com/FixPortal/repo-a/pull/181","draft":false,"created_at":"2026-07-30T09:00:00Z","head":{"sha":"a94a8fe5ccb19ba61c4c0873d391e987982fbbd3"}}]""",
                 _ => "[]",
             };
             return Task.FromResult(
@@ -309,8 +309,16 @@ public class DashboardRefreshServiceRefreshAsyncTests
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
         var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
         var signals = new ReviewSignal[] { new("Gitar", ReviewSignalState.Clean, null, null) };
-        var reviewSignalCache = new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>();
-        reviewSignalCache.Update("repo-a", new Dictionary<int, IReadOnlyList<ReviewSignal>> { [181] = signals });
+        var reviewSignalCache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>();
+        // The head SHA must match the one the pulls payload serves, or the attach gate
+        // (signals are only valid for the head they were computed against) drops them.
+        reviewSignalCache.Update(
+            "repo-a",
+            new Dictionary<int, CachedReviewSignals>
+            {
+                [181] = new("a94a8fe5ccb19ba61c4c0873d391e987982fbbd3", signals),
+            }
+        );
         var sut = new DashboardRefreshService(
             client,
             new GitHubInventoryCache(client, clock, dashboardOptions),
@@ -368,7 +376,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<MergedPullRequest>(),
-            new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
             new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(),
             Options.Create(new ReviewSignalsOptions()),
             gitHubOptions,
@@ -411,7 +419,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<MergedPullRequest>(),
-            new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
             new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(),
             Options.Create(new ReviewSignalsOptions()),
             gitHubOptions,
@@ -457,7 +465,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<MergedPullRequest>(),
-            new PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
             new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(),
             Options.Create(new ReviewSignalsOptions()),
             gitHubOptions,

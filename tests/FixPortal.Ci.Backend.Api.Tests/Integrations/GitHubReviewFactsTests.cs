@@ -5,6 +5,7 @@ using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using NodaTime;
 using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Integrations;
@@ -17,6 +18,11 @@ public class GitHubReviewFactsTests
     private const string HeadOid = "head-sha";
 
     private const string HeadCommittedAt = "2026-08-03T10:00:00Z";
+
+    // When the worker first observed the current head: after the commit was authored,
+    // before the "clean" comments below land. The issue-comment channel is scoped
+    // against this instant, not committedDate.
+    private static readonly Instant HeadFirstSeenAt = Instant.FromUtc(2026, 8, 3, 10, 1, 0);
 
     private static ReviewFactsPull Pull(
         IReadOnlyList<GraphQlThread>? threads = null,
@@ -196,18 +202,58 @@ public class GitHubReviewFactsTests
     }
 
     [Fact]
+    public void The_facts_carry_the_head_oid_they_were_computed_against()
+    {
+        // The cache attaches signals only while this matches the head the open-PR
+        // listing reports — the invariant that closes the push-between-sweeps window.
+        var facts = GitHubOrgClient.ToReviewFacts(Pull());
+
+        _ = facts.HeadSha.Should().Be(HeadOid);
+    }
+
+    [Fact]
     public void A_comment_after_the_head_commit_is_head_comment_participation()
     {
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")]));
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
+        );
 
         _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
+    // H2, the verified sequence: commit authored at T1, the bot comments at T2 > T1
+    // while the commit is NOT yet the head, the push makes it head at T3 > T2. The old
+    // committedDate comparison counted the comment; the head-transition anchor must not.
+    [Fact]
+    public void A_comment_written_after_authoring_but_before_the_push_does_not_count()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:00:30Z")], headCommittedAt: "2026-08-03T10:00:00Z"),
+            HeadFirstSeenAt // 10:01: the commit was first seen as head AFTER the comment
+        );
+
+        _ = facts.HeadCommentAuthors.Should().BeEmpty("the comment predates the head it claims to certify");
+    }
+
+    [Fact]
+    public void An_unknown_head_transition_instant_scopes_the_comment_channel_to_nothing()
+    {
+        // Weaker evidence must not reach Clean on its own when it cannot be scoped:
+        // with no observed head transition, no issue comment counts at all.
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")]));
+
+        _ = facts.HeadCommentAuthors.Should().BeEmpty();
     }
 
     [Fact]
     public void A_comment_before_the_head_commit_is_stale_and_does_not_count()
     {
         // The bot commented, then the author pushed. That verdict is about old code.
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("gitar-bot", "2026-08-03T09:55:00Z")]));
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T09:55:00Z")]),
+            HeadFirstSeenAt
+        );
 
         _ = facts.HeadCommentAuthors.Should().BeEmpty();
     }
@@ -216,7 +262,10 @@ public class GitHubReviewFactsTests
     public void A_comment_exactly_at_the_head_commit_does_not_count()
     {
         // Strict >. Equal timestamps are ambiguous, and Pending is the safe direction.
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("gitar-bot", HeadCommittedAt)]));
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", HeadCommittedAt)]),
+            HeadFirstSeenAt
+        );
 
         _ = facts.HeadCommentAuthors.Should().BeEmpty();
     }
@@ -225,7 +274,8 @@ public class GitHubReviewFactsTests
     public void An_unparseable_comment_timestamp_is_skipped_rather_than_throwing()
     {
         var facts = GitHubOrgClient.ToReviewFacts(
-            Pull(comments: [Comment("gitar-bot", "not-a-date"), Comment("github-code-quality", "2026-08-03T10:05:00Z")])
+            Pull(comments: [Comment("gitar-bot", "not-a-date"), Comment("github-code-quality", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
         );
 
         _ = facts.HeadCommentAuthors.Should().BeEquivalentTo("github-code-quality");
@@ -235,7 +285,8 @@ public class GitHubReviewFactsTests
     public void No_head_commit_date_means_no_comment_can_be_head_scoped()
     {
         var facts = GitHubOrgClient.ToReviewFacts(
-            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")], headCommittedAt: null)
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")], headCommittedAt: null),
+            HeadFirstSeenAt
         );
 
         _ = facts.HeadCommentAuthors.Should().BeEmpty();
@@ -244,7 +295,10 @@ public class GitHubReviewFactsTests
     [Fact]
     public void Comment_authors_are_matched_case_insensitively_like_every_other_login_set()
     {
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("Gitar-Bot", "2026-08-03T10:05:00Z")]));
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("Gitar-Bot", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
+        );
 
         _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
     }
@@ -254,7 +308,10 @@ public class GitHubReviewFactsTests
     {
         // The two sets are distinct evidence channels. Only the configured flag joins them,
         // and that decision belongs to the factory, not the mapper.
-        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")]));
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
+        );
 
         _ = facts.HeadParticipatingAuthors.Should().BeEmpty();
     }

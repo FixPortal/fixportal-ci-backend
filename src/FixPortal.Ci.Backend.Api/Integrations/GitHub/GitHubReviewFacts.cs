@@ -34,8 +34,11 @@ public sealed record GraphQlComment(GraphQlActor? Author, GraphQlCommit? Origina
 
 // An ISSUE comment on the pull request, distinct from GraphQlComment (a REVIEW comment,
 // which anchors to a commit). Issue comments carry no commit reference at all, so
-// head-scoping them is a timestamp comparison against the head commit's committedDate --
-// see CollectHeadCommentAuthors. CreatedAt stays a raw ISO-8601 string: the GraphQL
+// head-scoping them compares CreatedAt against when the head CHANGED (tracked by the
+// enrichment worker from the watermark's head-SHA transitions), not against the head
+// commit's committedDate -- a commit is authored before it is pushed, so committedDate
+// would certify comments written before the head they claim to cover existed on the PR.
+// See CollectHeadCommentAuthors. CreatedAt stays a raw ISO-8601 string: the GraphQL
 // serializer options are deliberately NodaTime-free, same as GraphQlRateLimit.ResetAt.
 public sealed record GraphQlIssueComment(GraphQlActor? Author, string? CreatedAt);
 
@@ -149,10 +152,21 @@ public sealed record ReviewFactsBatch(
 /// ran against what is actually on the PR now.
 /// </param>
 /// <param name="HeadCommentAuthors">
-/// Authors of ISSUE comments created strictly after the head commit. Separate from
+/// Authors of ISSUE comments created after the head commit became the head. Separate from
 /// <paramref name="HeadParticipatingAuthors"/> because it is weaker evidence: a comment
 /// proves the reviewer spoke, not that it reviewed this diff. Only a reviewer explicitly
 /// configured with CommentsCountAsParticipation may act on it.
+/// </param>
+/// <param name="HeadSha">
+/// The head commit oid these facts were computed against, from the query's own
+/// <c>commits(last: 1)</c> node. Consumers attach cached signals only when this matches
+/// the head the open-PR listing currently reports.
+/// </param>
+/// <param name="TruncatedConnections">
+/// Names of connections that hit their page cap while these facts were collected
+/// ("reviewThreads", "checkContexts", ...). A truncated connection means the flattened
+/// sets below may be incomplete; consumers must not let affected signals read Clean.
+/// Null or empty means every connection answered in full.
 /// </param>
 public sealed record PrReviewFacts(
     int Number,
@@ -161,5 +175,7 @@ public sealed record PrReviewFacts(
     IReadOnlyDictionary<string, int> UnresolvedThreadsByAuthor,
     IReadOnlySet<string> HeadParticipatingAuthors,
     IReadOnlySet<string> HeadCommentAuthors,
-    IReadOnlySet<string> SuccessfulCheckAppSlugs
+    IReadOnlySet<string> SuccessfulCheckAppSlugs,
+    string? HeadSha = null,
+    IReadOnlySet<string>? TruncatedConnections = null
 );

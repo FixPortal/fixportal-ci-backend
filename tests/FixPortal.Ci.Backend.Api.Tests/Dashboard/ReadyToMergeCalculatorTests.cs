@@ -16,7 +16,13 @@ public class ReadyToMergeCalculatorTests
 
     private static readonly IReadOnlySet<string> NoBots = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-    private static PullRequest Pr(string author = "chris-fixportal", IReadOnlyList<ReviewSignal>? signals = null) =>
+    private const string Head = "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3";
+
+    private static PullRequest Pr(
+        string author = "chris-fixportal",
+        IReadOnlyList<ReviewSignal>? signals = null,
+        string? headSha = Head
+    ) =>
         new(
             181,
             "Title",
@@ -24,7 +30,8 @@ public class ReadyToMergeCalculatorTests
             "https://github.com/FixPortal/repo/pull/181",
             false,
             Instant.FromUnixTimeSeconds(0),
-            signals
+            signals,
+            HeadSha: headSha
         );
 
     private static ReviewSignal Signal(ReviewSignalState state) => new("CodeRabbit", state, null, null);
@@ -32,8 +39,9 @@ public class ReadyToMergeCalculatorTests
     private static PrMergeState Merge(
         string? mergeable = "MERGEABLE",
         string? status = "CLEAN",
-        bool isDraft = false
-    ) => new(181, isDraft, mergeable, status);
+        bool isDraft = false,
+        string? headSha = Head
+    ) => new(181, isDraft, mergeable, status, headSha);
 
     [Fact]
     public void Clean_merge_state_and_clean_signals_are_ready()
@@ -125,6 +133,34 @@ public class ReadyToMergeCalculatorTests
     {
         ReadyToMergeCalculator
             .Evaluate(Pr(signals: [Signal(ReviewSignalState.Clean)]), null, true, NoBots)
+            .Should()
+            .BeNull();
+    }
+
+    // H3: a verdict is only valid for the head it was read against. A push between the
+    // merge-state sweep and the board refresh must degrade the verdict to unknown —
+    // the one output this product exists to produce must never be a stale green.
+    [Fact]
+    public void A_merge_state_earned_against_a_different_head_is_unknown()
+    {
+        ReadyToMergeCalculator
+            .Evaluate(
+                Pr(signals: [Signal(ReviewSignalState.Clean)], headSha: new string('b', 40)),
+                Merge(headSha: new string('a', 40)),
+                true,
+                NoBots
+            )
+            .Should()
+            .BeNull();
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void A_merge_state_that_cannot_name_its_head_is_unknown(string? mergeHeadSha)
+    {
+        ReadyToMergeCalculator
+            .Evaluate(Pr(signals: [Signal(ReviewSignalState.Clean)]), Merge(headSha: mergeHeadSha), true, NoBots)
             .Should()
             .BeNull();
     }
