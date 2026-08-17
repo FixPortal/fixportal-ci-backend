@@ -17,7 +17,7 @@ on:
 # therefore run to completion; the deploy job additionally guards itself.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   backend:
@@ -28,7 +28,7 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Lint workflows (actionlint)
         uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
@@ -36,7 +36,7 @@ jobs:
           shellcheck: true
 
       - name: Set up .NET
-        uses: actions/setup-dotnet@v6
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
           dotnet-version: '10.0.x'
 
@@ -59,7 +59,7 @@ jobs:
 
       - name: Upload test results
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: test-results
           path: ./TestResults/*.trx
@@ -75,7 +75,7 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Lint workflows (actionlint)
         uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
@@ -132,7 +132,7 @@ jobs:
       ACR_LOGIN_SERVER: ${{ secrets.ACR_LOGIN_SERVER }}
       IMAGE_REPO: fixportal-ci-backend
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       - name: Lint workflows (actionlint)
         uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
@@ -334,10 +334,27 @@ jobs:
           fi
           echo "CI IDE snapshot: HTTP $code, ETag $etag, schemaVersion 1"
 
-          if ! conditional_code=$(curl --config "$curl_config" -sS -o /dev/null -w '%{http_code}' --max-time 15 --header "If-None-Match: $etag" "$endpoint"); then
-            echo "::error::CI IDE conditional snapshot probe failed to reach the app."
-            exit 1
-          fi
+          # A 204 here means the conditional request landed on a replica that has
+          # not served a snapshot yet (state.Current is null by design), not that
+          # the ETag contract is broken — the two probes can hit different
+          # instances behind the shared FQDN. Retry it like the initial probe;
+          # only a terminal non-304 after a 200 has been served fails the gate.
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if conditional_code=$(curl --config "$curl_config" -sS -o /dev/null -w '%{http_code}' --max-time 15 --header "If-None-Match: $etag" "$endpoint"); then
+              if [ "$conditional_code" = "204" ] && [ "$attempt" -lt 8 ]; then
+                echo "Conditional attempt $attempt: HTTP 204; snapshot is not warm on this replica yet."
+                sleep 15
+                continue
+              fi
+              break
+            fi
+            if [ "$attempt" -eq 8 ]; then
+              echo "::error::CI IDE conditional snapshot probe failed to reach the app."
+              exit 1
+            fi
+            echo "Conditional attempt $attempt: transport failure; retrying."
+            sleep 15
+          done
           if [ "$conditional_code" != "304" ]; then
             echo "::error::CI IDE conditional snapshot probe returned HTTP $conditional_code; expected 304."
             exit 1
@@ -352,6 +369,44 @@ jobs:
             exit 1
           fi
 
+      # The public projection is the product's purpose and ComputePublicSnapshot is
+      # the security-critical private-repo strip; probe it alongside the IDE route.
+      # 204 means the in-memory snapshot is not published yet (cold replica), so it
+      # is retried like the IDE probes rather than failing the gate.
+      - name: Public dashboard snapshot probe
+        run: |
+          set -euo pipefail
+          endpoint="https://$FQDN/api/dashboard/snapshot"
+          public_body=$(mktemp)
+          trap 'rm -f "$public_body"' EXIT
+
+          for attempt in 1 2 3 4 5 6 7 8; do
+            if public_code=$(curl -sS -o "$public_body" -w '%{http_code}' --max-time 15 "$endpoint"); then
+              if [ "$public_code" = "204" ] && [ "$attempt" -lt 8 ]; then
+                echo "Attempt $attempt: HTTP 204; public snapshot is not published yet."
+                sleep 15
+                continue
+              fi
+              break
+            fi
+            if [ "$attempt" -eq 8 ]; then
+              echo "::error::Public dashboard snapshot probe exhausted transport retries."
+              exit 1
+            fi
+            echo "Attempt $attempt: transport failure; retrying."
+            sleep 15
+          done
+
+          if [ "$public_code" != "200" ]; then
+            echo "::error::Public dashboard snapshot probe returned HTTP $public_code; expected 200."
+            exit 1
+          fi
+          if ! jq -e '.repositories | type == "array"' "$public_body" > /dev/null; then
+            echo "::error::Public dashboard snapshot probe did not return a repositories array."
+            exit 1
+          fi
+          echo "Public dashboard snapshot: HTTP $public_code, repositories array present"
+
   gate-coverage:
     name: Gate coverage
     runs-on: ubuntu-latest
@@ -359,7 +414,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
