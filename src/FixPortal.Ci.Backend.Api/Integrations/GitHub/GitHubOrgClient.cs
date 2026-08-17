@@ -323,7 +323,8 @@ public sealed class GitHubOrgClient(
     public async Task<ReviewFactsBatch> GetPullRequestReviewFactsAsync(
         string repo,
         IReadOnlyCollection<int> numbers,
-        CancellationToken ct
+        CancellationToken ct,
+        IReadOnlyDictionary<int, Instant>? headFirstSeenAt = null
     )
     {
         if (numbers.Count == 0)
@@ -341,7 +342,7 @@ public sealed class GitHubOrgClient(
             queries++;
             try
             {
-                points += await FetchChunkAsync(repo, chunk, facts, ct);
+                points += await FetchChunkAsync(repo, chunk, facts, ct, headFirstSeenAt);
             }
             // One unreadable pull request must not cost its nineteen neighbours their
             // pills. GitHub answers an aliased query all-or-nothing, so a single refused
@@ -362,7 +363,7 @@ public sealed class GitHubOrgClient(
                     queries++;
                     try
                     {
-                        points += await FetchChunkAsync(repo, [number], facts, ct);
+                        points += await FetchChunkAsync(repo, [number], facts, ct, headFirstSeenAt);
                     }
                     catch (HttpRequestException single)
                     {
@@ -386,7 +387,8 @@ public sealed class GitHubOrgClient(
         string repo,
         IReadOnlyList<int> chunk,
         Dictionary<int, PrReviewFacts> facts,
-        CancellationToken ct
+        CancellationToken ct,
+        IReadOnlyDictionary<int, Instant>? headFirstSeenAt = null
     )
     {
         // Aliases are built from int, so there is no injection surface here.
@@ -417,8 +419,12 @@ public sealed class GitHubOrgClient(
                 continue;
             }
 
-            WarnOnTruncatedConnections(repo, pull);
-            facts[pull.Number] = ToReviewFacts(pull);
+            var truncated = WarnOnTruncatedConnections(repo, pull);
+            facts[pull.Number] = ToReviewFacts(
+                pull,
+                headFirstSeenAt?.GetValueOrDefault(pull.Number),
+                truncated.Count > 0 ? truncated : null
+            );
         }
 
         return data?.RateLimit?.Cost ?? 0;
@@ -463,7 +469,7 @@ public sealed class GitHubOrgClient(
             // Aliases are built from int, so there is no injection surface here.
             var aliases = string.Join(
                 "\n    ",
-                chunk.Select(n => $"pr{n}: pullRequest(number: {n}) {{ number isDraft mergeable mergeStateStatus }}")
+                chunk.Select(n => $"pr{n}: pullRequest(number: {n}) {{ number isDraft mergeable mergeStateStatus headRefOid }}")
             );
             var query = $$"""
                 query($owner: String!, $name: String!) {
@@ -493,7 +499,8 @@ public sealed class GitHubOrgClient(
                         pull.Number,
                         pull.IsDraft,
                         pull.Mergeable,
-                        pull.MergeStateStatus
+                        pull.MergeStateStatus,
+                        pull.HeadRefOid
                     );
                 }
             }
@@ -519,10 +526,12 @@ public sealed class GitHubOrgClient(
     // A truncated nested connection is the one failure this feature cannot absorb: a
     // missing unresolved thread turns Outstanding into a confident Clean. The per-repo
     // query could not afford to detect it; the exact-PR query can, so an over-cap pull
-    // request is at least loud rather than quietly wrong.
-    private void WarnOnTruncatedConnections(string repo, ReviewFactsPull pull)
+    // request is at least loud rather than quietly wrong. Returns the names of the
+    // connections that hit their cap so the caller can carry them onto the facts --
+    // logging alone still publishes the incomplete node as authoritative.
+    private HashSet<string> WarnOnTruncatedConnections(string repo, ReviewFactsPull pull)
     {
-        var truncated = new List<string>();
+        var truncated = new HashSet<string>(StringComparer.Ordinal);
         if (pull.Labels?.PageInfo?.HasNextPage == true)
         {
             truncated.Add("labels");
@@ -549,12 +558,13 @@ public sealed class GitHubOrgClient(
         if (truncated.Count > 0)
         {
             logger?.LogWarning(
-                "{Repo}#{Number}: {Connections} exceeded the query page size; its review pills may be wrong until paginated.",
+                "{Repo}#{Number}: {Connections} exceeded the query page size; its review pills are held at Pending until paginated.",
                 repo,
                 pull.Number,
                 string.Join(", ", truncated)
             );
         }
+        return truncated;
     }
 
     private async Task<T?> PostGraphQlAsync<T>(string query, object variables, string subject, CancellationToken ct)
@@ -721,7 +731,10 @@ public sealed class GitHubOrgClient(
                 ? $"https://github.com/{owner}/{repo}/pull/{dto.Number}"
                 : dto.HtmlUrl!,
             dto.Draft,
-            dto.CreatedAt
+            dto.CreatedAt,
+            // ReviewSignals/ReadyToMerge stay null here: they are stamped later from the
+            // enrichment caches, and only when the cached head matches HeadSha.
+            HeadSha: dto.Head?.Sha
         );
 
     /// <summary>
@@ -907,13 +920,27 @@ public sealed class GitHubOrgClient(
     /// All string sets are case-insensitive so a configured BotLogin cannot miss on
     /// casing alone (GitHub logins are case-preserving but not case-sensitive).
     /// </summary>
-    public static PrReviewFacts ToReviewFacts(ReviewFactsPull pull)
+    /// <param name="headFirstSeenAt">
+    /// When the enrichment worker first observed the current head SHA, scoping the
+    /// issue-comment channel (see CollectHeadCommentAuthors). Null scopes that channel
+    /// to nothing.
+    /// </param>
+    /// <param name="truncated">
+    /// Connections that hit their page cap for this pull request, collected by
+    /// WarnOnTruncatedConnections. Carried onto the facts so the signal factory can
+    /// refuse Clean on evidence it cannot prove complete.
+    /// </param>
+    public static PrReviewFacts ToReviewFacts(
+        ReviewFactsPull pull,
+        Instant? headFirstSeenAt = null,
+        IReadOnlySet<string>? truncated = null
+    )
     {
         var labels = CollectLabels(pull.Labels);
         var headOid = GetHeadOid(pull.Commits);
         var headParticipating = CollectReviewers(pull.Reviews, headOid);
         var unresolved = CollectThreadFacts(pull.ReviewThreads, headParticipating, headOid);
-        var headComments = CollectHeadCommentAuthors(pull.Comments, pull.Commits);
+        var headComments = CollectHeadCommentAuthors(pull.Comments, pull.Commits, headFirstSeenAt);
         var checkApps = CollectSuccessfulCheckApps(pull.Commits);
 
         return new PrReviewFacts(
@@ -923,7 +950,9 @@ public sealed class GitHubOrgClient(
             unresolved,
             headParticipating,
             headComments,
-            checkApps
+            checkApps,
+            headOid,
+            truncated
         );
     }
 
@@ -947,22 +976,33 @@ public sealed class GitHubOrgClient(
         headOid is not null && string.Equals(oid, headOid, StringComparison.Ordinal);
 
     // An issue comment carries no commit, so "did this land on the current head?" becomes
-    // a timestamp comparison. Strict >: a comment stamped equal to the head commit is
-    // ambiguous, and Pending is the safe direction. Anything unreadable -- no head date,
-    // no timestamp, an unparseable one -- drops the author, never promotes them.
+    // a timestamp comparison. The anchor is when the head was first SEEN at its current
+    // SHA (headFirstSeenAt, tracked by the enrichment worker from watermark head-SHA
+    // transitions) -- an upper bound on the push instant -- NOT the head commit's
+    // committedDate, which is when the commit was AUTHORED. Authoring precedes pushing, so
+    // committedDate would certify a comment written after authoring but before the push:
+    // a false Clean on a head the reviewer never saw (also reachable by force-push to an
+    // older commit, or a cherry-pick). headFirstSeenAt null means the transition instant
+    // is unknown for this pull request, and then this channel yields NOTHING -- weaker
+    // evidence must not reach Clean on its own when it cannot be scoped. The committedDate
+    // comparison is kept as a second, redundant bound. Strict > both ways: a comment
+    // stamped equal to either anchor is ambiguous, and Pending is the safe direction.
+    // Anything unreadable -- no head date, no timestamp, an unparseable one -- drops the
+    // author, never promotes them.
     private static HashSet<string> CollectHeadCommentAuthors(
         NodeList<GraphQlIssueComment>? comments,
-        NodeList<GraphQlCommitNode>? commits
+        NodeList<GraphQlCommitNode>? commits,
+        Instant? headFirstSeenAt
     )
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (GetHeadCommittedAt(commits) is not { } headAt)
+        if (headFirstSeenAt is not { } headSince || GetHeadCommittedAt(commits) is not { } headAt)
         {
             return result;
         }
         foreach (
             var login in (comments?.Nodes ?? [])
-                .Where(c => ParseInstant(c.CreatedAt) is { } createdAt && createdAt > headAt)
+                .Where(c => ParseInstant(c.CreatedAt) is { } createdAt && createdAt > headAt && createdAt > headSince)
                 .Select(c => c.Author?.Login)
                 .OfType<string>()
                 .Where(login => login.Length > 0)

@@ -38,7 +38,7 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 public sealed class ReviewSignalEnrichmentWorker(
     GitHubOrgClient client,
     GitHubInventoryCache inventory,
-    PerRepoCache<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>> cache,
+    PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>> cache,
     IOptions<ReviewSignalsOptions> options,
     IOptions<GitHubOptions> gitHub,
     TimeProvider timeProvider,
@@ -49,7 +49,7 @@ public sealed class ReviewSignalEnrichmentWorker(
     IClock clock,
     ILogger<ReviewSignalEnrichmentWorker> logger
 )
-    : RepoEnrichmentWorker<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>>(
+    : RepoEnrichmentWorker<IReadOnlyDictionary<int, CachedReviewSignals>>(
         client,
         inventory,
         cache,
@@ -78,9 +78,14 @@ public sealed class ReviewSignalEnrichmentWorker(
     private int _sweepSkippedForBudget;
     private GraphQlRateLimit? _lastRateLimit;
 
+    // Repo names seen this sweep, so OnSweepCompleted can evict sweep-to-sweep state for
+    // repositories that have left the org inventory — otherwise _watermarks, _observedAt
+    // and _headFirstSeenAt grow without bound in a long-lived singleton.
+    private readonly HashSet<string> _sweptRepoNames = new(StringComparer.OrdinalIgnoreCase);
+
     private static readonly IReadOnlyDictionary<int, PrWatermark> EmptyWatermarks = new Dictionary<int, PrWatermark>();
-    private static readonly IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>> EmptySignals =
-        new Dictionary<int, IReadOnlyList<ReviewSignal>>();
+    private static readonly IReadOnlyDictionary<int, CachedReviewSignals> EmptySignals =
+        new Dictionary<int, CachedReviewSignals>();
 
     // Sweep-to-sweep state. Sweeps are sequential (RepoEnrichmentWorker.RunSweepAsync
     // awaits each repo in turn) and this worker is a singleton, so plain dictionaries are
@@ -91,8 +96,27 @@ public sealed class ReviewSignalEnrichmentWorker(
     );
     private readonly Dictionary<string, Dictionary<int, Instant>> _observedAt = new(StringComparer.OrdinalIgnoreCase);
 
+    // When each pull request's CURRENT head SHA was first observed in the watermark
+    // listing. This is the anchor the issue-comment channel scopes against (see
+    // GitHubOrgClient.CollectHeadCommentAuthors): an upper bound on the push instant,
+    // which is what the head commit's committedDate cannot provide. Restamped whenever
+    // the head moves; evicted with the pull request; lost on restart, which fails safe —
+    // the comment channel yields nothing until the head has been seen for a sweep.
+    private readonly Dictionary<string, Dictionary<int, (string HeadSha, Instant Since)>> _headFirstSeenAt = new(
+        StringComparer.OrdinalIgnoreCase
+    );
+
     protected override void OnSweepCompleted()
     {
+        // Evict state for repositories that left the org inventory since the last sweep.
+        foreach (var stale in _watermarks.Keys.Where(name => !_sweptRepoNames.Contains(name)).ToList())
+        {
+            _ = _watermarks.Remove(stale);
+            _ = _observedAt.Remove(stale);
+            _ = _headFirstSeenAt.Remove(stale);
+        }
+        _sweptRepoNames.Clear();
+
         // Warning, not Information: a sweep that stopped early left repos on a stale or
         // absent signal, and the whole failure mode this guard exists for is that the
         // board degrades quietly enough that nobody looks. Silence must not read as health.
@@ -141,12 +165,13 @@ public sealed class ReviewSignalEnrichmentWorker(
         _sweepSkippedForBudget = 0;
     }
 
-    protected override async Task<IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>>?> CollectAsync(
+    protected override async Task<IReadOnlyDictionary<int, CachedReviewSignals>?> CollectAsync(
         GitHubRepoDto repo,
         CancellationToken ct
     )
     {
         _sweepRepos++;
+        _ = _sweptRepoNames.Add(repo.Name);
 
         if (IsBelowReserve())
         {
@@ -166,10 +191,31 @@ public sealed class ReviewSignalEnrichmentWorker(
             // answers 304 from the shared ETag store, which GitHub does not charge.
             var current = await Client.ListOpenPullRequestWatermarksAsync(repo.Name, ct);
             var previous = _watermarks.GetValueOrDefault(repo.Name) ?? EmptyWatermarks;
-            var diff = PrWatermarkDiff.Compute(previous, current);
 
-            var cached = Cache.TryGet(repo.Name, out var prior) && prior is not null ? prior : EmptySignals;
+            var cacheHit = Cache.TryGet(repo.Name, out var prior);
+            var cached = cacheHit && prior is not null ? prior : EmptySignals;
+
+            // An expired cache with committed watermarks is self-consistently EMPTY:
+            // the diff reports nothing dirty, the priority pass iterates an empty cache,
+            // and the merge writes an empty dictionary back with a fresh timestamp — a
+            // permanent latch that only a restart or PR activity used to break. A cache
+            // miss over a repo whose watermarks say "everything is clean" is therefore
+            // treated as cold state: drop the watermarks so every open pull request
+            // diffs dirty and is refetched. An empty-but-PRESENT cache entry is
+            // legitimate (every open PR excluded by author), so only a genuine miss
+            // triggers this.
+            if (!cacheHit && previous.Count > 0)
+            {
+                logger.LogWarning(
+                    "Review signal cache for {Repo} expired while its watermarks were clean; refetching every open pull request.",
+                    repo.Name
+                );
+                previous = EmptyWatermarks;
+            }
+
+            var diff = PrWatermarkDiff.Compute(previous, current);
             var observed = _observedAt.TryGetValue(repo.Name, out var seen) ? seen : [];
+            var headFirstSeenAt = TrackHeadTransitions(repo.Name, previous, current);
 
             // Transitions the watermark cannot see (a resolved thread, a check completing
             // on an unchanged head) get a slow forced refetch instead of never updating.
@@ -181,7 +227,7 @@ public sealed class ReviewSignalEnrichmentWorker(
 
             var batch =
                 toFetch.Count > 0
-                    ? await Client.GetPullRequestReviewFactsAsync(repo.Name, toFetch, ct)
+                    ? await Client.GetPullRequestReviewFactsAsync(repo.Name, toFetch, ct, headFirstSeenAt)
                     : ReviewFactsBatch.Empty;
             var facts = batch.Facts;
             RecordGraphQlCost(batch);
@@ -264,12 +310,6 @@ public sealed class ReviewSignalEnrichmentWorker(
     }
 
     /// <summary>
-    /// True when the last observed budget is below the configured reserve and that
-    /// observation is still current. Closed loop: every query already returns
-    /// rateLimit { remaining resetAt }, so the worker can see it is running out — before
-    /// this guard it read that number, logged it, and swept again anyway.
-    /// </summary>
-    /// <summary>
     /// Stamps when each refetched pull request was observed, and forgets ones that are no
     /// longer open. The stamps drive <see cref="ReviewSignalPriority"/>, so letting them
     /// accumulate for closed pull requests would slowly turn the priority queue into a
@@ -300,14 +340,63 @@ public sealed class ReviewSignalEnrichmentWorker(
     }
 
     /// <summary>
+    /// Stamps when each pull request's current head SHA was first seen, and forgets pull
+    /// requests that are no longer open. The stamps anchor the issue-comment channel —
+    /// the only head-participation channel with no commit oid to compare (see
+    /// GitHubOrgClient.CollectHeadCommentAuthors). A head that just moved is stamped NOW,
+    /// so a comment predating the observation cannot certify the new head; a head seen
+    /// for a while keeps its original stamp, so later comments still count.
+    /// </summary>
+    private Dictionary<int, Instant> TrackHeadTransitions(
+        string repo,
+        IReadOnlyDictionary<int, PrWatermark> previous,
+        IReadOnlyDictionary<int, PrWatermark> current
+    )
+    {
+        if (!_headFirstSeenAt.TryGetValue(repo, out var seen))
+        {
+            seen = [];
+            _headFirstSeenAt[repo] = seen;
+        }
+
+        foreach (var closed in seen.Keys.Where(n => !current.ContainsKey(n)).ToList())
+        {
+            _ = seen.Remove(closed);
+        }
+
+        var now = clock.GetCurrentInstant();
+        foreach (var (number, watermark) in current)
+        {
+            if (string.IsNullOrEmpty(watermark.HeadSha))
+            {
+                // Head unknown: the comment channel must yield nothing for this PR.
+                _ = seen.Remove(number);
+                continue;
+            }
+
+            var unchanged =
+                previous.TryGetValue(number, out var before)
+                && string.Equals(before.HeadSha, watermark.HeadSha, StringComparison.Ordinal)
+                && seen.TryGetValue(number, out var existing)
+                && string.Equals(existing.HeadSha, watermark.HeadSha, StringComparison.Ordinal);
+            if (!unchanged)
+            {
+                seen[number] = (watermark.HeadSha, now);
+            }
+        }
+
+        return seen.ToDictionary(entry => entry.Key, entry => entry.Value.Since);
+    }
+
+    /// <summary>
     /// Last-known-good for everything still open, overwritten by whatever was refetched.
     /// The merge is what makes the incremental path safe: an untouched pull request keeps
     /// the signal it already had rather than being recomputed or dropped, while one that
     /// closed disappears — fixing a pill that used to outlive its pull request.
     /// </summary>
-    private IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>> Merge(
+    private IReadOnlyDictionary<int, CachedReviewSignals> Merge(
         string repo,
-        IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>> cached,
+        IReadOnlyDictionary<int, CachedReviewSignals> cached,
         IReadOnlyDictionary<int, PrWatermark> stillOpen,
         IReadOnlyDictionary<int, PrReviewFacts> facts,
         IReadOnlyDictionary<int, int>? alerts,
@@ -315,10 +404,17 @@ public sealed class ReviewSignalEnrichmentWorker(
         IReadOnlyList<ReviewerOptions> reviewers
     )
     {
-        var signals = new Dictionary<int, IReadOnlyList<ReviewSignal>>();
+        // Cached entries carry the head they were computed against; the refresh pipeline
+        // attaches them only while that head is still the pull request's head.
+        var roster = reviewers.Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
+        var signals = new Dictionary<int, CachedReviewSignals>();
         foreach (var (number, existing) in cached.Where(entry => stillOpen.ContainsKey(entry.Key)))
         {
-            signals[number] = existing;
+            // Carry-over is filtered to the CURRENT roster: a repository flipping public
+            // to private must drop its PublicOnly pills at once rather than showing them
+            // until each pull request happens to be refetched.
+            var filtered = existing.Signals.Where(signal => roster.Contains(signal.Name)).ToList();
+            signals[number] = existing with { Signals = filtered };
         }
 
         foreach (var pr in facts.Values)
@@ -337,7 +433,7 @@ public sealed class ReviewSignalEnrichmentWorker(
             // present dictionary with no entry for this PR means zero open alerts.
             var openAlerts = alerts is null ? (int?)null : alerts.GetValueOrDefault(pr.Number);
             var repoHtmlUrl = $"https://github.com/{gitHub.Value.Owner}/{repo}";
-            signals[pr.Number] = ReviewSignalFactory.Build(
+            var built = ReviewSignalFactory.Build(
                 pr,
                 reviewers,
                 openAlerts,
@@ -345,6 +441,10 @@ public sealed class ReviewSignalEnrichmentWorker(
                 $"{repoHtmlUrl}/pull/{pr.Number}",
                 repoHtmlUrl
             );
+            // The facts' own head oid is the truth about what was reviewed; fall back to
+            // the watermark's head only when the query returned no commit node at all.
+            var headSha = pr.HeadSha ?? stillOpen.GetValueOrDefault(pr.Number).HeadSha;
+            signals[pr.Number] = new CachedReviewSignals(headSha, built);
         }
 
         return signals;
@@ -376,6 +476,12 @@ public sealed class ReviewSignalEnrichmentWorker(
         return merged;
     }
 
+    /// <summary>
+    /// True when the last observed budget is below the configured reserve and that
+    /// observation is still current. Closed loop: every query already returns
+    /// rateLimit { remaining resetAt }, so the worker can see it is running out — before
+    /// this guard it read that number, logged it, and swept again anyway.
+    /// </summary>
     private bool IsBelowReserve() =>
         IsBelowReserve(_lastRateLimit, options.Value.ReserveBudgetPoints, clock.GetCurrentInstant());
 

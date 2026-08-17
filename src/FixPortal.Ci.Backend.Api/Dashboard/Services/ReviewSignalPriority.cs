@@ -48,7 +48,7 @@ public static class ReviewSignalPriority
     /// <param name="refreshInterval">How stale a non-terminal pill may get.</param>
     /// <param name="now">Injected clock reading.</param>
     public static IReadOnlyList<int> SelectDue(
-        IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>> signalsByPr,
+        IReadOnlyDictionary<int, CachedReviewSignals> signalsByPr,
         IReadOnlyDictionary<int, Instant> observedAt,
         Duration refreshInterval,
         Instant now,
@@ -57,13 +57,13 @@ public static class ReviewSignalPriority
     {
         var reconcile = reconcileInterval ?? ReconcileInterval;
         var due = new List<int>();
-        foreach (var (number, signals) in signalsByPr)
+        foreach (var (number, cached) in signalsByPr)
         {
             // Terminal pills are not immune to going stale, they just go stale slowly:
             // a check can re-run and fail against an UNCHANGED head, turning a Clean pill
             // wrong without moving updated_at or the head SHA. Nothing free can see that,
             // so everything is reconciled eventually — non-terminal pills just far sooner.
-            var interval = signals.Any(IsNonTerminal) ? refreshInterval : reconcile;
+            var interval = cached.Signals.Any(IsNonTerminal) ? refreshInterval : reconcile;
 
             // Never observed but cached is a contradiction; refetch rather than assume.
             if (!observedAt.TryGetValue(number, out var seen) || now - seen >= interval)

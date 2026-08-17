@@ -135,6 +135,15 @@ public static class ReviewSignalFactory
             return new ReviewSignal(reviewer.Name, ReviewSignalState.Outstanding, unresolved, $"{prHtmlUrl}/files");
         }
 
+        // A truncated reviewThreads connection means the unresolved count above is a
+        // lower bound, not a count: a thread past the page cap is simply absent, so
+        // nothing below can prove this reviewer clean. Hold at Pending until the pull
+        // request fits the query again.
+        if (facts.TruncatedConnections?.Contains("reviewThreads") == true)
+        {
+            return new ReviewSignal(reviewer.Name, ReviewSignalState.Pending, null, null);
+        }
+
         // A passing check is not evidence a reviewer ran: CodeRabbit's "rate limited" /
         // "review skipped" checks pass by design so they never block a protected-branch
         // merge. Participation is a review, an opened thread, or -- for a reviewer opted

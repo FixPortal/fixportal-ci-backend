@@ -41,7 +41,8 @@ public class ReviewSignalFactoryTests
         IDictionary<string, int>? unresolved = null,
         IEnumerable<string>? headParticipating = null,
         IEnumerable<string>? checkApps = null,
-        IEnumerable<string>? headComments = null
+        IEnumerable<string>? headComments = null,
+        IEnumerable<string>? truncated = null
     ) =>
         new(
             181,
@@ -50,7 +51,9 @@ public class ReviewSignalFactoryTests
             new Dictionary<string, int>(unresolved ?? new Dictionary<string, int>(), StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(headParticipating ?? [], StringComparer.OrdinalIgnoreCase),
             new HashSet<string>(headComments ?? [], StringComparer.OrdinalIgnoreCase),
-            new HashSet<string>(checkApps ?? [], StringComparer.OrdinalIgnoreCase)
+            new HashSet<string>(checkApps ?? [], StringComparer.OrdinalIgnoreCase),
+            HeadSha: "head-sha",
+            TruncatedConnections: truncated is null ? null : new HashSet<string>(truncated, StringComparer.Ordinal)
         );
 
     private static ReviewSignal Only(
@@ -349,6 +352,33 @@ public class ReviewSignalFactoryTests
 
         _ = signal.State.Should().Be(ReviewSignalState.Outstanding);
         _ = signal.Count.Should().Be(2);
+    }
+
+    // M1: a reviewThreads connection past its page cap is a lower bound, not a count —
+    // an unresolved thread beyond item 100 is simply absent. Participation evidence must
+    // not promote such a pull request to Clean.
+    [Fact]
+    public void A_truncated_thread_connection_holds_the_reviewer_at_pending_not_clean()
+    {
+        var signal = Only(
+            GitarWithComments,
+            Facts(headParticipating: ["gitar-app"], truncated: ["reviewThreads"])
+        );
+
+        _ = signal.State.Should().Be(ReviewSignalState.Pending);
+    }
+
+    [Fact]
+    public void A_truncated_thread_connection_does_not_hide_known_unresolved_threads()
+    {
+        // Positive evidence of open findings still reports Outstanding; only the Clean
+        // direction is suppressed.
+        var signal = Only(
+            GitarWithComments,
+            Facts(unresolved: new Dictionary<string, int> { ["gitar-app"] = 1 }, truncated: ["reviewThreads"])
+        );
+
+        _ = signal.State.Should().Be(ReviewSignalState.Outstanding);
     }
 
     [Fact]

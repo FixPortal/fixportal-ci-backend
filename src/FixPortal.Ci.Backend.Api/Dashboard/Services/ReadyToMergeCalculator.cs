@@ -53,6 +53,16 @@ public static class ReadyToMergeCalculator
             return null;
         }
 
+        // A merge verdict is earned against one head commit. If the cached verdict's head
+        // does not match the head the board currently sees — a push landed between the
+        // merge-state sweep and now — the verdict says nothing about this head, so the
+        // pull request is unknown, not ready. Either side missing its SHA is the same:
+        // it cannot prove currency, so it must not certify readiness.
+        if (!DashboardRefreshService.SameHead(pr.HeadSha, mergeState.HeadSha))
+        {
+            return null;
+        }
+
         if (!mergeState.IsMergeClean)
         {
             return false;

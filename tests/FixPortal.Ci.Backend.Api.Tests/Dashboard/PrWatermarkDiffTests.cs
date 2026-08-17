@@ -130,8 +130,11 @@ public class ReviewSignalPriorityTests
     private static readonly Instant Now = Instant.FromUtc(2026, 8, 2, 12, 0, 0);
     private static readonly Duration Interval = Duration.FromMinutes(10);
 
-    private static IReadOnlyDictionary<int, IReadOnlyList<ReviewSignal>> Signals(ReviewSignalState state) =>
-        new Dictionary<int, IReadOnlyList<ReviewSignal>> { [181] = [new ReviewSignal("Gitar", state, null, null)] };
+    private static IReadOnlyDictionary<int, CachedReviewSignals> Signals(ReviewSignalState state) =>
+        new Dictionary<int, CachedReviewSignals>
+        {
+            [181] = new("sha", [new ReviewSignal("Gitar", state, null, null)]),
+        };
 
     [Theory]
     // Waiting on a human or a bot: both can flip without the watermark moving, because
