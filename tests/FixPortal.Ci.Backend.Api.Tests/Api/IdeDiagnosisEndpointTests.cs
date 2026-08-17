@@ -178,6 +178,82 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
     }
 
     [Fact]
+    public async Task Diagnosis_resolves_a_run_from_a_producer_built_snapshot()
+    {
+        // H1 regression: every other test here hand-builds its WorkflowRun with the
+        // owner-qualified Repository, which is exactly how the producer/endpoint
+        // contract drifted apart (the producer wrote the bare repo name, so FindRun
+        // never matched a real snapshot). Drive the REAL producer — GetRecentRunsAsync
+        // over a scripted API response — into the real endpoint.
+        using var producerHandler = new RunsHandler();
+        using var producerHttp = new HttpClient(producerHandler)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
+        var producer = new GitHubOrgClient(
+            producerHttp,
+            Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "test-token" }),
+            Options.Create(new DashboardOptions { SnapshotPath = "snapshot.json", RefreshSeconds = 60 }),
+            new GitHubETagStore()
+        );
+        var runs = await producer.GetRecentRunsAsync(
+            "Alpha",
+            new GitHubWorkflowDto(1, "Build", ".github/workflows/build.yml", "active"),
+            TestContext.Current.CancellationToken
+        );
+        var snapshot = new DashboardSnapshot(
+            Instant.FromUtc(2026, 8, 5, 10, 0),
+            "FixPortal",
+            [
+                new RepositorySnapshot(
+                    "Alpha",
+                    "https://github.com/FixPortal/Alpha",
+                    true,
+                    [new WorkflowSnapshot("Build", ".github/workflows/build.yml", SignalState.Failure, runs[0], runs)],
+                    [],
+                    null,
+                    [],
+                    []
+                ),
+            ],
+            [],
+            null
+        );
+        var handler = SuccessfulProvider("hello");
+        var client = CreateClient(snapshot, handler);
+
+        using var response = await client.SendAsync(Request(Route), TestContext.Current.CancellationToken);
+        var actual = await response.Content.ReadAsByteArrayAsync(TestContext.Current.CancellationToken);
+        var expected = await File.ReadAllBytesAsync(
+            Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../Fixtures/ci-ide-diagnosis-v1.json")),
+            TestContext.Current.CancellationToken
+        );
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK, "a producer-built run must resolve through FindRun");
+        actual.Should().Equal(expected);
+    }
+
+    // Serves the runs payload the producer maps into WorkflowRuns — the shape
+    // GetRecentRunsAsync actually receives from GitHub.
+    private sealed class RunsHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) =>
+            Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"workflow_runs":[{"id":42,"status":"completed","conclusion":"failure","html_url":"https://github.com/FixPortal/Alpha/actions/runs/42","display_title":"build","run_number":7,"head_branch":"main","event":"push","updated_at":"2026-08-05T09:00:00Z","run_attempt":3,"head_sha":"cccccccccccccccccccccccccccccccccccccccc"}]}""",
+                        Encoding.UTF8,
+                        "application/json"
+                    ),
+                }
+            );
+    }
+
+    [Fact]
     public async Task Diagnosis_fails_closed_when_workflow_aliases_have_the_same_canonical_identity()
     {
         var handler = new ProviderHandler(_ => throw new InvalidOperationException("provider was used"));
@@ -214,7 +290,7 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         handler.Requests.Should().HaveCount(2);
         var first = handler.Requests[0];
-        first.Uri.Should().Be(new Uri("https://api.github.com/repos/FixPortal/Alpha/actions/runs/42/logs"));
+        first.Uri.Should().Be(new Uri("https://api.github.com/repos/FixPortal/Alpha/actions/runs/42/attempts/3/logs"));
         first.Authorization.Should().Be("Bearer test-token");
         first.Accept.Should().Contain("application/vnd.github+json");
         first.IfNoneMatch.Should().BeEmpty();

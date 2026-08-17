@@ -656,7 +656,10 @@ public sealed class GitHubOrgClient(
             run.HeadBranch,
             run.Event,
             run.UpdatedAt,
-            repo,
+            // Owner-qualified: the IDE diagnosis route (IdeEndpoints.FindRun) matches on
+            // "owner/repo", and the dashboard contract fixture already spells it that way.
+            // The bare name here made every diagnosis lookup 404 against a real snapshot.
+            $"{_gitHub.Owner}/{repo}",
             FileName(workflow.Path),
             run.Id,
             run.RunAttempt,
@@ -1398,10 +1401,14 @@ public sealed class GitHubOrgClient(
         HttpClient downloadClient,
         string repo,
         long runId,
+        int attempt,
         CancellationToken ct
     )
     {
-        var path = $"repos/{_gitHub.Owner}/{repo}/actions/runs/{runId}/logs";
+        // The attempt-scoped route, not /runs/{id}/logs: the unscoped route silently
+        // serves the LATEST attempt, so after a re-run the diagnosis would assert the
+        // snapshot's attempt and SHA over logs from a newer one.
+        var path = $"repos/{_gitHub.Owner}/{repo}/actions/runs/{runId}/attempts/{attempt}/logs";
         using var request = new HttpRequestMessage(HttpMethod.Get, new Uri(httpClient.BaseAddress!, path));
         await AddStandardHeadersAsync(request, ct);
 

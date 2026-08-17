@@ -484,7 +484,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
                 w.Name == "healthy-a CI"
                 && w.State == SignalState.Success
                 && w.LastRun != null
-                && w.LastRun.Repository == "healthy-a"
+                && w.LastRun.Repository == "FixPortal/healthy-a"
             );
         _ = repos["healthy-b"]
             .Workflows.Should()
@@ -492,7 +492,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
                 w.Name == "healthy-b CI"
                 && w.State == SignalState.Success
                 && w.LastRun != null
-                && w.LastRun.Repository == "healthy-b"
+                && w.LastRun.Repository == "FixPortal/healthy-b"
             );
         _ = repos["auth-fails"].Workflows.Should().BeEmpty();
         _ = state.LastAuthError.Should().Contain("auth-fails");
