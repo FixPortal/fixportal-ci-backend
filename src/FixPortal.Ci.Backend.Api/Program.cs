@@ -49,13 +49,14 @@ builder
 
 // A named client, not the typed GitHubOrgClient one: minting a token must not recurse
 // through the client whose requests are waiting on that token.
-builder.Services.AddHttpClient<GitHubAppTokenSource>(client =>
-{
-    // Same fixed, well-known API root as the typed client below; S1075 does not apply.
+builder
+    .Services.AddHttpClient<GitHubAppTokenSource>(client =>
+    {
+        // Same fixed, well-known API root as the typed client below; S1075 does not apply.
 #pragma warning disable S1075
-    client.BaseAddress = new Uri("https://api.github.com/");
+        client.BaseAddress = new Uri("https://api.github.com/");
 #pragma warning restore S1075
-})
+    })
     // Captured by the singleton IGitHubTokenSource registration below, so factory
     // handler rotation never fires — the same captive-singleton shape the
     // GitHubOrgClient registration documents. Recycle pooled connections at the
@@ -152,11 +153,7 @@ builder
     // Same captive-singleton lifetime as above. AllowAutoRedirect stays false: the
     // reader follows the one expected redirect itself, without forwarding headers.
     .ConfigurePrimaryHttpMessageHandler(() =>
-        new SocketsHttpHandler
-        {
-            AllowAutoRedirect = false,
-            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
-        }
+        new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionLifetime = TimeSpan.FromMinutes(2) }
     );
 builder.Services.AddSingleton<DashboardSnapshotState>();
 builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>

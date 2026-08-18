@@ -27,7 +27,12 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
     private const int MaximumTextBytes = 512 * 1024;
     private static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(15);
 
-    public async Task<RunDiagnosisReadResult> ReadAsync(string repository, long runId, int attempt, CancellationToken ct)
+    public async Task<RunDiagnosisReadResult> ReadAsync(
+        string repository,
+        long runId,
+        int attempt,
+        CancellationToken ct
+    )
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(ProviderTimeout);

@@ -106,7 +106,12 @@ public static class IdeEndpoints
         {
             result = await services
                 .GetRequiredService<RunDiagnosisReader>()
-                .ReadAsync(match.Value.Repository.Name, runId, match.Value.Run.RunAttempt!.Value, context.RequestAborted);
+                .ReadAsync(
+                    match.Value.Repository.Name,
+                    runId,
+                    match.Value.Run.RunAttempt!.Value,
+                    context.RequestAborted
+                );
         }
         finally
         {

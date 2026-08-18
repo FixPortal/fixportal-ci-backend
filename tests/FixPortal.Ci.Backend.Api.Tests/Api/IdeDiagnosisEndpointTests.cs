@@ -186,10 +186,7 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
         // never matched a real snapshot). Drive the REAL producer — GetRecentRunsAsync
         // over a scripted API response — into the real endpoint.
         using var producerHandler = new RunsHandler();
-        using var producerHttp = new HttpClient(producerHandler)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        using var producerHttp = new HttpClient(producerHandler) { BaseAddress = new Uri("https://api.github.com/") };
         var producer = new GitHubOrgClient(
             producerHttp,
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "test-token" }),

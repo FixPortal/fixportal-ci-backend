@@ -25,13 +25,18 @@ public class ApplyReadyToMergeTests
             HeadSha: headSha
         );
 
-    private static PrMergeState Clean(int number, string? headSha = Head) => new(number, false, "MERGEABLE", "CLEAN", headSha);
+    private static PrMergeState Clean(int number, string? headSha = Head) =>
+        new(number, false, "MERGEABLE", "CLEAN", headSha);
 
     [Fact]
     public void Stamps_each_pull_request_from_its_own_merge_state()
     {
         var prs = new[] { Pr(1, [new("CodeRabbit", ReviewSignalState.Clean, null, null)]), Pr(2, []) };
-        var states = new Dictionary<int, PrMergeState> { [1] = Clean(1), [2] = new(2, false, "CONFLICTING", "DIRTY", Head) };
+        var states = new Dictionary<int, PrMergeState>
+        {
+            [1] = Clean(1),
+            [2] = new(2, false, "CONFLICTING", "DIRTY", Head),
+        };
 
         var result = DashboardRefreshService.ApplyReadyToMerge(prs, states, true, NoBots);
 
@@ -75,7 +80,10 @@ public class ApplyReadyToMergeTests
     [Fact]
     public void A_merge_state_from_an_older_head_is_unknown_not_ready()
     {
-        var prs = new[] { Pr(1, [new("CodeRabbit", ReviewSignalState.Clean, null, null)], headSha: new string('b', 40)) };
+        var prs = new[]
+        {
+            Pr(1, [new("CodeRabbit", ReviewSignalState.Clean, null, null)], headSha: new string('b', 40)),
+        };
         var states = new Dictionary<int, PrMergeState> { [1] = Clean(1, headSha: new string('a', 40)) };
 
         var result = DashboardRefreshService.ApplyReadyToMerge(prs, states, true, NoBots);

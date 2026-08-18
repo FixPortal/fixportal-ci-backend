@@ -42,17 +42,11 @@ public sealed class SnapshotRestoreService(
         // startup fast, not be swallowed into "empty board" alongside unreadable files.
         var sanitized = restored with
         {
-            Repositories =
-            [
-                .. restored.Repositories.Select(DashboardRefreshService.WithoutHeadScopedReviewState),
-            ],
+            Repositories = [.. restored.Repositories.Select(DashboardRefreshService.WithoutHeadScopedReviewState)],
         };
         // Prefer the persisted public trend (accurate, public-only); fall
         // back to the lossy reclassification for pre-PublicCiTrend snapshots.
-        state.Update(
-            sanitized,
-            DashboardSnapshotState.ComputePublicSnapshot(sanitized, sanitized.PublicCiTrend)
-        );
+        state.Update(sanitized, DashboardSnapshotState.ComputePublicSnapshot(sanitized, sanitized.PublicCiTrend));
     }
 
     public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;

@@ -172,9 +172,10 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
             CancellationToken cancellationToken
         )
         {
-            var (status, body) = request.Method == HttpMethod.Get
-                ? (HttpStatusCode.OK, """{"id":4242}""")
-                : (MintStatusOverride ?? mintStatus, mintBody.Replace("__EXPIRES_AT__", expiresAt));
+            var (status, body) =
+                request.Method == HttpMethod.Get
+                    ? (HttpStatusCode.OK, """{"id":4242}""")
+                    : (MintStatusOverride ?? mintStatus, mintBody.Replace("__EXPIRES_AT__", expiresAt));
             if (request.Method == HttpMethod.Get)
             {
                 InstallationLookups++;
@@ -184,10 +185,7 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
                 Mints++;
             }
             return Task.FromResult(
-                new HttpResponseMessage(status)
-                {
-                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
-                }
+                new HttpResponseMessage(status) { Content = new StringContent(body, Encoding.UTF8, "application/json") }
             );
         }
     }
@@ -219,7 +217,9 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
         clock.Advance(Duration.FromMinutes(26));
         _ = await source.GetTokenAsync(TestContext.Current.CancellationToken);
 
-        _ = handler.Mints.Should().Be(2, "20:26 + 5min margin is past the real 20:30 expiry but inside the 60min fallback");
+        _ = handler
+            .Mints.Should()
+            .Be(2, "20:26 + 5min margin is past the real 20:30 expiry but inside the 60min fallback");
     }
 
     [Fact]

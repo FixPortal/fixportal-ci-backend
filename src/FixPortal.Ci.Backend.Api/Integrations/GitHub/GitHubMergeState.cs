@@ -18,7 +18,13 @@ namespace FixPortal.Ci.Backend.Api.Integrations.GitHub;
 /// against a different head says nothing about the current one; the ready-to-merge
 /// calculator treats a mismatch — or an absent value — as unknown, never as ready.
 /// </param>
-public sealed record PrMergeState(int Number, bool IsDraft, string? Mergeable, string? MergeStateStatus, string? HeadSha = null)
+public sealed record PrMergeState(
+    int Number,
+    bool IsDraft,
+    string? Mergeable,
+    string? MergeStateStatus,
+    string? HeadSha = null
+)
 {
     /// <summary>
     /// True only when GitHub says the pull request is mergeable with nothing outstanding.
@@ -49,7 +55,13 @@ public sealed record PrMergeState(int Number, bool IsDraft, string? Mergeable, s
 }
 
 /// <summary>GraphQL wire shape for one aliased pull request in the merge-state query.</summary>
-public sealed record MergeStatePull(int Number, bool IsDraft, string? Mergeable, string? MergeStateStatus, string? HeadRefOid);
+public sealed record MergeStatePull(
+    int Number,
+    bool IsDraft,
+    string? Mergeable,
+    string? MergeStateStatus,
+    string? HeadRefOid
+);
 
 /// <summary>
 /// Response shape for the merge-state query. Like the review-facts equivalent, the

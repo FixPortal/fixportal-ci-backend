@@ -531,7 +531,9 @@ public sealed class GitHubOrgClient(
             // Aliases are built from int, so there is no injection surface here.
             var aliases = string.Join(
                 "\n    ",
-                chunk.Select(n => $"pr{n}: pullRequest(number: {n}) {{ number isDraft mergeable mergeStateStatus headRefOid }}")
+                chunk.Select(n =>
+                    $"pr{n}: pullRequest(number: {n}) {{ number isDraft mergeable mergeStateStatus headRefOid }}"
+                )
             );
             var query = $$"""
                 query($owner: String!, $name: String!) {

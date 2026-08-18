@@ -274,7 +274,9 @@ public class GitHubReviewFactsTests
     public void An_unparseable_comment_timestamp_is_skipped_rather_than_throwing()
     {
         var facts = GitHubOrgClient.ToReviewFacts(
-            Pull(comments: [Comment("gitar-bot", "not-a-date"), Comment("github-code-quality", "2026-08-03T10:05:00Z")]),
+            Pull(
+                comments: [Comment("gitar-bot", "not-a-date"), Comment("github-code-quality", "2026-08-03T10:05:00Z")]
+            ),
             HeadFirstSeenAt
         );
 
