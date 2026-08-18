@@ -400,10 +400,10 @@ public sealed class ReviewSignalEnrichmentWorker(
                 continue;
             }
 
-            var known = previous.ContainsKey(number);
+            var known = previous.TryGetValue(number, out var before);
             var unchanged =
                 known
-                && string.Equals(previous[number].HeadSha, watermark.HeadSha, StringComparison.Ordinal)
+                && string.Equals(before.HeadSha, watermark.HeadSha, StringComparison.Ordinal)
                 && seen.TryGetValue(number, out var existing)
                 && string.Equals(existing.HeadSha, watermark.HeadSha, StringComparison.Ordinal);
             if (!unchanged)
