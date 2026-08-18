@@ -251,7 +251,7 @@ To host elsewhere, the `Dockerfile` is a standard multi-stage build (non-root,
 port 8080) that runs on any container platform. The restore stage reads the
 GitHub Packages token from a BuildKit **build secret**, so a local build is:
 
-```
+```shell
 docker build --secret id=github-packages-token,env=GITHUB_PACKAGES_TOKEN -t fixportal-ci-backend .
 ```
 

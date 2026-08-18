@@ -240,6 +240,12 @@ public sealed class GitHubOrgClient(
     // Search/issues page size. internal so the merged-PR tests size their full-page
     // fixtures off the same value instead of a hand-mirrored literal.
     internal const int SearchPageSize = 20;
+
+    // The reviewThreads connection name as emitted into PrReviewFacts.TruncatedConnections
+    // by WarnOnTruncatedConnections. internal and shared with the signal factory (and its
+    // tests) because the name is an untyped contract across three files: a drifted literal
+    // silently disables the guard that refuses Clean on a truncated thread list.
+    internal const string ReviewThreadsConnectionName = "reviewThreads";
     private readonly GitHubOptions _gitHub = gitHub.Value;
     private readonly DashboardOptions _dashboard = dashboard.Value;
 
@@ -473,7 +479,14 @@ public sealed class GitHubOrgClient(
             var truncated = WarnOnTruncatedConnections(repo, pull);
             facts[pull.Number] = ToReviewFacts(
                 pull,
-                headFirstSeenAt?.GetValueOrDefault(pull.Number),
+                // TryGetValue, not GetValueOrDefault: a missing entry must stay null
+                // ("anchor unknown" — the comment channel yields nothing), whereas the
+                // default(Instant) a missing key would produce is the Unix epoch, which
+                // scopes the channel to every comment the pull request ever received.
+                headFirstSeenAt is not null
+                && headFirstSeenAt.TryGetValue(pull.Number, out var headSince)
+                    ? headSince
+                    : null,
                 truncated.Count > 0 ? truncated : null
             );
         }
@@ -589,7 +602,7 @@ public sealed class GitHubOrgClient(
         }
         if (pull.ReviewThreads?.PageInfo?.HasNextPage == true)
         {
-            truncated.Add("reviewThreads");
+            truncated.Add(ReviewThreadsConnectionName);
         }
         // hasPreviousPage, not hasNextPage: comments are fetched with `last:`.
         if (pull.Comments?.PageInfo?.HasPreviousPage == true)

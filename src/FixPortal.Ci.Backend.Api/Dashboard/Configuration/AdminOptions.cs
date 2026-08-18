@@ -10,5 +10,7 @@ public sealed class AdminOptions
 
     // Null-tolerant: an explicitly null bound value must produce the configured
     // validation message, not a NullReferenceException from the validator itself.
-    public bool HasValidAdminKeyLength() => AdminKey is null or { Length: 0 } || AdminKey.Length >= 16;
+    // Empty is valid (the admin endpoint fails closed with no key configured); a
+    // set key shorter than 16 characters is not.
+    public bool HasValidAdminKeyLength() => AdminKey is { Length: 0 } or { Length: >= 16 };
 }

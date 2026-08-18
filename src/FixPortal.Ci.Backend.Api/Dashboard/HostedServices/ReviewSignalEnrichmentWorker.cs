@@ -102,11 +102,20 @@ public sealed class ReviewSignalEnrichmentWorker(
     protected override void OnSweepCompleted()
     {
         // Evict state for repositories that left the org inventory since the last sweep.
-        foreach (var stale in _watermarks.Keys.Where(name => !_sweptRepoNames.Contains(name)).ToList())
+        // Iterate the UNION of the three key sets: a first sweep that soft-fails between
+        // TrackHeadTransitions and the watermark commit leaves _observedAt/_headFirstSeenAt
+        // entries that _watermarks never gained, and keying off _watermarks alone would
+        // leak exactly those.
+        var stale = _watermarks
+            .Keys.Union(_observedAt.Keys)
+            .Union(_headFirstSeenAt.Keys)
+            .Where(name => !_sweptRepoNames.Contains(name))
+            .ToList();
+        foreach (var name in stale)
         {
-            _ = _watermarks.Remove(stale);
-            _ = _observedAt.Remove(stale);
-            _ = _headFirstSeenAt.Remove(stale);
+            _ = _watermarks.Remove(name);
+            _ = _observedAt.Remove(name);
+            _ = _headFirstSeenAt.Remove(name);
         }
         _sweptRepoNames.Clear();
 
@@ -193,20 +202,25 @@ public sealed class ReviewSignalEnrichmentWorker(
             // and the merge writes an empty dictionary back with a fresh timestamp — a
             // permanent latch that only a restart or PR activity used to break. A cache
             // miss over a repo whose watermarks say "everything is clean" is therefore
-            // treated as cold state: drop the watermarks so every open pull request
-            // diffs dirty and is refetched. An empty-but-PRESENT cache entry is
-            // legitimate (every open PR excluded by author), so only a genuine miss
-            // triggers this.
+            // treated as cold state: every open pull request diffs dirty and is
+            // refetched. An empty-but-PRESENT cache entry is legitimate (every open PR
+            // excluded by author), so only a genuine miss triggers this.
+            // Only the DIFF basis empties — the previous watermarks still anchor
+            // TrackHeadTransitions, so a head that never moved keeps its original
+            // first-seen stamp. Restamping every head to now would pin a comment-only
+            // reviewer to Pending for the rest of the head's life: its announcing
+            // comment predates the restamp and is never reposted for the same head.
+            var diffBasis = previous;
             if (!cacheHit && previous.Count > 0)
             {
                 logger.LogWarning(
                     "Review signal cache for {Repo} expired while its watermarks were clean; refetching every open pull request.",
                     repo.Name
                 );
-                previous = EmptyWatermarks;
+                diffBasis = EmptyWatermarks;
             }
 
-            var diff = PrWatermarkDiff.Compute(previous, current);
+            var diff = PrWatermarkDiff.Compute(diffBasis, current);
             var observed = _observedAt.TryGetValue(repo.Name, out var seen) ? seen : [];
             var headFirstSeenAt = TrackHeadTransitions(repo.Name, previous, current);
 
@@ -256,7 +270,8 @@ public sealed class ReviewSignalEnrichmentWorker(
             // silently reports that pull request as up to date forever — a partial version
             // of the same certify-stale bug, and the harder one to notice because every
             // other pull request in the repo still works.
-            _watermarks[repo.Name] = batch.Failed.Count == 0 ? current : WithoutFailed(current, previous, batch.Failed);
+            _watermarks[repo.Name] =
+                batch.Failed.Count == 0 ? current : WithoutFailed(current, diffBasis, batch.Failed);
 
             if (diff.Evicted.Count > 0)
             {

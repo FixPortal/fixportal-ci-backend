@@ -772,4 +772,95 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 
         await worker.StopAsync(TestContext.Current.CancellationToken);
     }
+
+    // Follow-up to the cold-cache refetch: the emptied basis forces the refetch, but
+    // TrackHeadTransitions must still compare against the REAL previous watermarks, so
+    // a head that never moved keeps its original first-seen stamp. Restamping every
+    // head to sweep-2's now would drop comments that counted before the expiry and pin
+    // a comment-only reviewer to Pending for the rest of the head's life — its
+    // announcing comment predates the restamp and is never reposted for the same head.
+    [Fact]
+    public async Task A_cache_miss_refetch_keeps_the_head_first_seen_anchor_for_unmoved_heads()
+    {
+        const string factsJson = """
+            {"data":{"repository":{
+              "pr181":{"number":181,"author":{"login":"chris"},
+               "labels":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},
+               "comments":{"nodes":[{"author":{"login":"gitar-bot"},"createdAt":"2026-01-01T00:05:00Z"}]},
+               "commits":{"nodes":[{"commit":{"oid":"sha","committedDate":"2026-01-01T00:00:00Z","statusCheckRollup":{"contexts":{"nodes":[]}}}}]}}
+            }}}
+            """;
+        var handler = new RoutingHandler(factsJson, HttpStatusCode.OK, "[]");
+        var timeProvider = new TrackingFakeTimeProvider();
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var cacheClock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(
+            cacheClock,
+            Duration.FromSeconds(180)
+        );
+        var workerClock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var worker = new ReviewSignalEnrichmentWorker(
+            client,
+            new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions),
+            cache,
+            Options.Create(
+                new ReviewSignalsOptions
+                {
+                    Reviewers =
+                    [
+                        new ReviewerOptions
+                        {
+                            Name = "Gitar",
+                            BotLogin = "gitar-bot",
+                            CommentsCountAsParticipation = true,
+                        },
+                        new ReviewerOptions { Name = "CodeQL", Source = ReviewerSource.CodeScanning },
+                    ],
+                    RefreshSeconds = 60,
+                }
+            ),
+            gitHubOptions,
+            timeProvider,
+            workerClock,
+            NullLogger<ReviewSignalEnrichmentWorker>.Instance
+        );
+
+        // Sweep 1 stamps the head at 00:00; the 00:05 comment counts and Gitar is Clean.
+        await worker.StartAsync(TestContext.Current.CancellationToken);
+        await timeProvider.InitialDelayScheduled.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
+        timeProvider.Advance(TimeSpan.FromSeconds(15));
+        await handler.AlertsRequestReceived.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
+        await timeProvider.SteadyStateTimerScheduled.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
+
+        // The cache entry expires and the clock moves past the comment's instant, so a
+        // restamped anchor (sweep-2 now = 00:10) would drop the 00:05 comment.
+        cacheClock.Advance(Duration.FromSeconds(200));
+        workerClock.Advance(Duration.FromMinutes(10));
+        timeProvider.Advance(TimeSpan.FromSeconds(60));
+        await handler.SecondAlertsRequest.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
+
+        _ = cache.TryGet(RepoName, out var signals).Should().BeTrue();
+        var gitar = signals![181].Signals.Should().ContainSingle(s => s.Name == "Gitar").Subject;
+        _ = gitar
+            .State.Should()
+            .Be(ReviewSignalState.Clean, "an unmoved head keeps its first-seen anchor across a cold-cache refetch");
+
+        await worker.StopAsync(TestContext.Current.CancellationToken);
+    }
 }

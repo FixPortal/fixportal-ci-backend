@@ -143,7 +143,7 @@ public static class ReviewSignalFactory
         // lower bound, not a count: a thread past the page cap is simply absent, so
         // nothing below can prove this reviewer clean. Hold at Pending until the pull
         // request fits the query again.
-        if (facts.TruncatedConnections?.Contains("reviewThreads") == true)
+        if (facts.TruncatedConnections?.Contains(GitHubOrgClient.ReviewThreadsConnectionName) == true)
         {
             return new ReviewSignal(reviewer.Name, ReviewSignalState.Pending, null, null);
         }

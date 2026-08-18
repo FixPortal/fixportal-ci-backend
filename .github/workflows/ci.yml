@@ -29,6 +29,8 @@ jobs:
       packages: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Lint workflows (actionlint)
         uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
@@ -76,6 +78,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Lint workflows (actionlint)
         uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
@@ -133,6 +137,8 @@ jobs:
       IMAGE_REPO: fixportal-ci-backend
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
 
       - name: Lint workflows (actionlint)
         uses: raven-actions/actionlint@3d39aea434753780c3b3d4a1a31c854b4dbf49d7 # v2
@@ -405,7 +411,11 @@ jobs:
             echo "::error::Public dashboard snapshot probe did not return a repositories array."
             exit 1
           fi
-          echo "Public dashboard snapshot: HTTP $public_code, repositories array present"
+          if ! jq -e '[.repositories[].private] | all(. == false)' "$public_body" > /dev/null; then
+            echo "::error::Public dashboard snapshot returned a private repository; the anonymous projection must be public-only."
+            exit 1
+          fi
+          echo "Public dashboard snapshot: HTTP $public_code, repositories array present, public-only"
 
   gate-coverage:
     name: Gate coverage
