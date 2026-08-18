@@ -60,7 +60,9 @@ public class ReviewSignalMergeTests
             new Dictionary<int, CachedReviewSignals> { [181] = Cached(HeadA) }
         );
 
-        _ = merged[0].ReviewSignals.Should().BeNull("the cached signals were earned against a head this PR no longer has");
+        _ = merged[0]
+            .ReviewSignals.Should()
+            .BeNull("the cached signals were earned against a head this PR no longer has");
     }
 
     [Theory]
@@ -107,10 +109,7 @@ public class ReviewSignalMergeTests
     public void An_expired_review_signal_cache_entry_reads_as_a_miss_so_the_snapshot_carries_no_signals()
     {
         var clock = new FakeClock(Instant.FromUnixTimeSeconds(1000));
-        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(
-            clock,
-            Duration.FromMinutes(10)
-        );
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(clock, Duration.FromMinutes(10));
         cache.Update("repo", new Dictionary<int, CachedReviewSignals> { [181] = Cached() });
 
         clock.AdvanceMinutes(11);
@@ -747,7 +746,10 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             TestContext.Current.CancellationToken
         );
         timeProvider.Advance(TimeSpan.FromSeconds(15));
-        await handler.AlertsRequestReceived.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await handler.AlertsRequestReceived.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
         await timeProvider.SteadyStateTimerScheduled.Task.WaitAsync(
             TimeSpan.FromSeconds(30),
             TestContext.Current.CancellationToken
@@ -759,7 +761,10 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         // watermarks, so the diff is clean and only the cold-state treatment can spend.
         cacheClock.Advance(Duration.FromSeconds(200));
         timeProvider.Advance(TimeSpan.FromSeconds(60));
-        await handler.SecondAlertsRequest.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+        await handler.SecondAlertsRequest.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
 
         _ = handler
             .GraphQlCalls.Should()

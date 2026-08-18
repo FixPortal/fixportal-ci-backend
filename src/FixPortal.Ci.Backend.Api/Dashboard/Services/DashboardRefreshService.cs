@@ -300,7 +300,10 @@ public sealed class DashboardRefreshService(
         {
             merged.Add(
                 signals.TryGetValue(pr.Number, out var cached) && SameHead(pr.HeadSha, cached.HeadSha)
-                    ? pr with { ReviewSignals = cached.Signals }
+                    ? pr with
+                    {
+                        ReviewSignals = cached.Signals,
+                    }
                     : pr
             );
         }

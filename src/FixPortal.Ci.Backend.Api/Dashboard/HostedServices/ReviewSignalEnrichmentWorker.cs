@@ -48,14 +48,7 @@ public sealed class ReviewSignalEnrichmentWorker(
     // ResetAt is an instant in time, not an opaque string.
     IClock clock,
     ILogger<ReviewSignalEnrichmentWorker> logger
-)
-    : RepoEnrichmentWorker<IReadOnlyDictionary<int, CachedReviewSignals>>(
-        client,
-        inventory,
-        cache,
-        timeProvider,
-        logger
-    )
+) : RepoEnrichmentWorker<IReadOnlyDictionary<int, CachedReviewSignals>>(client, inventory, cache, timeProvider, logger)
 {
     // No reviewers configured means the feature is off: the base class logs once and
     // the worker idles without issuing a single request.
@@ -235,7 +228,8 @@ public sealed class ReviewSignalEnrichmentWorker(
                         // Re-checked between chunks inside the batch against the balance
                         // each response just returned — the per-repo check above alone
                         // would let the chunked retry path spend through the reserve.
-                        budget => IsBelowReserve(budget, options.Value.ReserveBudgetPoints, clock.GetCurrentInstant())
+                        budget =>
+                            IsBelowReserve(budget, options.Value.ReserveBudgetPoints, clock.GetCurrentInstant())
                     )
                     : ReviewFactsBatch.Empty;
             var facts = batch.Facts;

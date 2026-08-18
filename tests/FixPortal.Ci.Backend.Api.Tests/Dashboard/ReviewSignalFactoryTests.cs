@@ -360,10 +360,7 @@ public class ReviewSignalFactoryTests
     [Fact]
     public void A_truncated_thread_connection_holds_the_reviewer_at_pending_not_clean()
     {
-        var signal = Only(
-            GitarWithComments,
-            Facts(headParticipating: ["gitar-app"], truncated: ["reviewThreads"])
-        );
+        var signal = Only(GitarWithComments, Facts(headParticipating: ["gitar-app"], truncated: ["reviewThreads"]));
 
         _ = signal.State.Should().Be(ReviewSignalState.Pending);
     }
