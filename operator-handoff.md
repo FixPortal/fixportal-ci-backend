@@ -253,7 +253,7 @@ To rotate either:
 
 #### Rotation log
 
-- **2026-07-28 — `CI_ADMIN_KEY` local exposure, rotation pending.** The
+- **2026-07-28 — `CI_ADMIN_KEY` local exposure (rotated 2026-08-18).** The
   `CI_ADMIN_KEY` value was mistakenly pasted into this repo's local `.env` as
   `GITHUB_TOKEN`. Exposure was **local-only**: the `.env` file is gitignored,
   the value never left the machine, and the entry has since been replaced with
@@ -275,7 +275,6 @@ To rotate either:
   resolved it at start. The simulator's `/api/ci/admin-snapshot` proxy is
   `PlatformAdmin`-gated, so its 401 to anonymous callers is the auth policy,
   not a key mismatch.
-
 
 ## Validation
 
