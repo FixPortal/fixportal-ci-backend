@@ -133,8 +133,10 @@ data immediately instead of blanking.
   Secrets, so the template is reusable as-is. One-time OIDC bootstrap +
   secret/variable list live in `operator-handoff.md`.
 - **CI quality gates:** `ci.yml` (format, build, test, GHCR publish, ACA deploy),
-  `coverage.yml` (line coverage via dotnet-coverage), CodeQL via GitHub's default
-  setup, `mutation.yml` (weekly/manual Stryker mutation testing), Dependabot.
+  CodeQL via GitHub's default setup, `mutation.yml` (weekly/manual Stryker
+  mutation testing), Dependabot. Coverage reporting was removed deliberately
+  (estate audit CIB-06): the house standard excludes coverage gating from
+  ordinary CI, and the reusable dotnet-coverage workflow was retired.
 
 ## Where to start reading
 
