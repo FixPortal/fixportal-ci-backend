@@ -1,3 +1,4 @@
+using System.Net;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
@@ -147,5 +148,135 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
 
         _ = options.ToString().Should().NotContain("secret");
         _ = options.ToString().Should().Contain("123456");
+    }
+
+    // Scripted-HTTP coverage for GetTokenAsync. The mint path was previously untested
+    // end to end, which is how expires_at silently never bound (the web naming defaults
+    // do not map snake_case) and auth refusals left as HttpRequestException instead of
+    // GitHubAuthException.
+    private sealed class MintHandler(
+        string mintBody,
+        HttpStatusCode mintStatus = HttpStatusCode.OK,
+        string expiresAt = "2026-08-02T20:30:00Z"
+    ) : HttpMessageHandler
+    {
+        public int InstallationLookups;
+        public int Mints;
+
+        // Settable mid-test so a reinstall scenario can flip the mint response on the
+        // SAME handler — the source's installation-id cache is the thing under test.
+        public HttpStatusCode? MintStatusOverride;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var (status, body) = request.Method == HttpMethod.Get
+                ? (HttpStatusCode.OK, """{"id":4242}""")
+                : (MintStatusOverride ?? mintStatus, mintBody.Replace("__EXPIRES_AT__", expiresAt));
+            if (request.Method == HttpMethod.Get)
+            {
+                InstallationLookups++;
+            }
+            else
+            {
+                Mints++;
+            }
+            return Task.FromResult(
+                new HttpResponseMessage(status)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                }
+            );
+        }
+    }
+
+    private GitHubAppTokenSource CreateMinting(MintHandler handler, FakeClock clock)
+    {
+        var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        _httpClients.Add(http);
+        return new GitHubAppTokenSource(
+            http,
+            Options.Create(new GitHubAppOptions { AppId = "123456", PrivateKeyPem = NewPrivateKeyPem() }),
+            Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "unused" }),
+            clock,
+            NullLogger<GitHubAppTokenSource>.Instance
+        );
+    }
+
+    [Fact]
+    public async Task The_minted_tokens_expires_at_binds_and_drives_the_refresh()
+    {
+        // expires_at is 20:30 while the silent fallback would have been 21:00 (Now +
+        // 60min). At 20:26 the refresh margin (5min) has entered the real expiry but
+        // not the fallback one, so a second mint proves the field genuinely bound.
+        var clock = new FakeClock(Now);
+        var handler = new MintHandler("""{"token":"ghs_test","expires_at":"__EXPIRES_AT__"}""");
+        var source = CreateMinting(handler, clock);
+
+        _ = await source.GetTokenAsync(TestContext.Current.CancellationToken);
+        clock.Advance(Duration.FromMinutes(26));
+        _ = await source.GetTokenAsync(TestContext.Current.CancellationToken);
+
+        _ = handler.Mints.Should().Be(2, "20:26 + 5min margin is past the real 20:30 expiry but inside the 60min fallback");
+    }
+
+    [Fact]
+    public async Task A_refused_mint_surfaces_as_an_auth_exception_for_the_health_signal()
+    {
+        var clock = new FakeClock(Now);
+        var handler = new MintHandler("{}", HttpStatusCode.Unauthorized);
+        var source = CreateMinting(handler, clock);
+
+        var act = () => source.GetTokenAsync(TestContext.Current.CancellationToken);
+
+        // Only GitHubAuthException drives state.SetAuthError; a raw HttpRequestException
+        // here left /api/health reporting Healthy on a dead credential.
+        _ = await act.Should().ThrowAsync<GitHubAuthException>();
+    }
+
+    [Fact]
+    public async Task A_failed_mint_is_negatively_cached_so_callers_do_not_thunder()
+    {
+        var clock = new FakeClock(Now);
+        var handler = new MintHandler("{}", HttpStatusCode.Unauthorized);
+        var source = CreateMinting(handler, clock);
+
+        var act = () => source.GetTokenAsync(TestContext.Current.CancellationToken);
+
+        _ = await act.Should().ThrowAsync<GitHubAuthException>();
+        _ = await act.Should().ThrowAsync<GitHubAuthException>();
+
+        _ = handler.Mints.Should().Be(1, "the second caller must fail fast inside the backoff, not re-POST");
+    }
+
+    [Fact]
+    public async Task A_404_on_a_discovered_installation_id_is_forgetting_not_sticky()
+    {
+        // Uninstall/reinstall changes the installation id. The cached id must be dropped
+        // on 404 so the next attempt (after the mint-failure backoff) re-discovers it,
+        // rather than 404ing until the process restarts.
+        var clock = new FakeClock(Now);
+        var handler = new MintHandler("""{"token":"ghs_test","expires_at":"__EXPIRES_AT__"}""");
+        var source = CreateMinting(handler, clock);
+
+        // First mint: installation id 4242 is discovered and works.
+        _ = await source.GetTokenAsync(TestContext.Current.CancellationToken);
+        _ = handler.InstallationLookups.Should().Be(1);
+
+        // Expire the token, then 404 the next mint (the App was reinstalled).
+        clock.Advance(Duration.FromMinutes(26));
+        handler.MintStatusOverride = HttpStatusCode.NotFound;
+        var act = () => source.GetTokenAsync(TestContext.Current.CancellationToken);
+        _ = await act.Should().ThrowAsync<GitHubAuthException>();
+
+        // Past the backoff, the next mint re-discovers the installation instead of
+        // reusing the stale id.
+        handler.MintStatusOverride = null;
+        clock.Advance(Duration.FromMinutes(2));
+        _ = await source.GetTokenAsync(TestContext.Current.CancellationToken);
+
+        _ = handler.InstallationLookups.Should().Be(2, "a 404 on a discovered id must drop it so it is re-discovered");
     }
 }

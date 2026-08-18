@@ -124,15 +124,17 @@ data immediately instead of blanking.
 
 - **Container:** multi-stage `Dockerfile` (non-root, port 8080) — runs on any
   container platform; only the GitHub token + owner are required.
-- **Azure:** CI builds the image once on Blacksmith, pushes it to GHCR, imports
+- **Azure:** CI builds the image once on a GitHub-hosted `ubuntu-latest` runner,
+  pushes it to GHCR, imports
   that exact commit-tagged image into ACR, then ships `deploy/bicep/main.bicep`
   to **Azure Container Apps** (single always-on
   replica) on every push to `main`. The Bicep template and workflow carry **no**
   subscription / registry / resource identifiers — those come from GitHub repo
   Secrets, so the template is reusable as-is. One-time OIDC bootstrap +
   secret/variable list live in `operator-handoff.md`.
-- **CI quality gates:** `ci.yml` (format, build, test, CodeQL, GHCR publish, ACA
-  deploy), `mutation.yml` (weekly/manual Stryker mutation testing), Dependabot.
+- **CI quality gates:** `ci.yml` (format, build, test, GHCR publish, ACA deploy),
+  `coverage.yml` (line coverage via dotnet-coverage), CodeQL via GitHub's default
+  setup, `mutation.yml` (weekly/manual Stryker mutation testing), Dependabot.
 
 ## Where to start reading
 

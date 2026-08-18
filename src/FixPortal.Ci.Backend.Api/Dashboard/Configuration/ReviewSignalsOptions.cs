@@ -175,6 +175,14 @@ internal static class ReviewSignalsOptionsRegistration
                 o => o.Reviewers.All(r => !r.CommentsCountAsParticipation || !string.IsNullOrWhiteSpace(r.BotLogin)),
                 "Every ReviewSignals:Reviewers entry with CommentsCountAsParticipation=true must set a non-blank BotLogin, or it can never match and reports Pending forever."
             )
+            // A padded BotLogin (" coderabbitai ") passes IsNullOrWhiteSpace yet never
+            // matches a real login — fail at startup rather than pinning that reviewer
+            // to Pending forever. RequiredLabel is trimmed at match time instead because
+            // label matching predates this validator; logins are cheap to pin down here.
+            .Validate(
+                o => o.Reviewers.All(r => r.BotLogin is null || r.BotLogin.Trim() == r.BotLogin),
+                "Every ReviewSignals:Reviewers BotLogin must be unpadded: leading or trailing whitespace never matches a GitHub login."
+            )
             .ValidateOnStart();
     }
 }

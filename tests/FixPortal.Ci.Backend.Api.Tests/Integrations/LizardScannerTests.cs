@@ -42,6 +42,7 @@ public class LizardScannerTests
                     MetricsWorkDirectory = workRoot,
                 }
             ),
+            new StaticGitHubTokenSource(Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" })),
             new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
             NullLogger<LizardScanner>.Instance
         );
@@ -112,13 +113,14 @@ public class LizardScannerTests
         var scanner = new LizardScanner(
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = token }),
             Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 }),
+            new StaticGitHubTokenSource(Options.Create(new GitHubOptions { Owner = "FixPortal", Token = token })),
             new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
             NullLogger<LizardScanner>.Instance
         );
         var scrub = typeof(LizardScanner).GetMethod("Scrub", BindingFlags.NonPublic | BindingFlags.Instance);
         _ = scrub.Should().NotBeNull("LizardScanner.Scrub must still exist as the redaction call site");
 
-        var scrubbed = (string)scrub!.Invoke(scanner, [$"fatal: authentication failed using token {token}"])!;
+        var scrubbed = (string)scrub!.Invoke(scanner, [$"fatal: authentication failed using token {token}", null])!;
 
         _ = scrubbed.Should().NotContain(token);
         _ = scrubbed.Should().Contain("***");

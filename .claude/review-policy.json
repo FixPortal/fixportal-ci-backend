@@ -24,8 +24,8 @@
     "CodeRabbit refuses bot authors outright and Gitar's bot review is switched off, because",
     "reviewing every bump exhausts the allowance and starves the changes that need it. Listing",
     "them HIGH would demand a reviewer that can never run - coverage on paper, none in fact. CI",
-    "plus Dependabot's own advisory data is what gates a bump. nuget.config, global.json, .npmrc",
-    "and Directory.Build.props stay HIGH: registry/feed and analyzer config, not bot-edited."
+    "plus Dependabot's own advisory data is what gates a bump. nuget.config, global.json",
+    "and Directory.Build.props stay HIGH: registry/feed, SDK-pin and analyzer config, not bot-edited."
   ],
 
   "version": 1,
@@ -38,6 +38,7 @@
     ".github/workflows/**",
     ".config/dotnet-tools.json",
     "nuget.config",
+    "global.json",
     "Directory.Build.props"
   ],
 
