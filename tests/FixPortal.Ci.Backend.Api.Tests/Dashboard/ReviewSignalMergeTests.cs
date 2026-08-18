@@ -863,4 +863,82 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 
         await worker.StopAsync(TestContext.Current.CancellationToken);
     }
+
+    // The 2026-08-18 live defect: every review bot comments within seconds of a pull
+    // request opening, but the enrichment sweep is minutes wide, so the FIRST sweep to
+    // see a pull request stamped the head with a "now" that already postdated the
+    // verdict. The comment was then discarded for the life of the head -- Gitar never
+    // reposts, it edits -- and five mergeable pull requests showed no ready-to-merge
+    // pill. A head seen for the first time must therefore carry no transition instant.
+    [Fact]
+    public async Task A_comment_made_before_the_first_sweep_that_saw_the_pull_request_still_counts()
+    {
+        const string factsJson = """
+            {"data":{"repository":{
+              "pr181":{"number":181,"author":{"login":"chris"},
+               "labels":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},
+               "comments":{"nodes":[{"author":{"login":"gitar-bot"},"createdAt":"2026-01-01T00:05:00Z"}]},
+               "commits":{"nodes":[{"commit":{"oid":"sha","committedDate":"2026-01-01T00:00:00Z","statusCheckRollup":{"contexts":{"nodes":[]}}}}]}}
+            }}}
+            """;
+        var handler = new RoutingHandler(factsJson, HttpStatusCode.OK, "[]");
+        var timeProvider = new TrackingFakeTimeProvider();
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var cacheClock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(
+            cacheClock,
+            Duration.FromSeconds(180)
+        );
+        // The sweep runs at 00:10, well after the 00:05 comment: the discovery stamp is
+        // the whole subject of the test, so it must postdate the evidence.
+        var workerClock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 10));
+        var worker = new ReviewSignalEnrichmentWorker(
+            client,
+            new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 10)), dashboardOptions),
+            cache,
+            Options.Create(
+                new ReviewSignalsOptions
+                {
+                    Reviewers =
+                    [
+                        new ReviewerOptions
+                        {
+                            Name = "Gitar",
+                            BotLogin = "gitar-bot",
+                            CommentsCountAsParticipation = true,
+                        },
+                        new ReviewerOptions { Name = "CodeQL", Source = ReviewerSource.CodeScanning },
+                    ],
+                    RefreshSeconds = 60,
+                }
+            ),
+            gitHubOptions,
+            timeProvider,
+            workerClock,
+            NullLogger<ReviewSignalEnrichmentWorker>.Instance
+        );
+        await worker.StartAsync(TestContext.Current.CancellationToken);
+        await timeProvider.InitialDelayScheduled.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
+        timeProvider.Advance(TimeSpan.FromSeconds(15));
+        await handler.AlertsRequestReceived.Task.WaitAsync(
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken
+        );
+        _ = cache.TryGet(RepoName, out var signals).Should().BeTrue();
+        var gitar = signals![181].Signals.Should().ContainSingle(s => s.Name == "Gitar").Subject;
+        _ = gitar
+            .State.Should()
+            .Be(
+                ReviewSignalState.Clean,
+                "a head first seen with its pull request has no earlier head a comment could belong to"
+            );
+        await worker.StopAsync(TestContext.Current.CancellationToken);
+    }
 }
