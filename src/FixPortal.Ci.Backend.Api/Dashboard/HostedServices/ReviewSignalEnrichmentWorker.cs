@@ -227,7 +227,16 @@ public sealed class ReviewSignalEnrichmentWorker(
 
             var batch =
                 toFetch.Count > 0
-                    ? await Client.GetPullRequestReviewFactsAsync(repo.Name, toFetch, ct, headFirstSeenAt)
+                    ? await Client.GetPullRequestReviewFactsAsync(
+                        repo.Name,
+                        toFetch,
+                        ct,
+                        headFirstSeenAt,
+                        // Re-checked between chunks inside the batch against the balance
+                        // each response just returned — the per-repo check above alone
+                        // would let the chunked retry path spend through the reserve.
+                        budget => IsBelowReserve(budget, options.Value.ReserveBudgetPoints, clock.GetCurrentInstant())
+                    )
                     : ReviewFactsBatch.Empty;
             var facts = batch.Facts;
             RecordGraphQlCost(batch);
@@ -407,13 +416,27 @@ public sealed class ReviewSignalEnrichmentWorker(
         // Cached entries carry the head they were computed against; the refresh pipeline
         // attaches them only while that head is still the pull request's head.
         var roster = reviewers.Select(r => r.Name).ToHashSet(StringComparer.Ordinal);
+        var repoHtmlUrl = $"https://github.com/{gitHub.Value.Owner}/{repo}";
+        var secretReviewers = reviewers
+            .Where(r => r.Source == ReviewerSource.SecretScanning)
+            .ToDictionary(r => r.Name, StringComparer.Ordinal);
         var signals = new Dictionary<int, CachedReviewSignals>();
         foreach (var (number, existing) in cached.Where(entry => stillOpen.ContainsKey(entry.Key)))
         {
             // Carry-over is filtered to the CURRENT roster: a repository flipping public
             // to private must drop its PublicOnly pills at once rather than showing them
             // until each pull request happens to be refetched.
-            var filtered = existing.Signals.Where(signal => roster.Contains(signal.Name)).ToList();
+            var filtered = existing
+                .Signals.Where(signal => roster.Contains(signal.Name))
+                // Secret-scanning is a REPO-scoped fact: when it was refetched this sweep,
+                // carried-over pull requests get the fresh count too, or sibling PRs
+                // disagree about one repository-level number until each is refetched.
+                .Select(signal =>
+                    secretAlerts is { } freshCount && secretReviewers.TryGetValue(signal.Name, out var secretReviewer)
+                        ? ReviewSignalFactory.BuildSecretScanning(secretReviewer, freshCount, repoHtmlUrl)
+                        : signal
+                )
+                .ToList();
             signals[number] = existing with { Signals = filtered };
         }
 
@@ -432,7 +455,6 @@ public sealed class ReviewSignalEnrichmentWorker(
             // A null alerts dictionary means unreadable and must stay null per PR. A
             // present dictionary with no entry for this PR means zero open alerts.
             var openAlerts = alerts is null ? (int?)null : alerts.GetValueOrDefault(pr.Number);
-            var repoHtmlUrl = $"https://github.com/{gitHub.Value.Owner}/{repo}";
             var built = ReviewSignalFactory.Build(
                 pr,
                 reviewers,

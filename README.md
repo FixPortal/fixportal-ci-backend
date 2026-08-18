@@ -174,7 +174,7 @@ FixPortal's worked example, set via deployment configuration:
   "ExcludedAuthors": [ "dependabot", "dependabot[bot]", "renovate", "renovate[bot]" ],
   "Reviewers": [
     { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high" },
-    { "Name": "Gitar", "BotLogin": "gitar-bot" },
+    { "Name": "Gitar", "BotLogin": "gitar-bot", "CommentsCountAsParticipation": true },
     { "Name": "CodeQL", "Source": "CodeScanning", "PublicOnly": true },
     { "Name": "Secret Scanning", "Source": "SecretScanning", "PublicOnly": true }
   ]
@@ -248,8 +248,14 @@ or trailing whitespace. It becomes the `ci-ide-api-key` Container Apps secret an
 backs `IdeIntegration__ApiKey` for the authenticated `/api/ide/v1` API.
 
 To host elsewhere, the `Dockerfile` is a standard multi-stage build (non-root,
-port 8080) that runs on any container platform — only the GitHub token and owner
-are required.
+port 8080) that runs on any container platform. The restore stage reads the
+GitHub Packages token from a BuildKit **build secret**, so a local build is:
+
+```
+docker build --secret id=github-packages-token,env=GITHUB_PACKAGES_TOKEN -t fixportal-ci-backend .
+```
+
+At runtime only the GitHub token and owner are required.
 
 ## Testing
 

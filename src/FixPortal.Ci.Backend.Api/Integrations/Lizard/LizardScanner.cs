@@ -17,6 +17,7 @@ namespace FixPortal.Ci.Backend.Api.Integrations.Lizard;
 public sealed class LizardScanner(
     IOptions<GitHubOptions> gitHub,
     IOptions<DashboardOptions> dashboard,
+    IGitHubTokenSource tokens,
     IClock clock,
     ILogger<LizardScanner> logger
 )
@@ -59,7 +60,11 @@ public sealed class LizardScanner(
             // scan to null rather than escaping to abort the whole enrichment sweep.
             TryDeleteDir(dir);
             _ = Directory.CreateDirectory(WorkRoot);
-            var (cloneArguments, cloneEnvironment) = BuildCloneCommand(_gitHub.Owner, repo, _gitHub.Token, dir);
+            // The clone credential comes from the token source, not the static PAT:
+            // an App-only deployment has no usable PAT, and cloning with it would fail
+            // on private repos while every API call succeeds — silently stopping metrics.
+            var cloneToken = await tokens.GetTokenAsync(ct);
+            var (cloneArguments, cloneEnvironment) = BuildCloneCommand(_gitHub.Owner, repo, cloneToken, dir);
             var clone = await ProcessRunner.RunAsync("git", cloneArguments, CloneTimeout, ct, cloneEnvironment);
             if (clone.ExitCode != 0)
             {
@@ -67,7 +72,7 @@ public sealed class LizardScanner(
                     "git clone failed for {Repo} (exit {Code}): {Err}",
                     repo,
                     clone.ExitCode,
-                    Scrub(clone.StdErr)
+                    Scrub(clone.StdErr, cloneToken)
                 );
                 return null;
             }
@@ -178,8 +183,21 @@ public sealed class LizardScanner(
         return null;
     }
 
-    private string Scrub(string text) =>
-        string.IsNullOrEmpty(_gitHub.Token) ? text : text.Replace(_gitHub.Token, "***");
+    private string Scrub(string text, string? activeToken = null)
+    {
+        var result = text;
+        if (!string.IsNullOrEmpty(_gitHub.Token))
+        {
+            result = result.Replace(_gitHub.Token, "***");
+        }
+        // The App-minted token, when one was used for this scan, is scrubbed too —
+        // it is what git's stderr can actually echo now.
+        if (!string.IsNullOrEmpty(activeToken))
+        {
+            result = result.Replace(activeToken, "***");
+        }
+        return result;
+    }
 
     private static void TryDeleteDir(string dir)
     {

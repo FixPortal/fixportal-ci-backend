@@ -1,3 +1,4 @@
+using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 
 namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
@@ -17,25 +18,10 @@ public sealed class SnapshotRestoreService(
 {
     public async Task StartingAsync(CancellationToken cancellationToken)
     {
+        DashboardSnapshot? restored;
         try
         {
-            var restored = await store.LoadAsync(cancellationToken);
-            if (restored is not null)
-            {
-                var sanitized = restored with
-                {
-                    Repositories =
-                    [
-                        .. restored.Repositories.Select(DashboardRefreshService.WithoutHeadScopedReviewState),
-                    ],
-                };
-                // Prefer the persisted public trend (accurate, public-only); fall
-                // back to the lossy reclassification for pre-PublicCiTrend snapshots.
-                state.Update(
-                    sanitized,
-                    DashboardSnapshotState.ComputePublicSnapshot(sanitized, sanitized.PublicCiTrend)
-                );
-            }
+            restored = await store.LoadAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -44,7 +30,29 @@ public sealed class SnapshotRestoreService(
         catch (Exception ex)
         {
             logger.LogWarning(ex, "Could not restore persisted snapshot; starting with an empty board.");
+            return;
         }
+
+        if (restored is null)
+        {
+            return;
+        }
+
+        // Sanitization is deliberately OUTSIDE the load's try: a bug here must fail
+        // startup fast, not be swallowed into "empty board" alongside unreadable files.
+        var sanitized = restored with
+        {
+            Repositories =
+            [
+                .. restored.Repositories.Select(DashboardRefreshService.WithoutHeadScopedReviewState),
+            ],
+        };
+        // Prefer the persisted public trend (accurate, public-only); fall
+        // back to the lossy reclassification for pre-PublicCiTrend snapshots.
+        state.Update(
+            sanitized,
+            DashboardSnapshotState.ComputePublicSnapshot(sanitized, sanitized.PublicCiTrend)
+        );
     }
 
     public Task StartedAsync(CancellationToken cancellationToken) => Task.CompletedTask;

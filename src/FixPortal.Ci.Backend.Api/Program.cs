@@ -55,7 +55,14 @@ builder.Services.AddHttpClient<GitHubAppTokenSource>(client =>
 #pragma warning disable S1075
     client.BaseAddress = new Uri("https://api.github.com/");
 #pragma warning restore S1075
-});
+})
+    // Captured by the singleton IGitHubTokenSource registration below, so factory
+    // handler rotation never fires — the same captive-singleton shape the
+    // GitHubOrgClient registration documents. Recycle pooled connections at the
+    // socket level so a stale DNS answer cannot pin token minting indefinitely.
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(2) }
+    );
 
 builder.Services.AddSingleton<IGitHubTokenSource>(sp =>
     sp.GetRequiredService<IOptions<GitHubAppOptions>>().Value.IsConfigured
@@ -142,7 +149,15 @@ builder
     );
 builder
     .Services.AddHttpClient<RunDiagnosisReader>()
-    .ConfigurePrimaryHttpMessageHandler(() => new SocketsHttpHandler { AllowAutoRedirect = false });
+    // Same captive-singleton lifetime as above. AllowAutoRedirect stays false: the
+    // reader follows the one expected redirect itself, without forwarding headers.
+    .ConfigurePrimaryHttpMessageHandler(() =>
+        new SocketsHttpHandler
+        {
+            AllowAutoRedirect = false,
+            PooledConnectionLifetime = TimeSpan.FromMinutes(2),
+        }
+    );
 builder.Services.AddSingleton<DashboardSnapshotState>();
 builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
 {

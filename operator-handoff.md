@@ -136,7 +136,8 @@ to bind on all interfaces.
 ## Deploying to Azure
 
 The app runs on **Azure Container Apps** (ACA). A push to `main` (or a manual
-run of the CI workflow from `main`) builds the app once on Blacksmith, pushes a
+run of the CI workflow from `main`) builds the app once on a GitHub-hosted
+`ubuntu-latest` runner, pushes a
 commit-tagged image to GHCR, imports that exact image into an existing Azure
 Container Registry, and deploys it into an existing Container Apps managed
 environment via `deploy/bicep/main.bicep`.

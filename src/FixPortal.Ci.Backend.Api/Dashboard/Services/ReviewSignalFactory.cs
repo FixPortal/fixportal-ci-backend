@@ -80,7 +80,7 @@ public static class ReviewSignalFactory
     /// secret scanning is disabled, and scanning is continuous rather than per-commit, so
     /// there is no per-pull-request run to wait for.
     /// </remarks>
-    private static ReviewSignal BuildSecretScanning(ReviewerOptions reviewer, int? openSecretAlerts, string repoHtmlUrl)
+    internal static ReviewSignal BuildSecretScanning(ReviewerOptions reviewer, int? openSecretAlerts, string repoHtmlUrl)
     {
         // Unreadable (scanning disabled, or the token lacks the scope) is unknown, not clean.
         if (openSecretAlerts is not { } alerts)

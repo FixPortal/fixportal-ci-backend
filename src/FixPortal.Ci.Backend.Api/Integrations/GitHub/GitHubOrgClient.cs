@@ -324,7 +324,8 @@ public sealed class GitHubOrgClient(
         string repo,
         IReadOnlyCollection<int> numbers,
         CancellationToken ct,
-        IReadOnlyDictionary<int, Instant>? headFirstSeenAt = null
+        IReadOnlyDictionary<int, Instant>? headFirstSeenAt = null,
+        Func<GraphQlRateLimit?, bool>? reserveBreached = null
     )
     {
         if (numbers.Count == 0)
@@ -339,6 +340,16 @@ public sealed class GitHubOrgClient(
 
         foreach (var chunk in numbers.Distinct().Order().Chunk(ExactPrBatchSize))
         {
+            // The reserve guard is re-evaluated between chunks against the balance every
+            // response just returned: checking once per repository would let a twenty-PR
+            // retry storm spend straight through the floor the guard exists to protect.
+            // Skipped pull requests are marked FAILED, not dropped, so their watermarks
+            // hold back and the next sweep retries them.
+            if (reserveBreached?.Invoke(LastGraphQlRateLimit) == true)
+            {
+                failed.AddRange(chunk);
+                continue;
+            }
             queries++;
             try
             {
@@ -349,7 +360,10 @@ public sealed class GitHubOrgClient(
             // alias ("Resource not accessible by personal access token") fails the whole
             // document — retrying one at a time isolates the offender and rescues the
             // rest. Only paid when something has already gone wrong, and bounded by the
-            // chunk size.
+            // chunk size. GitHubAuthException is deliberately NOT caught here (or below):
+            // a 401/403 is credential-wide, so every sibling chunk would fail the same
+            // way — it escapes to the worker, which keeps last-known-good for the repo,
+            // agreeing with the merge-state path.
             catch (HttpRequestException ex) when (chunk.Length > 1)
             {
                 logger?.LogWarning(
@@ -358,19 +372,17 @@ public sealed class GitHubOrgClient(
                     repo,
                     chunk.Length
                 );
-                foreach (var number in chunk)
-                {
-                    queries++;
-                    try
-                    {
-                        points += await FetchChunkAsync(repo, [number], facts, ct, headFirstSeenAt);
-                    }
-                    catch (HttpRequestException single)
-                    {
-                        failed.Add(number);
-                        logger?.LogWarning(single, "Review facts unavailable for {Repo}#{Number}.", repo, number);
-                    }
-                }
+                (var retryQueries, var retryPoints) = await FetchIndividuallyAsync(
+                    repo,
+                    chunk,
+                    facts,
+                    failed,
+                    ct,
+                    headFirstSeenAt,
+                    reserveBreached
+                );
+                queries += retryQueries;
+                points += retryPoints;
             }
             catch (HttpRequestException ex)
             {
@@ -380,6 +392,45 @@ public sealed class GitHubOrgClient(
         }
 
         return new ReviewFactsBatch(facts, failed, queries, points);
+    }
+
+    /// <summary>
+    /// The per-PR rescue loop after a chunked query fails: one pull request's unreadable
+    /// alias must not cost its nineteen neighbours their pills. Returns the queries and
+    /// points the retries spent.
+    /// </summary>
+    private async Task<(int Queries, int Points)> FetchIndividuallyAsync(
+        string repo,
+        IReadOnlyList<int> chunk,
+        Dictionary<int, PrReviewFacts> facts,
+        List<int> failed,
+        CancellationToken ct,
+        IReadOnlyDictionary<int, Instant>? headFirstSeenAt,
+        Func<GraphQlRateLimit?, bool>? reserveBreached
+    )
+    {
+        var queries = 0;
+        var points = 0;
+        foreach (var number in chunk)
+        {
+            // Same between-call reserve check as the chunk loop.
+            if (reserveBreached?.Invoke(LastGraphQlRateLimit) == true)
+            {
+                failed.Add(number);
+                continue;
+            }
+            queries++;
+            try
+            {
+                points += await FetchChunkAsync(repo, [number], facts, ct, headFirstSeenAt);
+            }
+            catch (HttpRequestException single)
+            {
+                failed.Add(number);
+                logger?.LogWarning(single, "Review facts unavailable for {Repo}#{Number}.", repo, number);
+            }
+        }
+        return (queries, points);
     }
 
     /// <summary>Fetches one aliased chunk and returns the GraphQL points it cost.</summary>
@@ -451,6 +502,17 @@ public sealed class GitHubOrgClient(
     /// Returns only what GitHub answered for. A requested number missing from the result
     /// no longer exists or is no longer visible, which the caller treats as an eviction.
     /// </para>
+    /// <para>
+    /// Failures PROPAGATE rather than soft-failing per chunk — the deliberate
+    /// counterpart to the review-facts path's per-PR isolation. Review facts can afford
+    /// to keep a partial result because the worker's watermarks hold back every pull
+    /// request that was not fetched, so nothing stale is certified. This method has no
+    /// such bookkeeping: a partial dictionary is indistinguishable from a complete one
+    /// at the worker, and returning one would replace last-known-good with a silently
+    /// incomplete cache. Both methods agree on auth: GitHubAuthException is
+    /// credential-wide, so neither retries it per chunk — it escapes to the worker,
+    /// which degrades to last-known-good for the whole repo.
+    /// </para>
     /// </remarks>
     public async Task<IReadOnlyDictionary<int, PrMergeState>> GetPullRequestMergeStatesAsync(
         string repo,
@@ -480,42 +542,25 @@ public sealed class GitHubOrgClient(
                 }
                 """;
 
-            try
-            {
-                var data = await PostGraphQlAsync<MergeStateData>(
-                    query,
-                    new { owner = _gitHub.Owner, name = repo },
-                    $"{_gitHub.Owner}/{repo}",
-                    ct
-                );
+            var data = await PostGraphQlAsync<MergeStateData>(
+                query,
+                new { owner = _gitHub.Owner, name = repo },
+                $"{_gitHub.Owner}/{repo}",
+                ct
+            );
 
-                LastGraphQlRateLimit = data?.RateLimit;
+            LastGraphQlRateLimit = data?.RateLimit;
 
-                // A null value means GitHub returned no such pull request -- closed since
-                // the listing, not an error.
-                foreach (var pull in (data?.Repository?.Values ?? []).Where(p => p is not null))
-                {
-                    states[pull!.Number] = new PrMergeState(
-                        pull.Number,
-                        pull.IsDraft,
-                        pull.Mergeable,
-                        pull.MergeStateStatus,
-                        pull.HeadRefOid
-                    );
-                }
-            }
-            // Soft-fail per chunk, matching the review-facts path: an unreadable pull
-            // request must leave the board showing what it last knew rather than
-            // collapsing the whole sweep. Unlike review facts there is no per-PR retry --
-            // the value here is cheap to refetch next sweep, so isolating one offender is
-            // not worth the extra queries.
-            catch (Exception ex) when (ex is HttpRequestException or GitHubAuthException)
+            // A null value means GitHub returned no such pull request -- closed since
+            // the listing, not an error.
+            foreach (var pull in (data?.Repository?.Values ?? []).Where(p => p is not null))
             {
-                logger?.LogWarning(
-                    ex,
-                    "Merge state unavailable for {Repo} ({Count} pull requests).",
-                    repo,
-                    chunk.Length
+                states[pull!.Number] = new PrMergeState(
+                    pull.Number,
+                    pull.IsDraft,
+                    pull.Mergeable,
+                    pull.MergeStateStatus,
+                    pull.HeadRefOid
                 );
             }
         }
