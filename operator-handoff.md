@@ -257,13 +257,24 @@ To rotate either:
   `CI_ADMIN_KEY` value was mistakenly pasted into this repo's local `.env` as
   `GITHUB_TOKEN`. Exposure was **local-only**: the `.env` file is gitignored,
   the value never left the machine, and the entry has since been replaced with
-  a real PAT. Rotation is still pending and is a **two-sided change**: set the
+  a real PAT. Rotation (executed 2026-08-18 — see the next entry) is a
+  **two-sided change**: set the
   new value as the `CI_ADMIN_KEY` Actions secret in **both**
   `FixPortal/fixportal-ci-backend` and `FixPortal/fixportal-simulator-backend`,
   then redeploy both apps close together. The admin snapshot returns 401 in the
   gap between the two deploys, and the simulator side only resolves its Key
   Vault secret at revision start, so both sides need a full redeploy (or a
   revision restart) for the new key to take effect.
+- **2026-08-18 — rotation executed.** New key generated and set as the
+  `CI_ADMIN_KEY` Actions secret in both repos, then both apps redeployed
+  (ci-backend run 32189969489, simulator-backend run 32189972314, deploy
+  `fixportal-prod`). Verified: ci-backend ACA secret `admin-key` matches the
+  new value; `GET /api/dashboard/snapshot/admin` returns 200 with the new key
+  and 401 with a wrong key; simulator KV `ci-admin-key` updated 22:04:11 and
+  revision `fpsim-engine-prod--0000050` (created 22:04:48, 100% traffic)
+  resolved it at start. The simulator's `/api/ci/admin-snapshot` proxy is
+  `PlatformAdmin`-gated, so its 401 to anonymous callers is the auth policy,
+  not a key mismatch.
 
 
 ## Validation
