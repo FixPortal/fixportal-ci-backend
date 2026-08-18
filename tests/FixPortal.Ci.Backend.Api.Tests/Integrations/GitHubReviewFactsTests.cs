@@ -53,8 +53,8 @@ public class GitHubReviewFactsTests
             new NodeList<GraphQlIssueComment>(comments ?? [])
         );
 
-    private static GraphQlIssueComment Comment(string author, string createdAt) =>
-        new(new GraphQlActor(author), createdAt);
+    private static GraphQlIssueComment Comment(string author, string createdAt, string? lastEditedAt = null) =>
+        new(new GraphQlActor(author), createdAt, lastEditedAt);
 
     private static GraphQlReview Review(string author, string? commitOid = HeadOid) =>
         new(new GraphQlActor(author), commitOid is null ? null : new GraphQlCommit(commitOid, null));
@@ -333,9 +333,59 @@ public class GitHubReviewFactsTests
         _ = truncated.PageInfo!.HasNextPage.Should().BeFalse();
     }
 
+    // The shape that pinned five ready pull requests to Pending on 2026-08-18: Gitar
+    // posts its dashboard comment seconds after the pull request opens -- saying only
+    // that automatic review is paused -- and EDITS the verdict into that same comment
+    // minutes later. Dating it by CreatedAt reads the placeholder, and no second comment
+    // ever arrives to correct it.
+    [Fact]
+    public void A_comment_edited_after_the_head_counts_even_though_it_was_created_before()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:00:30Z", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
+        );
+        _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
+    [Fact]
+    public void An_edit_that_also_predates_the_head_still_does_not_count()
+    {
+        // Both instants are before the head was seen: editing does not launder a stale
+        // verdict into a current one.
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:00:10Z", "2026-08-03T10:00:30Z")]),
+            HeadFirstSeenAt
+        );
+        _ = facts.HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void An_edit_earlier_than_the_creation_never_drags_a_comment_backwards()
+    {
+        // GitHub should never report this, but the pair is read as "when did it last
+        // speak", so the later of the two wins rather than whichever field is present.
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z", "2026-08-03T10:00:30Z")]),
+            HeadFirstSeenAt
+        );
+        _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
+    [Fact]
+    public void An_unparseable_creation_falls_back_to_the_edit_rather_than_dropping_the_author()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "not-a-date", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
+        );
+        _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
     [Theory]
     [InlineData("comments(last: 20)")]
     [InlineData("createdAt")]
+    [InlineData("lastEditedAt")]
     [InlineData("committedDate")]
     [InlineData("hasPreviousPage")]
     public void Both_review_fact_queries_request_the_comment_fields(string fragment)

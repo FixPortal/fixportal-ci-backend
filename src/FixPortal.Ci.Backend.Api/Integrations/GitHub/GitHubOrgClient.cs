@@ -159,7 +159,7 @@ public sealed class GitHubOrgClient(
                   # An issue comment is the only trace a reviewer leaves when it has
                   # nothing to report. `last:` because only the most recent matter, which
                   # is also why truncation shows up as hasPreviousPage, not hasNextPage.
-                  nodes { author { login } createdAt }
+                  nodes { author { login } createdAt lastEditedAt }
                   pageInfo { hasPreviousPage }
                 }
                 commits(last: 1) {
@@ -204,7 +204,7 @@ public sealed class GitHubOrgClient(
             pageInfo { hasNextPage }
           }
           comments(last: 20) {
-            nodes { author { login } createdAt }
+            nodes { author { login } createdAt lastEditedAt }
             pageInfo { hasPreviousPage }
           }
           commits(last: 1) {
@@ -1065,7 +1065,7 @@ public sealed class GitHubOrgClient(
         }
         foreach (
             var login in (comments?.Nodes ?? [])
-                .Where(c => ParseInstant(c.CreatedAt) is { } createdAt && createdAt > headAt && createdAt > headSince)
+                .Where(c => LastSpokeAt(c) is { } spokeAt && spokeAt > headAt && spokeAt > headSince)
                 .Select(c => c.Author?.Login)
                 .OfType<string>()
                 .Where(login => login.Length > 0)
@@ -1074,6 +1074,24 @@ public sealed class GitHubOrgClient(
             _ = result.Add(login);
         }
         return result;
+    }
+
+    // When the comment last SAID something, which is its edit if it has one. A reviewer
+    // that keeps one dashboard comment and rewrites it (Gitar) creates that comment
+    // seconds after the pull request opens -- before its own review has run -- and edits
+    // the verdict in minutes later. Dating it by CreatedAt reads the placeholder and
+    // pins the reviewer to Pending forever, because no second comment ever arrives.
+    // Editing does not change authorship, so this is evidence about the same bot; the
+    // head bounds in CollectHeadCommentAuthors still decide whether it covers this head.
+    private static Instant? LastSpokeAt(GraphQlIssueComment comment)
+    {
+        var created = ParseInstant(comment.CreatedAt);
+        var edited = ParseInstant(comment.LastEditedAt);
+        if (created is { } c && edited is { } e)
+        {
+            return Instant.Max(c, e);
+        }
+        return edited ?? created;
     }
 
     private static Instant? GetHeadCommittedAt(NodeList<GraphQlCommitNode>? commits) =>

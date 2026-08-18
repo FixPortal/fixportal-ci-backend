@@ -93,8 +93,16 @@ public sealed class ReviewSignalEnrichmentWorker(
     // listing. This is the anchor the issue-comment channel scopes against (see
     // GitHubOrgClient.CollectHeadCommentAuthors): an upper bound on the push instant,
     // which is what the head commit's committedDate cannot provide. Restamped whenever
-    // the head moves; evicted with the pull request; lost on restart, which fails safe —
-    // the comment channel yields nothing until the head has been seen for a sweep.
+    // the head moves; evicted with the pull request; lost on restart, which drops every
+    // open pull request back to HeadSeenBeforeObservation rather than to silence.
+    // Stamped instead of "now" for a head observed on a pull request the previous sweep
+    // did not know about. It reads as "no transition was observed", which leaves the head
+    // commit's committedDate as the only bound on the comment channel -- the weaker of the
+    // two guards, and the correct one here, because a head first seen with the pull request
+    // has no predecessor a stale comment could belong to. Restart lands every open pull
+    // request on this path, which is deliberate: the alternative loses each bot's verdict
+    // until its author happens to push again.
+    private static readonly Instant HeadSeenBeforeObservation = Instant.MinValue;
     private readonly Dictionary<string, Dictionary<int, (string HeadSha, Instant Since)>> _headFirstSeenAt = new(
         StringComparer.OrdinalIgnoreCase
     );
@@ -392,14 +400,23 @@ public sealed class ReviewSignalEnrichmentWorker(
                 continue;
             }
 
+            var known = previous.ContainsKey(number);
             var unchanged =
-                previous.TryGetValue(number, out var before)
-                && string.Equals(before.HeadSha, watermark.HeadSha, StringComparison.Ordinal)
+                known
+                && string.Equals(previous[number].HeadSha, watermark.HeadSha, StringComparison.Ordinal)
                 && seen.TryGetValue(number, out var existing)
                 && string.Equals(existing.HeadSha, watermark.HeadSha, StringComparison.Ordinal);
             if (!unchanged)
             {
-                seen[number] = (watermark.HeadSha, now);
+                // A head that MOVED is stamped now, so comments about the old head cannot
+                // certify the new one. A pull request seen for the FIRST time gets no
+                // instant at all: there is no earlier head to be confused with, and
+                // stamping now would silently discard everything said before the sweep
+                // that discovered it. That window is not hypothetical -- the sweep is
+                // minutes wide and the review bots comment within seconds of a pull
+                // request opening, so every one of their verdicts fell inside it and the
+                // pill sat Pending for the life of the pull request.
+                seen[number] = (watermark.HeadSha, known ? now : HeadSeenBeforeObservation);
             }
         }
 

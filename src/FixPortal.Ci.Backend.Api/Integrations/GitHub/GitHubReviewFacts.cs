@@ -40,7 +40,14 @@ public sealed record GraphQlComment(GraphQlActor? Author, GraphQlCommit? Origina
 // would certify comments written before the head they claim to cover existed on the PR.
 // See CollectHeadCommentAuthors. CreatedAt stays a raw ISO-8601 string: the GraphQL
 // serializer options are deliberately NodaTime-free, same as GraphQlRateLimit.ResetAt.
-public sealed record GraphQlIssueComment(GraphQlActor? Author, string? CreatedAt);
+//
+// LastEditedAt matters because a reviewer's verdict does not have to arrive in a NEW
+// comment. Gitar posts one dashboard comment within seconds of the pull request opening
+// -- at that point it says only that automatic review is paused -- and then EDITS that
+// same comment in place with the verdict a minute or two later, and again on every
+// re-review. Reading CreatedAt alone dates the placeholder, never the review, so the
+// comment channel could not certify a reviewer that never posts twice.
+public sealed record GraphQlIssueComment(GraphQlActor? Author, string? CreatedAt, string? LastEditedAt = null);
 
 public sealed record GraphQlThread(bool IsResolved, NodeList<GraphQlComment>? Comments);
 
@@ -152,7 +159,8 @@ public sealed record ReviewFactsBatch(
 /// ran against what is actually on the PR now.
 /// </param>
 /// <param name="HeadCommentAuthors">
-/// Authors of ISSUE comments created after the head commit became the head. Separate from
+/// Authors of ISSUE comments last written -- created, or EDITED -- after the head commit
+/// became the head. Separate from
 /// <paramref name="HeadParticipatingAuthors"/> because it is weaker evidence: a comment
 /// proves the reviewer spoke, not that it reviewed this diff. Only a reviewer explicitly
 /// configured with CommentsCountAsParticipation may act on it.
