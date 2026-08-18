@@ -525,6 +525,34 @@ public class GitHubReviewFactsTransportTests
     }
 
     [Fact]
+    public async Task A_missing_head_first_seen_entry_keeps_the_comment_channel_silent()
+    {
+        // The anchor dictionary lacking the pull request must read as "anchor unknown"
+        // (null), never as default(Instant): the Unix epoch would scope the issue-comment
+        // channel to every comment the pull request ever received — a false Clean on a
+        // head the reviewer may never have seen.
+        const string body = """
+            {"data":{"repository":{"pr181":{"number":181,"author":{"login":"chris"},"labels":{"nodes":[]},
+              "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},
+              "comments":{"nodes":[{"author":{"login":"gitar-bot"},"createdAt":"2026-08-03T10:05:00Z"}]},
+              "commits":{"nodes":[{"commit":{"oid":"head-sha","committedDate":"2026-08-03T10:00:00Z"}}]}}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http)
+            .GetPullRequestReviewFactsAsync(
+                "repo",
+                [181],
+                CancellationToken.None,
+                new Dictionary<int, Instant> { [182] = Instant.FromUtc(2026, 8, 3, 10, 1, 0) }
+            );
+
+        _ = batch.Facts[181].HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Posts_to_graphql_and_parses_camel_case_field_names()
     {
         const string body = """

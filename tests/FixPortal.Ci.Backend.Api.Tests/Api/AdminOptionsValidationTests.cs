@@ -34,13 +34,16 @@ public class AdminOptionsValidationTests
     }
 
     [Theory]
+    [InlineData(null, false)]
     [InlineData("", true)]
     [InlineData("short", false)]
     [InlineData("123456789012345", false)]
     [InlineData("1234567890123456", true)]
-    public void Admin_key_length_rule_accepts_only_empty_or_sufficiently_long_values(string adminKey, bool expected)
+    public void Admin_key_length_rule_accepts_only_empty_or_sufficiently_long_values(string? adminKey, bool expected)
     {
-        var options = new AdminOptions { AdminKey = adminKey };
+        // Null is an explicitly bound null, not "unset": it must fail validation with
+        // the configured message rather than read as the fail-closed empty default.
+        var options = new AdminOptions { AdminKey = adminKey! };
 
         _ = options.HasValidAdminKeyLength().Should().Be(expected);
     }
