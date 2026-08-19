@@ -26,7 +26,6 @@ jobs:
     timeout-minutes: 10
     permissions:
       contents: read
-      packages: read
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
@@ -50,8 +49,6 @@ jobs:
 
       - name: Restore
         run: dotnet restore FixPortal.Ci.Backend.slnx
-        env:
-          GITHUB_PACKAGES_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build
         run: dotnet build FixPortal.Ci.Backend.slnx --configuration Release --no-restore
@@ -105,8 +102,6 @@ jobs:
           push: true
           cache-from: type=gha
           cache-to: type=gha,mode=max
-          secrets: |
-            github-packages-token=${{ secrets.GITHUB_TOKEN }}
           tags: |
             ghcr.io/fixportal/fixportal-ci-backend:latest
             ghcr.io/fixportal/fixportal-ci-backend:sha-${{ github.sha }}

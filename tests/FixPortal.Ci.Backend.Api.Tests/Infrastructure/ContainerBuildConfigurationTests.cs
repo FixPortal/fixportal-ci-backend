@@ -10,13 +10,23 @@ public class ContainerBuildConfigurationTests
     );
 
     [Fact]
-    public void Private_package_token_is_mounted_only_for_container_restore()
+    public void Public_build_does_not_require_private_package_credentials()
     {
         var workflow = File.ReadAllText(Path.Combine(RepositoryRoot, ".github", "workflows", "ci.yml"));
         var dockerfile = File.ReadAllText(Path.Combine(RepositoryRoot, "Dockerfile"));
+        var compose = File.ReadAllText(Path.Combine(RepositoryRoot, "docker-compose.yml"));
+        var props = File.ReadAllText(Path.Combine(RepositoryRoot, "Directory.Build.props"));
+        var packages = File.ReadAllText(Path.Combine(RepositoryRoot, "Directory.Packages.props"));
+        var nuget = File.ReadAllText(Path.Combine(RepositoryRoot, "nuget.config"));
 
-        _ = workflow.Should().Contain("github-packages-token=${{ secrets.GITHUB_TOKEN }}");
-        _ = dockerfile.Should().Contain("--mount=type=secret,id=github-packages-token");
-        _ = dockerfile.Should().Contain("GITHUB_PACKAGES_TOKEN=\"$(cat /run/secrets/github-packages-token)\"");
+        _ = workflow.Should().NotContain("github-packages-token");
+        _ = workflow.Should().NotContain("GITHUB_PACKAGES_TOKEN");
+        _ = dockerfile.Should().NotContain("github-packages-token");
+        _ = dockerfile.Should().NotContain("GITHUB_PACKAGES_TOKEN");
+        _ = compose.Should().NotContain("github-packages-token");
+        _ = compose.Should().NotContain("GITHUB_PACKAGES_TOKEN");
+        _ = props.Should().NotContain("FixPortal.CodeStyle");
+        _ = packages.Should().NotContain("FixPortal.CodeStyle");
+        _ = nuget.Should().NotContain("nuget.pkg.github.com/FixPortal");
     }
 }
