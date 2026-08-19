@@ -47,6 +47,14 @@ public static class ReadyToMergeCalculator
         IReadOnlySet<string> excludedAuthors
     )
     {
+        // The open-PR listing is refetched every board refresh; the cached merge verdict is
+        // up to two minutes old. Converting a PR to draft does not move its head SHA, so the
+        // SameHead guard below cannot catch it. Trust the fresher value.
+        if (pr.IsDraft)
+        {
+            return false;
+        }
+
         // Merge state first: it is the cheaper judgement and the more decisive one.
         if (mergeState is null || mergeState.IsUndetermined)
         {

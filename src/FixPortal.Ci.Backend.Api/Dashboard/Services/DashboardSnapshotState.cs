@@ -61,7 +61,7 @@ public sealed class DashboardSnapshotState
     // Failing bucket cannot be attributed to a public vs a private repo. We must
     // therefore NEVER surface a Failing we cannot prove is public — otherwise a
     // private repo's failure leaks onto the public trend. Reclassify every Failing
-    // bucket to Passing; the first live refresh (~one refresh cycle) recomputes the
+    // bucket to NoData; the first live refresh (~one refresh cycle) recomputes the
     // public trend accurately from fresh public-only runs and replaces this.
     private static IReadOnlyList<CiTrendBucket>? BuildPublicCiTrendFromSnapshot(
         DashboardSnapshot full,
@@ -80,7 +80,7 @@ public sealed class DashboardSnapshotState
 
         return full
             .CiTrend.Select(b =>
-                b.State == CiTrendState.Failing ? new CiTrendBucket(b.BucketStart, CiTrendState.Passing) : b
+                b.State == CiTrendState.Failing ? new CiTrendBucket(b.BucketStart, CiTrendState.NoData) : b
             )
             .ToList();
     }

@@ -2,6 +2,7 @@ using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Options;
+using NodaTime;
 
 namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 
@@ -32,7 +33,9 @@ public sealed class MergeStateEnrichmentWorker(
     GitHubInventoryCache inventory,
     PerRepoCache<IReadOnlyDictionary<int, PrMergeState>> cache,
     IOptions<MergeStateOptions> options,
+    IOptions<ReviewSignalsOptions> reviewOptions,
     TimeProvider timeProvider,
+    IClock clock,
     ILogger<MergeStateEnrichmentWorker> logger
 ) : RepoEnrichmentWorker<IReadOnlyDictionary<int, PrMergeState>>(client, inventory, cache, timeProvider, logger)
 {
@@ -61,7 +64,17 @@ public sealed class MergeStateEnrichmentWorker(
                 return new Dictionary<int, PrMergeState>();
             }
 
-            return await Client.GetPullRequestMergeStatesAsync(repo.Name, open.Keys.ToList(), ct);
+            return await Client.GetPullRequestMergeStatesAsync(
+                repo.Name,
+                open.Keys.ToList(),
+                ct,
+                budget =>
+                    ReviewSignalEnrichmentWorker.IsBelowReserve(
+                        budget,
+                        reviewOptions.Value.ReserveBudgetPoints,
+                        clock.GetCurrentInstant()
+                    )
+            );
         }
         // Same soft-fail set as the review-signal worker: degrade to last-known-good rather
         // than letting a transient transport error count as a sweep failure and drive the

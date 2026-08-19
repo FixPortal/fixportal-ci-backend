@@ -527,10 +527,11 @@ public sealed class GitHubOrgClient(
     /// which degrades to last-known-good for the whole repo.
     /// </para>
     /// </remarks>
-    public async Task<IReadOnlyDictionary<int, PrMergeState>> GetPullRequestMergeStatesAsync(
+    public async Task<IReadOnlyDictionary<int, PrMergeState>?> GetPullRequestMergeStatesAsync(
         string repo,
         IReadOnlyCollection<int> numbers,
-        CancellationToken ct
+        CancellationToken ct,
+        Func<GraphQlRateLimit?, bool>? reserveBreached = null
     )
     {
         var states = new Dictionary<int, PrMergeState>();
@@ -541,6 +542,11 @@ public sealed class GitHubOrgClient(
 
         foreach (var chunk in numbers.Distinct().Order().Chunk(ExactPrBatchSize))
         {
+            if (reserveBreached?.Invoke(LastGraphQlRateLimit) == true)
+            {
+                return null;
+            }
+
             // Aliases are built from int, so there is no injection surface here.
             var aliases = string.Join(
                 "\n    ",

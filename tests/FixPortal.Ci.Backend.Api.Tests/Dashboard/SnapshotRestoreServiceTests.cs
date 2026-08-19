@@ -142,6 +142,23 @@ public class SnapshotRestoreServiceTests
     }
 
     [Fact]
+    public async Task StartingAsync_should_discard_a_snapshot_with_null_repositories()
+    {
+        var store = Substitute.For<IDashboardSnapshotStore>();
+        _ = store
+            .LoadAsync(Arg.Any<CancellationToken>())
+            .Returns(SnapshotWithPrivateRepo() with { Repositories = null! });
+        var state = new DashboardSnapshotState();
+        var sut = new SnapshotRestoreService(store, state, NullLogger<SnapshotRestoreService>.Instance);
+
+        var act = async () => await sut.StartingAsync(TestContext.Current.CancellationToken);
+
+        _ = await act.Should().NotThrowAsync();
+        _ = state.Current.Should().BeNull();
+        _ = state.Public.Should().BeNull();
+    }
+
+    [Fact]
     public async Task StartingAsync_should_rethrow_on_host_shutdown_cancellation_rather_than_swallow_it()
     {
         using var cts = new CancellationTokenSource();

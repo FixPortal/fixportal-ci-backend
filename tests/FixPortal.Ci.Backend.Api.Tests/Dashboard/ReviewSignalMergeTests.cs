@@ -486,19 +486,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         var lastCall = expectAlertsCall ? handler.AlertsRequestReceived.Task : handler.GraphQlRequestReceived.Task;
         await lastCall.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
 
-        // The alerts response landing does not itself prove RunSweepAsync's
-        // cache.Update has run yet — a few more continuations (JSON parsing,
-        // ReviewSignalFactory.Build, the sweep's own cache write) still need a
-        // thread-pool turn. This is the "poll-until-condition helper with a generous
-        // timeout" the house rule explicitly allows as the final settle, now gated
-        // behind a real completion signal rather than being the only wait in the test.
-        // Stopwatch rather than a wall-clock read: a monotonic source for an elapsed-time
-        // budget, so an NTP step cannot stretch or collapse the settle window.
-        var settleTimer = Stopwatch.StartNew();
-        while (!cache.TryGet(RepoName, out _) && settleTimer.Elapsed < TimeSpan.FromSeconds(30))
-        {
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
+        await WaitForCacheAsync(cache);
         await worker.StopAsync(TestContext.Current.CancellationToken);
 
         _ = cache
@@ -506,6 +494,15 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             .Should()
             .BeTrue("the cold-start sweep should have written to the cache within 30s of the alerts response");
         return result!;
+    }
+
+    private static async Task WaitForCacheAsync(PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>> cache)
+    {
+        var settleTimer = Stopwatch.StartNew();
+        while (!cache.TryGet(RepoName, out _) && settleTimer.Elapsed < TimeSpan.FromSeconds(30))
+        {
+            await Task.Delay(10, TestContext.Current.CancellationToken);
+        }
     }
 
     [Theory]
@@ -855,6 +852,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             TestContext.Current.CancellationToken
         );
 
+        await WaitForCacheAsync(cache);
         _ = cache.TryGet(RepoName, out var signals).Should().BeTrue();
         var gitar = signals![181].Signals.Should().ContainSingle(s => s.Name == "Gitar").Subject;
         _ = gitar
@@ -931,6 +929,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             TimeSpan.FromSeconds(30),
             TestContext.Current.CancellationToken
         );
+        await WaitForCacheAsync(cache);
         _ = cache.TryGet(RepoName, out var signals).Should().BeTrue();
         var gitar = signals![181].Signals.Should().ContainSingle(s => s.Name == "Gitar").Subject;
         _ = gitar

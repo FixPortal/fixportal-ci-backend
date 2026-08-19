@@ -48,7 +48,7 @@ public class DashboardSnapshotStateTests
         _ = pub.CiTrend!.Should().NotContain(b => b.State == CiTrendState.Failing);
         _ = pub.CiTrend!.Select(b => b.State)
             .Should()
-            .Equal(CiTrendState.Passing, CiTrendState.Passing, CiTrendState.NoData);
+            .Equal(CiTrendState.NoData, CiTrendState.Passing, CiTrendState.NoData);
     }
 
     [Fact]
