@@ -2,13 +2,9 @@ services:
   backend:
     image: ghcr.io/fixportal/fixportal-ci-backend:latest
     # `docker compose up` pulls the published image; `docker compose build` builds
-    # locally. The Dockerfile's restore stage requires the github-packages-token
-    # BuildKit secret (GITHUB_PACKAGES_TOKEN in .env), wired here so the two stay
-    # in step.
+    # locally from public NuGet dependencies.
     build:
       context: .
-      secrets:
-        - github-packages-token
     environment:
       GitHub__Token: ${GITHUB_TOKEN}
       GitHub__Owner: ${GITHUB_OWNER}
@@ -46,8 +42,4 @@ services:
 
 volumes:
   snapshot-data:
-
-secrets:
-  github-packages-token:
-    environment: GITHUB_PACKAGES_TOKEN
 

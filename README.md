@@ -248,11 +248,11 @@ or trailing whitespace. It becomes the `ci-ide-api-key` Container Apps secret an
 backs `IdeIntegration__ApiKey` for the authenticated `/api/ide/v1` API.
 
 To host elsewhere, the `Dockerfile` is a standard multi-stage build (non-root,
-port 8080) that runs on any container platform. The restore stage reads the
-GitHub Packages token from a BuildKit **build secret**, so a local build is:
+port 8080) that runs on any container platform. The build uses public NuGet
+dependencies and needs no registry credentials:
 
 ```shell
-docker build --secret id=github-packages-token,env=GITHUB_PACKAGES_TOKEN -t fixportal-ci-backend .
+docker build -t fixportal-ci-backend .
 ```
 
 At runtime only the GitHub token and owner are required.

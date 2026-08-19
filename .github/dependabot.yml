@@ -1,25 +1,8 @@
 version: 2
 
-# Directory.Build.props consumes FixPortal.CodeStyle, which nuget.config maps to
-# the FixPortal GitHub Packages feed via packageSourceMapping. Without this
-# registry Dependabot cannot resolve that package, so it silently never proposes
-# an update for the one dependency that governs this repo's analyzers.
-#
-# REQUIRES the FIXPORTAL_PACKAGES_TOKEN Dependabot secret (Settings → Secrets and
-# variables → Dependabot). Dependabot needs its own secret store; Actions secrets
-# are not visible to it.
-registries:
-  fixportal-github-packages:
-    type: nuget-feed
-    url: https://nuget.pkg.github.com/FixPortal/index.json
-    username: FixPortal
-    password: ${{secrets.FIXPORTAL_PACKAGES_TOKEN}}
-
 updates:
   - package-ecosystem: nuget
     directory: /
-    registries:
-      - fixportal-github-packages
     schedule:
       interval: weekly
       day: monday

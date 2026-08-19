@@ -1,6 +1,6 @@
 <Project>
-  <!-- Compiler warnings and the shared house style are build-breaking so they
-       cannot accrue silently. Formatter compatibility stays in .editorconfig. -->
+  <!-- Compiler warnings and repository-owned style rules are build-breaking so
+       they cannot accrue silently. Formatter compatibility stays in .editorconfig. -->
   <PropertyGroup>
     <Version>1.0.0</Version>
     <LangVersion>latest</LangVersion>
@@ -12,7 +12,4 @@
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
 
-  <ItemGroup>
-    <PackageReference Include="FixPortal.CodeStyle" PrivateAssets="all" />
-  </ItemGroup>
 </Project>
