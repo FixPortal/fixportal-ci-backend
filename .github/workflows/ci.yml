@@ -346,10 +346,29 @@ jobs:
           # instances behind the shared FQDN. Retry it like the initial probe;
           # only a terminal non-304 after a 200 has been served fails the gate.
           for attempt in 1 2 3 4 5 6 7 8; do
-            if conditional_code=$(curl --config "$curl_config" -sS -o /dev/null -w '%{http_code}' --max-time 15 --header "If-None-Match: $etag" "$endpoint"); then
+            if conditional_code=$(curl --config "$curl_config" -sS -D "$response_headers" -o /dev/null -w '%{http_code}' --max-time 15 --header "If-None-Match: $etag" "$endpoint"); then
               if [ "$conditional_code" = "204" ] && [ "$attempt" -lt 8 ]; then
                 echo "Conditional attempt $attempt: HTTP 204; snapshot is not warm on this replica yet."
                 sleep 15
+                continue
+              fi
+              # A 200 means the snapshot CHANGED between the two requests. The
+              # enrichment sweep republishes on its own cadence and this probe runs
+              # seconds after a revision restart, which is exactly when the first
+              # sweep lands, so a 200 here is the ETag contract working rather than
+              # breaking. Re-baseline on the ETag that response carried and ask
+              # again; only a probe that never converges fails the gate. On
+              # 2026-08-18 a deploy of an otherwise healthy revision went red on a
+              # 200 served 1.3s after the 200 that produced the ETag.
+              if [ "$conditional_code" = "200" ] && [ "$attempt" -lt 8 ]; then
+                rebaselined_etag=$(sed -n 's/^[Ee][Tt][Aa][Gg]:[[:space:]]*//p' "$response_headers" | tr -d '\r' | head -n 1)
+                if [[ ! "$rebaselined_etag" =~ ^W/\"sha256:[0-9a-f]{64}\"$ ]]; then
+                  echo "::error::CI IDE conditional snapshot probe returned HTTP 200 without a valid ETag to re-baseline on."
+                  exit 1
+                fi
+                echo "Conditional attempt $attempt: HTTP 200; the snapshot changed under the probe. Re-baselining."
+                etag="$rebaselined_etag"
+                sleep 10
                 continue
               fi
               break
