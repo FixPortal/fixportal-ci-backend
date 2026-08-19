@@ -20,6 +20,17 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 /// worker.
 /// </para>
 /// <para>
+/// One deliberate exception to that independence: this worker gates its own spend on
+/// <see cref="ReviewSignalsOptions.ReserveBudgetPoints"/>. The GraphQL points budget is
+/// metered per USER rather than per token, so both workers draw on one pool and a reserve
+/// that guards only half of it guards nothing — the merge sweep would drain the floor the
+/// review worker had stopped to hold, and take a human's <c>gh</c> down with it. The knob
+/// is shared because the budget is shared, not because the features are coupled: reviews
+/// being switched off does not disable this worker, it only leaves the reserve at its
+/// default. If the two ever need different floors, give merge state its own setting rather
+/// than widening this one.
+/// </para>
+/// <para>
 /// It also cannot ride the review worker's freshness policy. That policy refetches a pull
 /// request slowly once its pills are all terminal — which is precisely the pull request
 /// this worker cares most about. Merge state has no terminal value at all: a pull request
