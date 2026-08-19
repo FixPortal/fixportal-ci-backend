@@ -27,6 +27,13 @@ public class ContainerBuildConfigurationTests
         _ = compose.Should().NotContain("GITHUB_PACKAGES_TOKEN");
         _ = props.Should().NotContain("FixPortal.CodeStyle");
         _ = packages.Should().NotContain("FixPortal.CodeStyle");
-        _ = nuget.Should().NotContain("nuget.pkg.github.com/FixPortal");
+
+        // Name-independent, so a regression cannot slip through by renaming the credential.
+        // Any BuildKit secret in the restore stage reintroduces a build-time input the public
+        // Dockerfile must not need, whatever the secret is called.
+        _ = dockerfile.Should().NotContain("--mount=type=secret");
+        // The whole GitHub Packages host, not just this org's feed: a fork or a rename would
+        // otherwise reintroduce an authenticated source that the owner-scoped assertion missed.
+        _ = nuget.Should().NotContain("nuget.pkg.github.com");
     }
 }
