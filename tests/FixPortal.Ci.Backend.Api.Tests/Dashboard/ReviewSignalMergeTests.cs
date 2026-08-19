@@ -505,6 +505,35 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         }
     }
 
+    [Fact]
+    public async Task Merge_state_fetch_preserves_the_cache_when_the_GraphQL_reserve_is_breached()
+    {
+        var handler = new RoutingHandler("{}", HttpStatusCode.OK, "[]");
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
+        var client = new GitHubOrgClient(
+            http,
+            Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
+            dashboardOptions,
+            new GitHubETagStore()
+        );
+
+        var states = await client.GetPullRequestMergeStatesAsync(
+            RepoName,
+            [181],
+            TestContext.Current.CancellationToken,
+            _ =>
+                ReviewSignalEnrichmentWorker.IsBelowReserve(
+                    new GraphQlRateLimit(1, 999, "2026-08-02T17:38:33Z"),
+                    1000,
+                    Instant.FromUtc(2026, 8, 2, 17, 10)
+                )
+        );
+
+        _ = states.Should().BeNull();
+        _ = handler.GraphQlCalls.Should().Be(0);
+    }
+
     [Theory]
     [InlineData(HttpStatusCode.NotFound, "[]", false, ReviewSignalState.Pending, null)]
     [InlineData(HttpStatusCode.OK, "[]", true, ReviewSignalState.Clean, null)]
