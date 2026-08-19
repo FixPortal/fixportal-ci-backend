@@ -262,4 +262,33 @@ public class FileDashboardSnapshotStoreTests
             File.Delete(path);
         }
     }
+
+    [Fact]
+    public async Task LoadAsync_should_discard_a_snapshot_with_a_later_or_public_non_hour_aligned_bucket()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
+        var sut = new FileDashboardSnapshotStore(path);
+        var aligned = new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 0), CiTrendState.Passing);
+        var misaligned = new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 17, 30), CiTrendState.Passing);
+        var snapshot = new DashboardSnapshot(
+            Instant.FromUtc(2026, 5, 28, 18, 0),
+            "FixPortal",
+            [],
+            [],
+            null,
+            [aligned, misaligned],
+            [aligned, misaligned]
+        );
+
+        try
+        {
+            await sut.SaveAsync(snapshot, CancellationToken.None);
+            var reloaded = await sut.LoadAsync(CancellationToken.None);
+            _ = reloaded.Should().BeNull();
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
 }

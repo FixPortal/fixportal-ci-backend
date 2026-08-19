@@ -45,7 +45,10 @@ public sealed class FileDashboardSnapshotStore(string snapshotPath) : IDashboard
             // arbitrary refresh instant, which no longer key-match in MergeTrends — so
             // a degraded first refresh after deploy would silently drop the history.
             // Discard such a stale-format snapshot and rebuild from fresh data instead.
-            if (snapshot?.CiTrend is { Count: > 0 } trend && trend[0].BucketStart.ToUnixTimeSeconds() % 3600 != 0)
+            if (
+                (snapshot?.CiTrend?.Any(bucket => bucket.BucketStart.ToUnixTimeSeconds() % 3600 != 0) ?? false)
+                || (snapshot?.PublicCiTrend?.Any(bucket => bucket.BucketStart.ToUnixTimeSeconds() % 3600 != 0) ?? false)
+            )
             {
                 return null;
             }

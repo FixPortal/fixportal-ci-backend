@@ -21,14 +21,15 @@ public class ReadyToMergeCalculatorTests
     private static PullRequest Pr(
         string author = "chris-fixportal",
         IReadOnlyList<ReviewSignal>? signals = null,
-        string? headSha = Head
+        string? headSha = Head,
+        bool isDraft = false
     ) =>
         new(
             181,
             "Title",
             author,
             "https://github.com/FixPortal/repo/pull/181",
-            false,
+            isDraft,
             Instant.FromUnixTimeSeconds(0),
             signals,
             HeadSha: headSha
@@ -110,6 +111,15 @@ public class ReadyToMergeCalculatorTests
     {
         ReadyToMergeCalculator
             .Evaluate(Pr(signals: [Signal(ReviewSignalState.Clean)]), Merge(isDraft: true), true, NoBots)
+            .Should()
+            .BeFalse();
+    }
+
+    [Fact]
+    public void A_fresh_draft_is_not_ready_when_the_cached_merge_state_is_clean()
+    {
+        ReadyToMergeCalculator
+            .Evaluate(Pr(signals: [Signal(ReviewSignalState.Clean)], isDraft: true), Merge(), true, NoBots)
             .Should()
             .BeFalse();
     }

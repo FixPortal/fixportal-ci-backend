@@ -33,7 +33,7 @@ public sealed class SnapshotRestoreService(
             return;
         }
 
-        if (restored is null)
+        if (restored?.Repositories is null)
         {
             return;
         }
