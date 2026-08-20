@@ -28,7 +28,7 @@ public class GitHubDeployJobTests
 
     [Theory]
     [InlineData("Deploy (fixportal-prod)", true)]
-    [InlineData("Deploy (centerprise-dev)", true)]
+    [InlineData("Deploy (widgetco-dev)", true)]
     [InlineData("Deploy (Azure Container Apps)", true)]
     [InlineData("deploy", true)]
     [InlineData("Backend (.NET)", false)]
@@ -81,25 +81,25 @@ public class GitHubDeployJobTests
                 170,
                 "completed",
                 Job("Backend (.NET)", "completed", "success"),
-                Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
+                Job("Deploy (widgetco-dev) / Deploy (widgetco-dev)", "completed", "success"),
                 Job("Deploy (fixportal-prod)", "completed", "skipped")
             ),
             Run(
                 167,
                 "completed",
-                Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
+                Job("Deploy (widgetco-dev) / Deploy (widgetco-dev)", "completed", "success"),
                 Job("Deploy (fixportal-prod)", "completed", "skipped")
             ),
             Run(
                 164,
                 "completed",
-                Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
+                Job("Deploy (widgetco-dev) / Deploy (widgetco-dev)", "completed", "success"),
                 Job("Deploy (fixportal-prod) / Deploy (fixportal-prod)", "completed", "success")
             )
         );
 
         _ = signals.Should().HaveCount(2);
-        _ = signals.Should().Contain(s => s.Name.Contains("centerprise-dev") && s.State == SignalState.Success);
+        _ = signals.Should().Contain(s => s.Name.Contains("widgetco-dev") && s.State == SignalState.Success);
         _ = signals.Should().Contain(s => s.Name.Contains("fixportal-prod") && s.State == SignalState.Success);
     }
 
@@ -131,7 +131,7 @@ public class GitHubDeployJobTests
                 Run(
                     170,
                     "completed",
-                    Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
+                    Job("Deploy (widgetco-dev) / Deploy (widgetco-dev)", "completed", "success"),
                     Job("Deploy (fixportal-prod) / Deploy (fixportal-prod)", "completed", "success")
                 ),
             ],
@@ -151,7 +151,7 @@ public class GitHubDeployJobTests
                 Run(
                     170,
                     "completed",
-                    Job("Deploy (centerprise-dev) / Deploy (centerprise-dev)", "completed", "success"),
+                    Job("Deploy (widgetco-dev) / Deploy (widgetco-dev)", "completed", "success"),
                     Job("Deploy (fixportal-prod)", "completed", "skipped")
                 ),
             ],

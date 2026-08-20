@@ -820,7 +820,7 @@ The house gate for this repo, run from the repo root. All must pass before the s
 Not automatable from this session — it needs the deployed Container App. After the deploy lands, confirm on a real pull request that Gitar has approved by comment:
 
 ```powershell
-az containerapp show -n fixportal-ci-backend -g rg-fixportal-prod --query "properties.template.containers[0].env"
+az containerapp show -n fixportal-ci-backend -g <resource-group> --query "properties.template.containers[0].env"
 ```
 
 Then reload the board and confirm the Gitar pill reads clean (filled round dot, green tint) rather than pending (hollow dot, dashed) on a PR where `gh pr view <N> --json reviews` returns an empty array but `gitar-bot` has commented since the last push.
