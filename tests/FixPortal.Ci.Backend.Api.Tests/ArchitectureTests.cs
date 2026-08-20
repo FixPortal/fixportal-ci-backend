@@ -1,0 +1,51 @@
+using ArchUnitNET.Domain;
+using ArchUnitNET.Loader;
+using ArchUnitNET.xUnitV3;
+using FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
+using FixPortal.Ci.Backend.Api.Dashboard.Services;
+using Microsoft.Extensions.Hosting;
+using static ArchUnitNET.Fluent.ArchRuleDefinition;
+
+namespace FixPortal.Ci.Backend.Api.Tests;
+
+public class ArchitectureTests
+{
+    private static readonly Architecture Architecture = new ArchLoader()
+        .LoadAssemblies(typeof(IDashboardSnapshotStore).Assembly)
+        .Build();
+
+    [Xunit.Fact]
+    public void Interfaces_must_have_I_prefix()
+    {
+        FixPortalArchRules.InterfacesMustHaveIPrefix().Check(Architecture);
+    }
+
+    [Xunit.Fact]
+    public void Exception_types_must_inherit_from_Exception()
+    {
+        FixPortalArchRules.ExceptionsMustInheritFromException().Check(Architecture);
+    }
+
+    [Xunit.Fact]
+    public void Async_methods_must_end_in_Async()
+    {
+        FixPortalArchRules.AsyncMethodsMustEndInAsync().Check(Architecture);
+    }
+
+    [Xunit.Fact]
+    public void Model_types_must_be_sealed()
+    {
+        FixPortalArchRules.ModelTypesMustBeSealed("FixPortal.Ci.Backend.Api.Dashboard.Model").Check(Architecture);
+    }
+
+    [Xunit.Fact]
+    public void Snapshot_restore_service_must_implement_hosted_lifecycle_service()
+    {
+        Classes()
+            .That()
+            .HaveFullName(typeof(SnapshotRestoreService).FullName!)
+            .Should()
+            .ImplementInterface(typeof(IHostedLifecycleService))
+            .Check(Architecture);
+    }
+}

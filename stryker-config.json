@@ -1,0 +1,26 @@
+{
+  "stryker-config": {
+    "project": "FixPortal.Ci.Backend.Api.csproj",
+    "reporters": [
+      "progress",
+      "html",
+      "json"
+    ],
+    "report-file-name": "mutation-report",
+    "mutation-level": "Standard",
+    "coverage-analysis": "off",
+    "test-runner": "mtp",
+    "concurrency": 4,
+    "thresholds": {
+      "high": 80,
+      "low": 70,
+      "break": 0
+    },
+    "test-case-filter": "Category!=Integration",
+    // Whole source tree, not a single file: a narrowed list silently stops
+    // mutation-testing everything else. Excludes stay at Stryker's defaults.
+    "mutate": [
+      "**/*.cs"
+    ]
+  }
+}

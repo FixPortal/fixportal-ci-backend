@@ -1,0 +1,2 @@
+*.cs text eol=crlf
+tests/**/Fixtures/*.json text eol=lf

@@ -1,0 +1,709 @@
+using System.Net;
+using System.Text;
+using AwesomeAssertions;
+using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
+using FixPortal.Ci.Backend.Api.Integrations.GitHub;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using NodaTime;
+using Xunit;
+
+namespace FixPortal.Ci.Backend.Api.Tests.Integrations;
+
+public class GitHubReviewFactsTests
+{
+    // Default head oid shared by Pull/Review/Thread below so ordinary fixtures land on
+    // the head commit without every test having to plumb it through by hand. Tests that
+    // care about commit-scoping override it explicitly.
+    private const string HeadOid = "head-sha";
+
+    private const string HeadCommittedAt = "2026-08-03T10:00:00Z";
+
+    // When the worker first observed the current head: after the commit was authored,
+    // before the "clean" comments below land. The issue-comment channel is scoped
+    // against this instant, not committedDate.
+    private static readonly Instant HeadFirstSeenAt = Instant.FromUtc(2026, 8, 3, 10, 1, 0);
+
+    private static ReviewFactsPull Pull(
+        IReadOnlyList<GraphQlThread>? threads = null,
+        IReadOnlyList<GraphQlReview>? reviews = null,
+        IReadOnlyList<GraphQlLabel>? labels = null,
+        IReadOnlyList<GraphQlContext>? checks = null,
+        string? headOid = HeadOid,
+        IReadOnlyList<GraphQlIssueComment>? comments = null,
+        string? headCommittedAt = HeadCommittedAt
+    ) =>
+        new(
+            181,
+            new GraphQlActor("chris"),
+            new NodeList<GraphQlLabel>(labels ?? []),
+            new NodeList<GraphQlReview>(reviews ?? []),
+            new NodeList<GraphQlThread>(threads ?? []),
+            headOid is null
+                ? new NodeList<GraphQlCommitNode>([])
+                : new NodeList<GraphQlCommitNode>([
+                    new GraphQlCommitNode(
+                        new GraphQlCommit(
+                            headOid,
+                            new GraphQlRollup(new NodeList<GraphQlContext>(checks ?? [])),
+                            headCommittedAt
+                        )
+                    ),
+                ]),
+            new NodeList<GraphQlIssueComment>(comments ?? [])
+        );
+
+    private static GraphQlIssueComment Comment(string author, string createdAt, string? lastEditedAt = null) =>
+        new(new GraphQlActor(author), createdAt, lastEditedAt);
+
+    private static GraphQlReview Review(string author, string? commitOid = HeadOid) =>
+        new(new GraphQlActor(author), commitOid is null ? null : new GraphQlCommit(commitOid, null));
+
+    private static GraphQlThread Thread(string author, bool resolved, string? commitOid = HeadOid) =>
+        new(
+            resolved,
+            new NodeList<GraphQlComment>([
+                new GraphQlComment(
+                    new GraphQlActor(author),
+                    commitOid is null ? null : new GraphQlCommit(commitOid, null)
+                ),
+            ])
+        );
+
+    [Fact]
+    public void Counts_only_unresolved_threads_and_keys_them_by_the_first_comment_author()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(
+                threads:
+                [
+                    Thread("coderabbitai", false),
+                    Thread("coderabbitai", false),
+                    Thread("coderabbitai", true),
+                    Thread("chris", false),
+                ]
+            )
+        );
+
+        _ = facts.UnresolvedThreadsByAuthor["coderabbitai"].Should().Be(2);
+        _ = facts.UnresolvedThreadsByAuthor["chris"].Should().Be(1);
+    }
+
+    [Fact]
+    public void A_review_on_the_head_commit_counts_as_head_participation()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(reviews: [Review("gitar-app", commitOid: HeadOid)], headOid: HeadOid)
+        );
+
+        _ = facts.HeadParticipatingAuthors.Should().Contain("gitar-app");
+    }
+
+    [Fact]
+    public void A_review_on_an_older_commit_does_not_count_as_head_participation()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(reviews: [Review("gitar-app", commitOid: "old-sha")], headOid: HeadOid)
+        );
+
+        _ = facts.HeadParticipatingAuthors.Should().NotContain("gitar-app");
+    }
+
+    [Fact]
+    public void A_thread_comment_on_the_head_commit_counts_as_head_participation()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(threads: [Thread("coderabbitai", resolved: true, commitOid: HeadOid)], headOid: HeadOid)
+        );
+
+        _ = facts.HeadParticipatingAuthors.Should().Contain("coderabbitai");
+    }
+
+    [Fact]
+    public void A_thread_comment_on_an_older_commit_does_not_count_as_head_participation_but_still_counts_when_unresolved()
+    {
+        // Unresolved-thread counting is unchanged by head-scoping: an open finding from
+        // an older commit is still open and must still produce Outstanding.
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(threads: [Thread("coderabbitai", resolved: false, commitOid: "old-sha")], headOid: HeadOid)
+        );
+
+        _ = facts.HeadParticipatingAuthors.Should().NotContain("coderabbitai");
+        _ = facts.UnresolvedThreadsByAuthor["coderabbitai"].Should().Be(1);
+    }
+
+    [Fact]
+    public void A_null_head_oid_yields_no_head_participation()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(reviews: [Review("gitar-app")], threads: [Thread("coderabbitai", resolved: true)], headOid: null)
+        );
+
+        _ = facts.HeadParticipatingAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Records_labels_and_the_author_login()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(labels: [new GraphQlLabel("review-high")]));
+
+        _ = facts.Number.Should().Be(181);
+        _ = facts.AuthorLogin.Should().Be("chris");
+        _ = facts.Labels.Should().Contain("review-high");
+    }
+
+    [Fact]
+    public void Records_only_successful_check_app_slugs()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(
+                checks:
+                [
+                    new GraphQlContext("SUCCESS", new GraphQlCheckSuite(new GraphQlApp("github-advanced-security"))),
+                    new GraphQlContext("FAILURE", new GraphQlCheckSuite(new GraphQlApp("some-app"))),
+                ]
+            )
+        );
+
+        _ = facts.SuccessfulCheckAppSlugs.Should().Contain("github-advanced-security");
+        _ = facts.SuccessfulCheckAppSlugs.Should().NotContain("some-app");
+    }
+
+    [Fact]
+    public void Survives_a_payload_with_null_collections_and_a_null_author()
+    {
+        var pull = new ReviewFactsPull(9, null, null, null, null, null);
+
+        var facts = GitHubOrgClient.ToReviewFacts(pull);
+
+        _ = facts.AuthorLogin.Should().Be("unknown");
+        _ = facts.Labels.Should().BeEmpty();
+        _ = facts.UnresolvedThreadsByAuthor.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Matches_logins_and_labels_case_insensitively_so_config_casing_cannot_silently_miss()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(
+                threads: [Thread("CodeRabbitAI", false)],
+                labels: [new GraphQlLabel("Review-High")],
+                checks:
+                [
+                    new GraphQlContext("SUCCESS", new GraphQlCheckSuite(new GraphQlApp("GitHub-Advanced-Security"))),
+                ]
+            )
+        );
+
+        _ = facts.UnresolvedThreadsByAuthor.ContainsKey("coderabbitai").Should().BeTrue();
+        _ = facts.HeadParticipatingAuthors.Contains("coderabbitai").Should().BeTrue();
+        _ = facts.Labels.Contains("review-high").Should().BeTrue();
+        _ = facts.SuccessfulCheckAppSlugs.Contains("github-advanced-security").Should().BeTrue();
+    }
+
+    [Fact]
+    public void The_facts_carry_the_head_oid_they_were_computed_against()
+    {
+        // The cache attaches signals only while this matches the head the open-PR
+        // listing reports — the invariant that closes the push-between-sweeps window.
+        var facts = GitHubOrgClient.ToReviewFacts(Pull());
+
+        _ = facts.HeadSha.Should().Be(HeadOid);
+    }
+
+    [Fact]
+    public void A_comment_after_the_head_commit_is_head_comment_participation()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
+        );
+
+        _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
+    // H2, the verified sequence: commit authored at T1, the bot comments at T2 > T1
+    // while the commit is NOT yet the head, the push makes it head at T3 > T2. The old
+    // committedDate comparison counted the comment; the head-transition anchor must not.
+    [Fact]
+    public void A_comment_written_after_authoring_but_before_the_push_does_not_count()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:00:30Z")], headCommittedAt: "2026-08-03T10:00:00Z"),
+            HeadFirstSeenAt // 10:01: the commit was first seen as head AFTER the comment
+        );
+
+        _ = facts.HeadCommentAuthors.Should().BeEmpty("the comment predates the head it claims to certify");
+    }
+
+    [Fact]
+    public void An_unknown_head_transition_instant_scopes_the_comment_channel_to_nothing()
+    {
+        // Weaker evidence must not reach Clean on its own when it cannot be scoped:
+        // with no observed head transition, no issue comment counts at all.
+        var facts = GitHubOrgClient.ToReviewFacts(Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")]));
+
+        _ = facts.HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_comment_before_the_head_commit_is_stale_and_does_not_count()
+    {
+        // The bot commented, then the author pushed. That verdict is about old code.
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T09:55:00Z")]),
+            HeadFirstSeenAt
+        );
+
+        _ = facts.HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void A_comment_exactly_at_the_head_commit_does_not_count()
+    {
+        // Strict >. Equal timestamps are ambiguous, and Pending is the safe direction.
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", HeadCommittedAt)]),
+            HeadFirstSeenAt
+        );
+
+        _ = facts.HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void An_unparseable_comment_timestamp_is_skipped_rather_than_throwing()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(
+                comments: [Comment("gitar-bot", "not-a-date"), Comment("github-code-quality", "2026-08-03T10:05:00Z")]
+            ),
+            HeadFirstSeenAt
+        );
+
+        _ = facts.HeadCommentAuthors.Should().BeEquivalentTo("github-code-quality");
+    }
+
+    [Fact]
+    public void No_head_commit_date_means_no_comment_can_be_head_scoped()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")], headCommittedAt: null),
+            HeadFirstSeenAt
+        );
+
+        _ = facts.HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void Comment_authors_are_matched_case_insensitively_like_every_other_login_set()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("Gitar-Bot", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
+        );
+
+        _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
+    [Fact]
+    public void A_comment_never_leaks_into_head_review_participation()
+    {
+        // The two sets are distinct evidence channels. Only the configured flag joins them,
+        // and that decision belongs to the factory, not the mapper.
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
+        );
+
+        _ = facts.HeadParticipatingAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void The_comments_connection_reports_truncation_on_has_previous_page()
+    {
+        // comments are fetched with `last:` to get the most RECENT ones, so overflow is at
+        // the START of the connection. Asserting hasNextPage here would pass while the real
+        // truncation went undetected -- silently, with a Clean pill on incomplete evidence.
+        var truncated = new NodeList<GraphQlIssueComment>(
+            [],
+            new GraphQlPageInfo(HasNextPage: false, HasPreviousPage: true)
+        );
+
+        _ = truncated.PageInfo!.HasPreviousPage.Should().BeTrue();
+        _ = truncated.PageInfo!.HasNextPage.Should().BeFalse();
+    }
+
+    // The shape that pinned five ready pull requests to Pending on 2026-08-18: Gitar
+    // posts its dashboard comment seconds after the pull request opens -- saying only
+    // that automatic review is paused -- and EDITS the verdict into that same comment
+    // minutes later. Dating it by CreatedAt reads the placeholder, and no second comment
+    // ever arrives to correct it.
+    [Fact]
+    public void A_comment_edited_after_the_head_counts_even_though_it_was_created_before()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:00:30Z", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
+        );
+        _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
+    [Fact]
+    public void An_edit_that_also_predates_the_head_still_does_not_count()
+    {
+        // Both instants are before the head was seen: editing does not launder a stale
+        // verdict into a current one.
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:00:10Z", "2026-08-03T10:00:30Z")]),
+            HeadFirstSeenAt
+        );
+        _ = facts.HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public void An_edit_earlier_than_the_creation_never_drags_a_comment_backwards()
+    {
+        // GitHub should never report this, but the pair is read as "when did it last
+        // speak", so the later of the two wins rather than whichever field is present.
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "2026-08-03T10:05:00Z", "2026-08-03T10:00:30Z")]),
+            HeadFirstSeenAt
+        );
+        _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
+    [Fact]
+    public void An_unparseable_creation_falls_back_to_the_edit_rather_than_dropping_the_author()
+    {
+        var facts = GitHubOrgClient.ToReviewFacts(
+            Pull(comments: [Comment("gitar-bot", "not-a-date", "2026-08-03T10:05:00Z")]),
+            HeadFirstSeenAt
+        );
+        _ = facts.HeadCommentAuthors.Should().Contain("gitar-bot");
+    }
+
+    [Theory]
+    [InlineData("comments(last: 20)")]
+    [InlineData("createdAt")]
+    [InlineData("lastEditedAt")]
+    [InlineData("committedDate")]
+    [InlineData("hasPreviousPage")]
+    public void Both_review_fact_queries_request_the_comment_fields(string fragment)
+    {
+        // The mapper cannot head-scope a comment it never received. Without this, Task 2's
+        // collectors would sit correct and permanently starved of input.
+        _ = GitHubOrgClient.ReviewFactsQueryText.Should().Contain(fragment);
+        _ = GitHubOrgClient.ExactPrFragmentText.Should().Contain(fragment);
+    }
+}
+
+public class GitHubReviewFactsTransportTests
+{
+    private sealed class ScriptedHandler(Queue<HttpResponseMessage> responses) : HttpMessageHandler
+    {
+        public List<HttpRequestMessage> Requests { get; } = [];
+
+        // The request (and its content) is disposed as soon as the client returns, so
+        // the body has to be captured here rather than read off Requests afterwards.
+        public List<string> Bodies { get; } = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            Requests.Add(request);
+            if (request.Content is not null)
+            {
+                Bodies.Add(await request.Content.ReadAsStringAsync(cancellationToken));
+            }
+            return responses.Dequeue();
+        }
+    }
+
+    private static GitHubOrgClient CreateClient(HttpClient http, ILogger<GitHubOrgClient>? logger = null) =>
+        new(
+            http,
+            Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
+            Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 }),
+            new GitHubETagStore(),
+            logger: logger
+        );
+
+    private static HttpResponseMessage Json(string body) =>
+        new(HttpStatusCode.OK) { Content = new StringContent(body, Encoding.UTF8, "application/json") };
+
+    [Fact]
+    public async Task An_empty_dirty_set_issues_no_request_at_all()
+    {
+        // The other half of "a quiet estate costs nothing": PrWatermarkDiff returning no
+        // dirty pull requests only saves points if that empties out to zero HTTP here.
+        // The response queue is empty on purpose — any request would throw.
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>());
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [], CancellationToken.None);
+
+        _ = batch.Facts.Should().BeEmpty();
+        _ = batch.QueriesIssued.Should().Be(0);
+        _ = handler.Requests.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Aliases_one_pull_request_field_per_requested_number()
+    {
+        const string body = """
+            {"data":{"rateLimit":{"cost":3,"remaining":4997,"resetAt":"2026-08-02T18:00:00Z"},
+              "repository":{
+                "pr181":{"number":181,"author":{"login":"chris"},"labels":{"nodes":[]},
+                  "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[]}},
+                "pr182":{"number":182,"author":{"login":"chris"},"labels":{"nodes":[]},
+                  "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[]}}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None);
+
+        _ = batch.Facts.Keys.Should().BeEquivalentTo([181, 182]);
+        _ = batch.Failed.Should().BeEmpty();
+        _ = batch.QueriesIssued.Should().Be(1);
+        var sent = handler.Bodies.Should().ContainSingle().Subject;
+        _ = sent.Should().Contain("pr181: pullRequest(number: 181)");
+        _ = sent.Should().Contain("pr182: pullRequest(number: 182)");
+        // One round trip for both, and the cost accounting still lands so the reserve
+        // guard and the sweep log keep working on this path.
+        _ = handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_requested_pull_request_github_does_not_return_is_simply_absent()
+    {
+        // Closed between the REST listing and the GraphQL fetch. Not an error: the caller
+        // treats a missing number as an eviction.
+        const string body = """
+            {"data":{"repository":{"pr181":null}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
+
+        _ = batch.Facts.Should().BeEmpty();
+        // Absent is not refused: nothing here should be retried or held dirty.
+        _ = batch.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_refused_pull_request_is_reported_rather_than_failing_the_whole_repo()
+    {
+        // "Resource not accessible by personal access token" on one aliased pull request
+        // fails the WHOLE document, because GitHub answers an aliased query all-or-nothing.
+        // The retry isolates the offender so its neighbours still get their pills, and the
+        // caller is told which one failed so it can keep that watermark dirty.
+        const string refused = """
+            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            """;
+        const string ok = """
+            {"data":{"repository":{"pr182":{"number":182,"author":{"login":"chris"},"labels":{"nodes":[]},
+              "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[]}}}}}
+            """;
+        // Batch fails, then 181 alone fails, then 182 alone succeeds.
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(refused), Json(refused), Json(ok)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None);
+
+        _ = batch.Facts.Keys.Should().Equal(182);
+        _ = batch.Failed.Should().Equal(181);
+        // 1 batched attempt + 2 individual retries, all counted: a sweep being refused
+        // must never report zero queries.
+        _ = batch.QueriesIssued.Should().Be(3);
+    }
+
+    [Fact]
+    public async Task Cost_is_summed_across_every_query_including_retries()
+    {
+        // Reading cost off the LAST rate-limit observation discarded everything the retry
+        // path spent. Two successful single-PR retries at 3 points each must report 6,
+        // not 3 — under-reporting spend is how the original budget bug went unnoticed.
+        // Placeholder substitution, not raw-string interpolation: the JSON's run of
+        // closing braces is ambiguous for the $$"""...""" brace-counting rule (CS9007),
+        // exactly as the FactsJson helper in the merge tests documents.
+        const string template = """
+            {"data":{"rateLimit":{"cost":__COST__,"remaining":4000,"resetAt":"2026-08-02T21:00:00Z"},
+              "repository":{"pr__N__":{"number":__N__,"author":{"login":"chris"},"labels":{"nodes":[]},
+              "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[]}}}}}
+            """;
+        static string Ok(int number, int cost) =>
+            template.Replace("__N__", number.ToString()).Replace("__COST__", cost.ToString());
+        const string refused = """
+            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            """;
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([Json(refused), Json(Ok(181, 3)), Json(Ok(182, 3))])
+        );
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None);
+
+        _ = batch.PointsSpent.Should().Be(6);
+        _ = batch.Failed.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task A_single_refused_pull_request_is_not_retried_pointlessly()
+    {
+        // A one-PR chunk has nothing to isolate, so it must not re-issue the same query.
+        const string refused = """
+            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(refused)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
+
+        _ = batch.Failed.Should().Equal(181);
+        _ = batch.QueriesIssued.Should().Be(1);
+        _ = handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
+    public async Task A_missing_head_first_seen_entry_keeps_the_comment_channel_silent()
+    {
+        // The anchor dictionary lacking the pull request must read as "anchor unknown"
+        // (null), never as default(Instant): the Unix epoch would scope the issue-comment
+        // channel to every comment the pull request ever received — a false Clean on a
+        // head the reviewer may never have seen.
+        const string body = """
+            {"data":{"repository":{"pr181":{"number":181,"author":{"login":"chris"},"labels":{"nodes":[]},
+              "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},
+              "comments":{"nodes":[{"author":{"login":"gitar-bot"},"createdAt":"2026-08-03T10:05:00Z"}]},
+              "commits":{"nodes":[{"commit":{"oid":"head-sha","committedDate":"2026-08-03T10:00:00Z"}}]}}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http)
+            .GetPullRequestReviewFactsAsync(
+                "repo",
+                [181],
+                CancellationToken.None,
+                new Dictionary<int, Instant> { [182] = Instant.FromUtc(2026, 8, 3, 10, 1, 0) }
+            );
+
+        _ = batch.Facts[181].HeadCommentAuthors.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Posts_to_graphql_and_parses_camel_case_field_names()
+    {
+        const string body = """
+            {"data":{"repository":{"pullRequests":{"nodes":[
+              {"number":181,"author":{"login":"chris"},
+               "labels":{"nodes":[{"name":"review-high"}]},
+               "reviews":{"nodes":[]},
+               "reviewThreads":{"nodes":[{"isResolved":false,"comments":{"nodes":[{"author":{"login":"coderabbitai"}}]}}]},
+               "commits":{"nodes":[]}}
+            ]}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var facts = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
+        _ = handler.Requests[0].Method.Should().Be(HttpMethod.Post);
+        _ = handler.Requests[0].RequestUri!.AbsolutePath.Should().Be("/graphql");
+        _ = facts[181].Labels.Should().Contain("review-high");
+        _ = facts[181].UnresolvedThreadsByAuthor["coderabbitai"].Should().Be(1);
+    }
+
+    [Fact]
+    public async Task Selects_originalCommit_on_thread_comments_and_asks_for_the_rate_limit()
+    {
+        // The whole head-scoping design lives in the query TEXT, which no other test
+        // reads: reverting `originalCommit` to `commit` would regress a false-Clean bug
+        // with a green suite, because `commit` tracks forward onto the new head as a PR
+        // is pushed to and would make a stale thread look like head participation.
+        // rateLimit is asserted alongside it for the same reason — it is only observable
+        // in the serialized request.
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([Json("""{"data":{"repository":{"pullRequests":{"nodes":[]}}}}""")])
+        );
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        _ = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
+        var body = handler.Bodies.Should().ContainSingle().Subject;
+        _ = body.Should().Contain("nodes { author { login } originalCommit { oid } }");
+        _ = body.Should().Contain("rateLimit { cost remaining resetAt }");
+    }
+
+    [Fact]
+    public async Task Records_the_graphql_rate_limit_reported_by_the_query()
+    {
+        const string body = """
+            {"data":{"rateLimit":{"cost":7,"remaining":4993,"resetAt":"2026-07-31T12:00:00Z"},
+             "repository":{"pullRequests":{"nodes":[]}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var client = CreateClient(http);
+
+        _ = await client.GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
+        _ = client.LastGraphQlRateLimit.Should().Be(new GraphQlRateLimit(7, 4993, "2026-07-31T12:00:00Z"));
+    }
+
+    [Fact]
+    public async Task Warns_when_a_repo_overflows_the_pull_request_cap()
+    {
+        // pullRequests(first: 25) truncates silently beyond page 1; the hasNextPage
+        // warning is the only place an overflowing repo becomes observable. The query
+        // must also keep asking for pageInfo, or the warning can never fire.
+        const string body = """
+            {"data":{"repository":{"pullRequests":{"pageInfo":{"hasNextPage":true},"nodes":[]}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var logger = new CapturingLogger<GitHubOrgClient>();
+
+        _ = await CreateClient(http, logger).GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
+        _ = handler.Bodies.Should().ContainSingle().Subject.Should().Contain("pageInfo { hasNextPage }");
+        _ = logger
+            .Entries.Should()
+            .Contain(e =>
+                e.Level == LogLevel.Warning
+                && e.Message.Contains("more than 25 open pull requests", StringComparison.Ordinal)
+            );
+    }
+
+    [Fact]
+    public async Task Throws_when_graphql_reports_errors_in_a_200_response()
+    {
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([
+                Json("""{"data":null,"errors":[{"message":"Could not resolve to a Repository"}]}"""),
+            ])
+        );
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var client = CreateClient(http);
+
+        var act = async () => await client.GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
+        _ = await act.Should().ThrowAsync<HttpRequestException>();
+    }
+}

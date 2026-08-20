@@ -1,0 +1,79 @@
+# Thin, formatter-only .editorconfig for new .NET projects scaffolded via scaffold-dotnet.
+#
+# Analyzer rules and severities belong to the FixPortal.CodeStyle NuGet package's global
+# AnalyzerConfig. CSharpier reads the C# layout inputs here. This file also carries the documented
+# compatibility preferences whose Roslyn fixers are not activated from a packaged global
+# config alone. A bare whitespace/layout key (indent_size,
+# charset, end_of_line, max_line_length) carries no diagnostic ID at all — CSharpier,
+# dotnet format, and the IDE read it only from a
+# real .editorconfig on disk, so no NuGet package can deliver it. Compatibility preferences
+# repeat package-owned values only; they do not make this file a second rule source.
+#
+# This is a filtered subset of the FULL house style at ~/.claude/resources/.editorconfig
+# (which predates FixPortal.CodeStyle and is not a stub — see the scaffold-dotnet skill's
+# Resource Files section). When the full file's non-severity keys change, mirror the change
+# here; when its severity-suffixed keys change, that goes into the package instead.
+
+root = true
+
+#### Baseline (applies to every file type) ####
+[*]
+charset = utf-8
+indent_style = space
+indent_size = 4
+tab_width = 4
+trim_trailing_whitespace = true
+insert_final_newline = true
+
+#### Project / config files (2-space convention) ####
+[*.{csproj,fsproj,vbproj,proj,props,targets}]
+indent_size = 2
+
+[*.{json,yml,yaml,xml,config}]
+indent_size = 2
+
+[*.md]
+# markdown line breaks are two trailing spaces — don't trim them
+trim_trailing_whitespace = false
+
+#### C# files ####
+[*.cs]
+end_of_line = crlf
+indent_size = 4
+indent_style = space
+tab_width = 4
+max_line_length = 120
+
+#### C# Formatting Rules ####
+
+# Roslyn formatter compatibility. The package owns these rules and severities, but
+# dotnet format 10.0.204 needs the preferences in a hierarchical .editorconfig to
+# activate the IDE0011 and IDE0049 fixers.
+csharp_prefer_braces = true:error
+dotnet_style_predefined_type_for_locals_parameters_members = true:error
+dotnet_style_predefined_type_for_member_access = true:error
+
+#### ReSharper / InspectCode: reflection the analyzer cannot see ####
+#
+# These three inspections are correct about the SYNTAX and wrong about the PROGRAM:
+# nothing in C# reads these members, because a serializer or the configuration binder
+# does, by reflection. Acting on them would delete fields from a published wire
+# contract or break option binding, so they are silenced where that is provably the
+# case — scoped per file, never globally, so the same inspection still fires on
+# ordinary code that genuinely has an unused member.
+
+# IDE API wire contracts. Every positional property is serialized by System.Text.Json
+# and consumed by fixportal-ide; none is read by this codebase.
+[src/FixPortal.Ci.Backend.Api/Ide/IdeSnapshotContracts.cs]
+resharper_not_accessed_positional_property_global_highlighting = none
+
+# GitHub REST/GraphQL response DTOs. Constructed exclusively by the deserializer, and
+# their properties are read through the mapped domain types.
+[src/FixPortal.Ci.Backend.Api/Integrations/GitHub/{GitHubMergeState,GitHubReviewFacts}.cs]
+resharper_class_never_instantiated_global_highlighting = none
+resharper_not_accessed_positional_property_global_highlighting = none
+
+# Options classes. Microsoft.Extensions.Configuration binds through the init setters,
+# so making them get-only would silently stop the values binding at all.
+[src/FixPortal.Ci.Backend.Api/{Ide/IdeIntegrationOptions,Dashboard/Configuration/MergeStateOptions}.cs]
+resharper_auto_property_can_be_made_get_only_global_highlighting = none

@@ -1,0 +1,86 @@
+reviews:
+  profile: assertive
+  poem: false
+  high_level_summary: true
+  review_status: true
+  collapse_walkthrough: true
+  request_changes_workflow: true
+
+  tools:
+    eslint:
+      enabled: false
+
+  auto_review:
+    # Reviews are LABEL-TRIGGERED, not automatic. When `enabled` is false a positive label
+    # match still triggers a review, so `labels: ["review-high"]` is the TRIGGER, not an
+    # exclusion filter.
+    #
+    # WHY: with auto-review on, every PR was reviewed on open regardless of tier, so the tier
+    # evaluation in .claude/review-policy.json trimmed only the EXTRA requests an agent made,
+    # never the baseline one — and that baseline was the whole budget. CodeRabbit meters
+    # reviews per DEVELOPER IDENTITY across every repo in a rolling 7-day window, degrading
+    # from 30/7d. Worse, the two ways a PR can end up unreviewed (nobody asked; CodeRabbit was
+    # throttled) looked identical. With the trigger explicit, "no review on a HIGH PR" is
+    # unambiguously a gate failure.
+    #
+    # The label is applied by ~/.claude/hooks/pr-review-gate.sh at PR-create time when the tier
+    # is HIGH — a hook applies it rather than an instruction, because an instruction can be
+    # skipped. `enabled: false` ON ITS OWN IS NOT EQUIVALENT: it leaves that label inert, no
+    # CodeRabbit check registers at all, and pr-review-watch.sh reads a persistently absent
+    # check as "not installed" and stops gating on it, letting a HIGH PR through unreviewed.
+    enabled: false
+    labels: ["review-high"]
+    drafts: false
+    # Still load-bearing under label triggering: once a PR carries the label, every later push
+    # re-reviews it and spends from the same pool. CodeRabbit ships 5; its own docs suggest 1-2.
+    auto_pause_after_reviewed_commits: 2
+    # Dependency PRs are out of AI code review on BOTH vendors as of 2026-07-29 — Gitar's bot
+    # review is switched off as well. The estate raises enough of them that reviewing each bump
+    # exhausts the allowance and starves the changes that need it; CI plus Dependabot's own
+    # advisory data is what gates a bump. CodeRabbit already declines bot authors ("Review
+    # skipped: bot user not eligible for review"), so this states the intent rather than leaving
+    # it incidental to a vendor behaviour that can change.
+    #
+    # ignore_title_keywords is deliberately ABSENT. It listed "chore:", which matches this
+    # estate's Dependabot titles verbatim ("chore: Bump X from 1.0 to 1.1"), so it skipped PRs
+    # silently and by accident. What gets skipped is decided by PATH via review-policy.json and
+    # by AUTHOR here — never by a title, which can lie about what a PR touches.
+    ignore_usernames:
+      - "dependabot[bot]"
+      - "renovate[bot]"
+
+  path_filters:
+    - "!**/bin/**"
+    - "!**/obj/**"
+    - "!**/dist/**"
+    - "!**/build/**"
+    - "!**/coverage/**"
+    - "!**/*.lock"
+    - "!**/package-lock.json"
+    - "!**/pnpm-lock.yaml"
+    - "!**/yarn.lock"
+
+  instructions: |
+    Review as a senior engineer. Prioritise correctness, security, maintainability,
+    testability, and accidental complexity.
+
+    Do not nitpick style unless it affects readability or consistency.
+    Prefer actionable findings over commentary.
+    Call out missing tests for changed behaviour.
+    Treat generated files, lock files, snapshots, and formatting churn as low value.
+
+    For .NET code, pay particular attention to:
+    - async/await correctness
+    - cancellation token propagation
+    - nullability
+    - DI lifetime mistakes
+    - EF Core query behaviour
+    - exception handling and logging
+    - test coverage around edge cases
+
+    For TypeScript/React code, pay particular attention to:
+    - state/effect dependency bugs
+    - request spam or accidental polling
+    - accessibility regressions
+    - error/loading/empty states
+    - unnecessary re-renders
