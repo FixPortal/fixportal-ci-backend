@@ -319,6 +319,8 @@ dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-bu
 
 Merge style is **rebase-merge** — squash and merge commits are not used.
 
+Notable changes are recorded in [CHANGELOG.md](CHANGELOG.md).
+
 ## License
 
 [Apache-2.0](LICENSE) © 2026 Chris Dowling.

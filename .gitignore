@@ -421,6 +421,10 @@ FodyWeavers.xsd
 .worktrees/
 StrykerOutput/
 
+# This is a public repo: internal planning/spec docs stay out of the OSS tree.
+# Deliberate deviation from the personal default of committing docs/superpowers/.
+docs/superpowers/
+
 # Dashboard snapshot persistence (runtime state, never source)
 App_Data/
 
