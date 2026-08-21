@@ -37,7 +37,7 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 | `Dashboard:IncludeReusable` | `false` | Hide reusable (`_*.yml`) and Dependabot workflows. |
 | `Dashboard:IncludeCodeQl` | `true` | Keep CodeQL default-setup workflows in the board. |
 | `Dashboard:MetricsEnabled` | `true` | Run the slow Lizard code-metrics worker (NLOC / cyclomatic complexity). |
-| `Dashboard:MetricsRefreshSeconds` | `43200` | Metrics cadence (12 h). Each pass shallow-clones every repo. |
+| `Dashboard:MetricsRefreshSeconds` | `43200` | Metrics cadence (12 h). Each pass shallow-clones every selected repo. |
 | `Dashboard:MergedPrEnabled` | `true` | Track the org's most-recently-merged PR. |
 | `Dashboard:MergedPrRefreshSeconds` | `150` | Merged-PR cadence (2.5 min). |
 | `Dashboard:JobLanes` | deploys, packages | Named lanes that surface matching workflow **jobs** (by name pattern) as their own status chips. |
@@ -60,8 +60,8 @@ The collector needs a **fine-grained, read-only** Personal Access Token.
 2. Scope it:
    - **Resource owner** → the organization that hosts the repos (the
      `GitHub:Owner` value).
-   - **Repository access** → **All repositories** (so new repos are picked up
-     automatically), or **Only select repositories** to limit the board.
+   - **Repository access** → **All repositories** (so newly created matching repos
+     are picked up automatically), or **Only select repositories** to limit the board.
    - **Permissions** → **Repository permissions**, all *Read-only*:
      - **Actions** — workflow-run status (the core signal). Setting this
        auto-adds **Metadata: Read-only**, a mandatory dependency — leave it.
