@@ -14,8 +14,8 @@
 
 ## What it does
 
-Give it a `GitHub:Owner` and a read-only token, and it surfaces — for **every**
-non-archived repo in that org, with no per-repo configuration:
+Give it a `GitHub:Owner` and a read-only token, and by default it surfaces — for
+**every** non-archived repo in that org, with no per-repo configuration:
 
 - **Workflow status** — latest run state per workflow (success / failure /
   running / no-CI), with deep links out to the run.
@@ -137,6 +137,36 @@ sets them. The one most forks change is
 `__` for `:` (e.g. `GitHub__Token`). The full table — owner, token, refresh cadences, archived/
 reusable/CodeQL filters, metrics, merged-PR tracking, and job lanes — is
 documented in **[operator-handoff.md](operator-handoff.md#configuration-model)**.
+
+### Repository selection (`Dashboard`)
+
+Repository filters are optional and empty by default. Name and topic includes are
+separate gates: when both are configured, a repository must match both. A match in
+either exclude list always wins. Patterns are case-insensitive and support `*` and
+`?` (not `**`, brace expansion, or negation).
+
+| Setting | Environment variable form | Meaning |
+|---|---|---|
+| `Dashboard:IncludeRepositories` | `Dashboard__IncludeRepositories__0` | Include repository names matching any configured glob. |
+| `Dashboard:ExcludeRepositories` | `Dashboard__ExcludeRepositories__0` | Exclude repository names matching any configured glob. |
+| `Dashboard:IncludeTopics` | `Dashboard__IncludeTopics__0` | Include repositories with at least one topic matching any configured pattern. |
+| `Dashboard:ExcludeTopics` | `Dashboard__ExcludeTopics__0` | Exclude repositories with at least one topic matching any configured pattern. |
+
+For example, this examines production API repositories while omitting internal ones:
+
+```json
+"Dashboard": {
+  "IncludeRepositories": [ "api-*" ],
+  "IncludeTopics": [ "production" ],
+  "ExcludeTopics": [ "internal" ]
+}
+```
+
+The equivalent environment variables are
+`Dashboard__IncludeRepositories__0=api-*`,
+`Dashboard__IncludeTopics__0=production`, and
+`Dashboard__ExcludeTopics__0=internal`. Add `__1`, `__2`, and so on for more
+patterns. Blank entries are rejected at startup.
 
 ### Review signals (`ReviewSignals`)
 

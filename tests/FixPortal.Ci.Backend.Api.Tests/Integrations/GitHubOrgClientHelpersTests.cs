@@ -84,6 +84,101 @@ public class GitHubOrgClientHelpersTests
             .BeTrue();
     }
 
+    [Theory]
+    [InlineData("", "", "", "", "repo", null, true)]
+    [InlineData("api-*", "", "", "", "API-Service", null, true)]
+    [InlineData("api-*", "", "", "", "worker", null, false)]
+    [InlineData("", "LEGACY-*", "", "", "legacy-api", null, false)]
+    [InlineData("api-*", "api-secret", "", "", "api-secret", null, false)]
+    [InlineData("", "", "dotnet", "", "repo", "DOTNET,backend", true)]
+    [InlineData("", "", "dotnet", "", "repo", null, false)]
+    [InlineData("api-*", "", "backend", "", "api-service", "frontend", false)]
+    [InlineData("", "", "backend", "internal", "repo", "backend,internal", false)]
+    public void IncludeRepository_applies_name_and_topic_filters(
+        string includeRepositories,
+        string excludeRepositories,
+        string includeTopics,
+        string excludeTopics,
+        string name,
+        string? topics,
+        bool expected
+    )
+    {
+        var options = new DashboardOptions
+        {
+            SnapshotPath = "x",
+            RefreshSeconds = 60,
+            IncludeRepositories = Patterns(includeRepositories),
+            ExcludeRepositories = Patterns(excludeRepositories),
+            IncludeTopics = Patterns(includeTopics),
+            ExcludeTopics = Patterns(excludeTopics),
+        };
+        var repo = new GitHubRepoDto("repo", "https://example.test/repo", false, false, "main", Patterns(topics));
+
+        _ = GitHubOrgClient.IncludeRepository(repo with { Name = name }, options).Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task ListRepositoriesAsync_applies_filters_and_logs_returned_and_surviving_counts()
+    {
+        using var http = new HttpClient(
+            new StaticJsonHandler(
+                """[{"name":"api-public","html_url":"u","private":false,"archived":false,"default_branch":"main","topics":["backend"]},{"name":"api-internal","html_url":"u","private":false,"archived":false,"default_branch":"main","topics":["backend","internal"]},{"name":"worker","html_url":"u","private":false,"archived":false,"default_branch":"main","topics":["backend"]},{"name":"api-frontend","html_url":"u","private":false,"archived":false,"default_branch":"main","topics":["frontend"]},{"name":"api-archived","html_url":"u","private":false,"archived":true,"default_branch":"main","topics":["backend"]}]"""
+            )
+        );
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var logger = new CapturingLogger<GitHubOrgClient>();
+        var client = new GitHubOrgClient(
+            http,
+            Options.Create(new GitHubOptions { Owner = "acme", Token = "t" }),
+            Options.Create(
+                new DashboardOptions
+                {
+                    SnapshotPath = "x",
+                    RefreshSeconds = 60,
+                    IncludeRepositories = ["api-*"],
+                    IncludeTopics = ["backend"],
+                    ExcludeTopics = ["internal"],
+                }
+            ),
+            new GitHubETagStore(),
+            logger: logger
+        );
+
+        var repositories = await client.ListRepositoriesAsync(CancellationToken.None);
+
+        _ = repositories.Should().ContainSingle().Which.Name.Should().Be("api-public");
+        _ = repositories[0].Topics.Should().Equal("backend");
+        _ = logger
+            .Entries.Should()
+            .ContainSingle(e =>
+                e.Level == Microsoft.Extensions.Logging.LogLevel.Information
+                && e.Message.Contains("5 repositories", StringComparison.Ordinal)
+                && e.Message.Contains("1 remain", StringComparison.Ordinal)
+            );
+    }
+
+    [Fact]
+    public async Task ListRepositoriesAsync_without_filters_keeps_all_non_archived_repositories()
+    {
+        using var http = new HttpClient(
+            new StaticJsonHandler(
+                """[{"name":"one","html_url":"u","private":false,"archived":false,"default_branch":"main","topics":[]},{"name":"two","html_url":"u","private":false,"archived":false,"default_branch":"main","topics":["backend"]},{"name":"old","html_url":"u","private":false,"archived":true,"default_branch":"main","topics":[]}]"""
+            )
+        );
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var client = new GitHubOrgClient(
+            http,
+            Options.Create(new GitHubOptions { Owner = "acme", Token = "t" }),
+            Options.Create(DefaultOptions),
+            new GitHubETagStore()
+        );
+
+        var repositories = await client.ListRepositoriesAsync(CancellationToken.None);
+
+        _ = repositories.Select(r => r.Name).Should().Equal("one", "two");
+    }
+
     [Fact]
     public async Task GetRecentRunsAsync_maps_exact_GitHub_run_identity()
     {
@@ -129,4 +224,6 @@ public class GitHubOrgClientHelpersTests
                 }
             );
     }
+
+    private static IReadOnlyList<string> Patterns(string? value) => string.IsNullOrEmpty(value) ? [] : value.Split(',');
 }
