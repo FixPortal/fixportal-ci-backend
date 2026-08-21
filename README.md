@@ -4,10 +4,11 @@
 # FixPortal CI Dashboard — Backend API
 
 > The backend for a read-only, **org-wide** CI/CD status board. Point it at a
-> GitHub org and it auto-discovers every repository and workflow, polls the
-> GitHub Actions API server-side, and exposes a single snapshot of build, deploy,
-> package, PR, and code-metrics signals over `GET /api/dashboard/snapshot`. Any
-> client can render that snapshot; the open-source
+> GitHub org and it auto-discovers repositories and workflows, optionally narrows
+> the sweep by repository-name or GitHub-topic filters, polls the GitHub Actions
+> API server-side, and exposes a single snapshot of build, deploy, package, PR,
+> and code-metrics signals over `GET /api/dashboard/snapshot`. Any client can
+> render that snapshot; the open-source
 > [`@fix-portal/ci-frontend`](https://github.com/FixPortal/fixportal-ci-frontend)
 > board is one such UI. This service is a pure ASP.NET Core API with no
 > database — all calls are server-side with a read-only PAT.

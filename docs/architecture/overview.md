@@ -9,9 +9,10 @@
 ## What this is
 
 The backend for a read-only, **org-wide** CI/CD status board. Point it at a
-GitHub org and it auto-discovers every non-archived repo and workflow, polls the
-GitHub Actions API **server-side** with a read-only PAT, and exposes one snapshot
-of build / deploy / package / PR / code-metrics signals over
+GitHub org and it auto-discovers non-archived repositories and workflows,
+optionally narrows the sweep by repository-name or GitHub-topic filters, polls
+the GitHub Actions API **server-side** with a read-only PAT, and exposes one
+snapshot of build / deploy / package / PR / code-metrics signals over
 `GET /api/dashboard/snapshot`. That anonymous endpoint is the public projection;
 the private admin and IDE contracts are separately authenticated. A single deployable ASP.NET Core **minimal API**
 on .NET 10, **no database** — all state is an in-memory snapshot with a
