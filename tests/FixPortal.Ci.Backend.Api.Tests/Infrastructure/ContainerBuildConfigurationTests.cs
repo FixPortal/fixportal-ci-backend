@@ -35,5 +35,6 @@ public class ContainerBuildConfigurationTests
         // The whole GitHub Packages host, not just this org's feed: a fork or a rename would
         // otherwise reintroduce an authenticated source that the owner-scoped assertion missed.
         _ = nuget.Should().NotContain("nuget.pkg.github.com");
+        _ = nuget.Should().NotContain("packageSourceCredentials");
     }
 }
