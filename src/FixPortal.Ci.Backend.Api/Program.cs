@@ -85,6 +85,14 @@ builder
         o => o.GetEffectiveJobLanes().All(l => l.MaxRunsToScan > 0),
         "Dashboard:JobLanes:MaxRunsToScan must be greater than zero."
     )
+    .Validate(
+        o =>
+            o.IncludeRepositories.Concat(o.ExcludeRepositories)
+                .Concat(o.IncludeTopics)
+                .Concat(o.ExcludeTopics)
+                .All(pattern => !string.IsNullOrWhiteSpace(pattern)),
+        "Dashboard:IncludeRepositories, Dashboard:ExcludeRepositories, Dashboard:IncludeTopics, and Dashboard:ExcludeTopics cannot contain blank patterns."
+    )
     .ValidateOnStart();
 builder
     .Services.AddOptions<AdminOptions>()

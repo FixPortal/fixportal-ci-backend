@@ -8,6 +8,10 @@ public sealed class DashboardOptions
     public required string SnapshotPath { get; init; }
     public required int RefreshSeconds { get; init; }
     public bool ExcludeArchived { get; init; } = true;
+    public IReadOnlyList<string> IncludeRepositories { get; init; } = [];
+    public IReadOnlyList<string> ExcludeRepositories { get; init; } = [];
+    public IReadOnlyList<string> IncludeTopics { get; init; } = [];
+    public IReadOnlyList<string> ExcludeTopics { get; init; } = [];
     public bool IncludeReusable { get; init; }
     public bool IncludeCodeQl { get; init; } = true;
     public int RunHistoryPageSize { get; init; } = 30;

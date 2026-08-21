@@ -1,8 +1,9 @@
 # Operator Handoff
 
-This backend polls the **GitHub Actions API for every repository owned by a
-GitHub organization**, normalizes the results into a JSON snapshot, and
-serves the API. It is read-only with deep links out to the underlying runs.
+This backend polls the **GitHub Actions API for selected repositories owned by
+a GitHub organization**, normalizes the results into a JSON snapshot, and serves
+the API. With no repository filters configured, every non-archived repository is
+selected. It is read-only with deep links out to the underlying runs.
 
 The dashboard is two separately published images: this backend API and the
 `fixportal-ci-frontend` board UI. Docker Compose runs both; the frontend's nginx
@@ -29,6 +30,10 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 | `Dashboard:RefreshSeconds` | `20` | Snapshot refresh cadence. Must be > 0. The collector issues conditional GETs (see **GitHub**), so a tight cadence stays well within the rate budget. |
 | `Dashboard:SnapshotPath` | `App_Data/dashboard-snapshot.json` | Last-known-good snapshot, relative to the content root. |
 | `Dashboard:ExcludeArchived` | `true` | Skip archived repositories. |
+| `Dashboard:IncludeRepositories` | *(empty)* | Include names matching any case-insensitive `*`/`?` glob. Set as `Dashboard__IncludeRepositories__0`, etc. |
+| `Dashboard:ExcludeRepositories` | *(empty)* | Exclude names matching any case-insensitive `*`/`?` glob. Set as `Dashboard__ExcludeRepositories__0`, etc. |
+| `Dashboard:IncludeTopics` | *(empty)* | Include repositories with a topic matching any configured pattern. Set as `Dashboard__IncludeTopics__0`, etc. |
+| `Dashboard:ExcludeTopics` | *(empty)* | Exclude repositories with a topic matching any configured pattern. Set as `Dashboard__ExcludeTopics__0`, etc. |
 | `Dashboard:IncludeReusable` | `false` | Hide reusable (`_*.yml`) and Dependabot workflows. |
 | `Dashboard:IncludeCodeQl` | `true` | Keep CodeQL default-setup workflows in the board. |
 | `Dashboard:MetricsEnabled` | `true` | Run the slow Lizard code-metrics worker (NLOC / cyclomatic complexity). |
@@ -40,9 +45,11 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 | `Cors:AllowedOrigins` | *(empty)* | Origins allowed to read the anonymous public snapshot; configure as `Cors__AllowedOrigins__0`, etc. |
 | `Admin:AdminKey` / `IdeIntegration:ApiKey` | *(empty)* | Shared secrets for the private admin snapshot and IDE v1 endpoints. Keep them out of source. |
 
-There is **no hardcoded repository list** — the board auto-discovers every repo
-under `GitHub:Owner` and every workflow in each, so new repos and workflows
-appear without configuration.
+There is **no hardcoded repository list** — the board auto-discovers repos under
+`GitHub:Owner`, then applies the optional filters above. The repository-name and
+topic include lists intersect when both are configured, and either exclude list
+wins over an include match. Empty include lists impose no restriction. New matching
+repos and workflows therefore appear without a deployment change.
 
 ## GitHub
 

@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.IO.Enumeration;
 using System.Net;
 using System.Text.Json;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
@@ -20,7 +21,14 @@ public sealed class GitHubRateLimitException(string message) : Exception(message
 public sealed class GitHubAuthException(string message, Exception? innerException = null)
     : Exception(message, innerException);
 
-public sealed record GitHubRepoDto(string Name, string HtmlUrl, bool Private, bool Archived, string? DefaultBranch);
+public sealed record GitHubRepoDto(
+    string Name,
+    string HtmlUrl,
+    bool Private,
+    bool Archived,
+    string? DefaultBranch,
+    IReadOnlyList<string>? Topics = null
+);
 
 public sealed record GitHubWorkflowDto(long Id, string Name, string Path, string State);
 
@@ -674,8 +682,24 @@ public sealed class GitHubOrgClient(
 
             page++;
         }
-        return _dashboard.ExcludeArchived ? [.. all.Where(r => !r.Archived)] : all;
+        var filtered = all.Where(r => (!_dashboard.ExcludeArchived || !r.Archived) && IncludeRepository(r, _dashboard))
+            .ToList();
+        logger?.LogInformation(
+            "GitHub returned {RepositoryCount} repositories; {IncludedCount} remain after dashboard filters.",
+            all.Count,
+            filtered.Count
+        );
+        return filtered;
     }
+
+    internal static bool IncludeRepository(GitHubRepoDto repo, DashboardOptions options) =>
+        (options.IncludeRepositories.Count == 0 || MatchesAny(options.IncludeRepositories, repo.Name))
+        && (options.IncludeTopics.Count == 0 || repo.Topics?.Any(t => MatchesAny(options.IncludeTopics, t)) == true)
+        && !MatchesAny(options.ExcludeRepositories, repo.Name)
+        && repo.Topics?.Any(t => MatchesAny(options.ExcludeTopics, t)) != true;
+
+    private static bool MatchesAny(IReadOnlyList<string> patterns, string value) =>
+        patterns.Any(pattern => FileSystemName.MatchesSimpleExpression(pattern, value, ignoreCase: true));
 
     public async Task<IReadOnlyList<GitHubWorkflowDto>> ListWorkflowsAsync(string repo, CancellationToken ct)
     {
