@@ -12,3 +12,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Configurable case-insensitive repository-name and GitHub-topic filters for
   dashboard sweeps. Name and topic include lists intersect, exclusions win, and
   empty lists preserve the default org-wide behaviour.
+
+### Changed
+
+- Hardened the public-build regression guard to reject any NuGet
+  `packageSourceCredentials` block, regardless of feed host or credential name.
