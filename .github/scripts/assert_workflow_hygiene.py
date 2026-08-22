@@ -74,7 +74,20 @@ def triggers(document):
 
 
 def permission_blocks(document):
-    """Every `permissions:` value in the file: workflow level, then each job."""
+    """Every `permissions:` value in the file: workflow level, then each job.
+
+    KNOWN GAP, stated so this is not mistaken for full coverage: only the literal
+    `write-all` scalar is flagged (see main()). A mapping that grants every scope
+    `write` individually carries the same privilege and passes. Not closed here because
+    the test cannot be written soundly -- "every scope is write" needs the complete set
+    of scopes GitHub defines, which changes as GitHub adds them, and an omitted scope is
+    a *narrower* grant, not a broader one. A heuristic on scope count would fail
+    workflows that legitimately need three or four write scopes.
+
+    This is the same scope as the grep it replaces, so it is not a regression; the
+    bypass this file closes is the block-style spelling of `write-all`, not the
+    enumerated equivalent.
+    """
     blocks = []
     if "permissions" in document:
         blocks.append(("workflow", document["permissions"]))

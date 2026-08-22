@@ -334,6 +334,11 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 
         public int GraphQlCalls => _graphQlCalls;
 
+        // Overrides the GraphQL body from the next call onward, so a test can drive a
+        // SEQUENCE of responses -- a healthy one, then a data-less one -- through a single
+        // client instance. Null leaves the constructor-supplied body in force.
+        public string? GraphQlBody { get; set; }
+
         // The completion signal for a sweep that makes no alerts call at all: with a
         // PublicOnly reviewer filtered out on a private repo, AlertsRequestReceived never
         // fires, and waiting on it would fail the test for the very reason it passes.
@@ -374,7 +379,7 @@ public class ReviewSignalEnrichmentWorkerCollectTests
                     HttpStatusCode.OK,
                     $$"""[{"name":"{{RepoName}}","html_url":"https://github.com/FixPortal/{{RepoName}}","private":{{(repoPrivate ? "true" : "false")}},"archived":false,"default_branch":"main"}]"""
                 ),
-                "/graphql" => (HttpStatusCode.OK, factsJson),
+                "/graphql" => (HttpStatusCode.OK, GraphQlBody ?? factsJson),
                 _ when isAlertsRequest => (alertsStatus, alertsJson),
                 // The open-PR listing is now the FIRST call of every collect: it carries
                 // the watermark, and a pull request absent from it is never fetched. An
@@ -591,6 +596,50 @@ public class ReviewSignalEnrichmentWorkerCollectTests
 
         _ = observed.Should().ContainSingle().Which.Should().NotBeNull();
         _ = observed[0]!.Remaining.Should().Be(4242);
+    }
+
+    [Fact]
+    public async Task A_response_with_no_data_keeps_the_previous_rate_limit_observation()
+    {
+        // X2: a spec-legal 200 carrying `data: null` with no `errors` array used to
+        // overwrite LastGraphQlRateLimit with null. The reserve guard fails OPEN on a
+        // missing reading, so the next chunk spent past the floor with no diagnostic.
+        const string withBudget = """
+            {"data":{
+              "repository":{"pr181":{"number":181,"isDraft":false,"mergeable":"MERGEABLE",
+                "mergeStateStatus":"CLEAN","headRefOid":"sha"}},
+              "rateLimit":{"cost":1,"remaining":11,"resetAt":"2026-08-22T18:00:00Z"}
+            }}
+            """;
+        const string dataless = """{"data":null}""";
+
+        var handler = new RoutingHandler(withBudget, HttpStatusCode.OK, "[]");
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var client = new GitHubOrgClient(
+            http,
+            Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
+            Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 }),
+            new GitHubETagStore()
+        );
+
+        _ = await client.GetPullRequestMergeStatesAsync(RepoName, [181], TestContext.Current.CancellationToken);
+        handler.GraphQlBody = dataless;
+        _ = await client.GetPullRequestMergeStatesAsync(RepoName, [181], TestContext.Current.CancellationToken);
+
+        var observed = new List<GraphQlRateLimit?>();
+        _ = await client.GetPullRequestMergeStatesAsync(
+            RepoName,
+            [181],
+            TestContext.Current.CancellationToken,
+            budget =>
+            {
+                observed.Add(budget);
+                return false;
+            }
+        );
+
+        _ = observed.Should().ContainSingle().Which.Should().NotBeNull("the data-less response must not erase it");
+        _ = observed[0]!.Remaining.Should().Be(11);
     }
 
     [Theory]

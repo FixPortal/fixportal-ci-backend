@@ -37,22 +37,29 @@ public sealed class DashboardOptions
     /// </summary>
     public string FilterFingerprint()
     {
-        const char unitSeparator = '';
-        const char recordSeparator = '';
-
-        string Canonical(IReadOnlyList<string> patterns) =>
-            string.Join(unitSeparator, patterns.Order(StringComparer.Ordinal));
-
-        var canonical = string.Join(
-            recordSeparator,
-            ExcludeArchived ? "archived:excluded" : "archived:included",
-            Canonical(IncludeRepositories),
-            Canonical(ExcludeRepositories),
-            Canonical(IncludeTopics),
-            Canonical(ExcludeTopics)
-        );
-
-        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+        // Length-prefixed, not delimiter-joined. A separator character can appear INSIDE a
+        // pattern -- nothing validates against that -- and two different filter sets then
+        // encode identically: {"a<sep>b"} and {"a", "b"} are indistinguishable once joined.
+        // A collision here lets a snapshot written under different filters pass the
+        // provenance check and restore the repository set this fingerprint exists to keep
+        // off the board. Prefixing each value with its length removes the ambiguity without
+        // constraining what a pattern may contain.
+        var canonical = new StringBuilder();
+        void Append(string value) => canonical.Append(value.Length).Append(':').Append(value).Append(';');
+        void AppendAll(IReadOnlyList<string> patterns)
+        {
+            _ = canonical.Append(patterns.Count).Append('|');
+            foreach (var pattern in patterns.Order(StringComparer.Ordinal))
+            {
+                Append(pattern);
+            }
+        }
+        Append(ExcludeArchived ? "archived:excluded" : "archived:included");
+        AppendAll(IncludeRepositories);
+        AppendAll(ExcludeRepositories);
+        AppendAll(IncludeTopics);
+        AppendAll(ExcludeTopics);
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
     }
 
     // Compiled fallback lanes, used when no Dashboard:JobLanes are configured. These
