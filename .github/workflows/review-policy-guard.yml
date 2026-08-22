@@ -128,10 +128,10 @@ jobs:
       # the evidence. Parsing also removes the self-match hazard that forced the old
       # `^[^#]*` prefixes: a parser reads values, so a comment describing a rule -- such
       # as this one -- cannot be mistaken for a violation of it.
-      - name: Set up Python
-        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
-        with:
-          python-version: '3.12'
-
+      # Deliberately NO actions/setup-python step. That installs a clean interpreter from
+      # the tool cache, and PyYAML is not in it -- which failed this job on its first run
+      # (2026-08-22, "PyYAML is not available to this runner"). The runner image's SYSTEM
+      # python3 does carry PyYAML, which is what the sibling assert_gate_coverage.py has
+      # been relying on. Adding setup-python here shadows the interpreter that works.
       - name: Workflows must be hygienic (no target-context trigger, no write-all, actions pinned)
         run: python3 .github/scripts/assert_workflow_hygiene.py
