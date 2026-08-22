@@ -11,7 +11,8 @@
 The backend for a read-only, **org-wide** CI/CD status board. Point it at a
 GitHub org and it auto-discovers non-archived repositories and workflows,
 optionally narrows the sweep by repository-name or GitHub-topic filters, polls
-the GitHub Actions API **server-side** with a read-only PAT, and exposes one
+the GitHub Actions API **server-side** with read-only credentials -- a GitHub App
+installation token, or a fine-grained PAT -- and exposes one
 snapshot of build / deploy / package / PR / code-metrics signals over
 `GET /api/dashboard/snapshot`. That anonymous endpoint is the public projection;
 the private admin and IDE contracts are separately authenticated. A single deployable ASP.NET Core **minimal API**
@@ -23,7 +24,7 @@ board is one such UI.
 ## The spine (data flow)
 
 ```
-GitHub Actions API  (read-only PAT)
+GitHub Actions API  (App installation token, or read-only PAT)
         │  poll / clone
         ▼
   Integrations/GitHub/GitHubOrgClient ...... the single upstream gateway
@@ -124,7 +125,7 @@ data immediately instead of blanking.
 ## Deploy & operations
 
 - **Container:** multi-stage `Dockerfile` (non-root, port 8080) — runs on any
-  container platform; only the GitHub token + owner are required.
+  container platform; only the GitHub credentials + owner are required.
 - **Azure:** CI builds the image once on a GitHub-hosted `ubuntu-latest` runner,
   pushes it to GHCR, imports
   that exact commit-tagged image into ACR, then ships `deploy/bicep/main.bicep`

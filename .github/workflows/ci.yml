@@ -53,15 +53,35 @@ jobs:
       - name: Build
         run: dotnet build FixPortal.Ci.Backend.slnx --configuration Release --no-restore
 
+      # Coverage is collected by wrapping the existing test command, not by asking the test
+      # platform for it. dotnet-coverage attaches to the process, so it needs no package
+      # reference in the test project and stays off the collector path entirely --
+      # coverlet.collector 10.0.1 emits invalid IL on .NET 10 (InvalidProgramException),
+      # which is why this route is deliberate rather than incidental.
+      #
+      # Coverage reporting left this repo in the OSS cut with no replacement and no stated
+      # rationale, so a contributor to a PUBLIC repository cannot see what a change drops.
+      # REPORTED, NOT GATED: no threshold is enforced, so this cannot red a PR by itself.
+      # Add a floor only with a measured baseline behind it.
       - name: Test
-        run: dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-build --report-xunit-trx --results-directory ./TestResults --timeout 5m
+        run: >
+          dotnet dotnet-coverage collect
+          --output ./TestResults/coverage.cobertura.xml
+          --output-format cobertura
+          "dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-build --report-xunit-trx --results-directory ./TestResults --timeout 5m"
+
+      - name: Summarise coverage
+        if: always()
+        run: python3 .github/scripts/summarize_coverage.py ./TestResults/coverage.cobertura.xml >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: test-results
-          path: ./TestResults/*.trx
+          path: |
+            ./TestResults/*.trx
+            ./TestResults/coverage.cobertura.xml
           if-no-files-found: ignore
 
   publish:

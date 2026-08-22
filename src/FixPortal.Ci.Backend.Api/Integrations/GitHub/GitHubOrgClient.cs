@@ -578,7 +578,13 @@ public sealed class GitHubOrgClient(
                 ct
             );
 
-            LastGraphQlRateLimit = data?.RateLimit;
+            // Preserve the last non-null observation rather than overwriting with null.
+            // PostGraphQlAsync returns default for a null envelope, and a spec-legal 200
+            // carrying `data: null` with no `errors` array reaches here -- wiping a live
+            // below-reserve reading. The next chunk's guard would then see null and fail
+            // OPEN (ReviewSignalEnrichmentWorker.IsBelowReserve), spending past the floor.
+            // Same rule RecordGraphQlCost already applies on the review-signal path.
+            LastGraphQlRateLimit = data?.RateLimit ?? LastGraphQlRateLimit;
 
             // A null value means GitHub returned no such pull request -- closed since
             // the listing, not an error.
@@ -682,13 +688,37 @@ public sealed class GitHubOrgClient(
 
             page++;
         }
-        var filtered = all.Where(r => (!_dashboard.ExcludeArchived || !r.Archived) && IncludeRepository(r, _dashboard))
-            .ToList();
+        // Counted in two stages, not one. Folding the archived exclusion in with the
+        // name/topic predicates made the line read "40 repositories; 25 remain after
+        // dashboard filters" when 10 of the 15 were archived -- and this log is the only
+        // diagnostic an operator has when a mistyped filter empties the board.
+        var unarchived = all.Where(r => !_dashboard.ExcludeArchived || !r.Archived).ToList();
+        var filtered = unarchived.Where(r => IncludeRepository(r, _dashboard)).ToList();
         logger?.LogInformation(
-            "GitHub returned {RepositoryCount} repositories; {IncludedCount} remain after dashboard filters.",
+            "GitHub returned {RepositoryCount} repositories; {UnarchivedCount} after the archived filter; "
+                + "{IncludedCount} remain after dashboard name/topic filters.",
             all.Count,
+            unarchived.Count,
             filtered.Count
         );
+
+        // A repository whose payload omits `topics` cannot be matched by either topic gate,
+        // so an ExcludeTopics entry silently stops hiding it. GitHub's schema defines the
+        // field but does not require it, and nothing else would report the drift.
+        if (_dashboard.IncludeTopics.Count > 0 || _dashboard.ExcludeTopics.Count > 0)
+        {
+            var missingTopics = unarchived.Where(r => r.Topics is null).Select(r => r.Name).ToList();
+            if (missingTopics.Count > 0)
+            {
+                logger?.LogWarning(
+                    "Topic filters are configured, but {MissingCount} repositories returned no topics field and were "
+                        + "evaluated as having no topics: {Repositories}. An ExcludeTopics entry cannot hide these.",
+                    missingTopics.Count,
+                    string.Join(", ", missingTopics)
+                );
+            }
+        }
+
         return filtered;
     }
 

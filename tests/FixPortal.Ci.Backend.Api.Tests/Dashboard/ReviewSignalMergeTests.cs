@@ -518,20 +518,79 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             new GitHubETagStore()
         );
 
+        // Capture what the client actually hands the predicate. Substituting a hard-coded
+        // breached budget and discarding the argument would prove only that a true predicate
+        // short-circuits the fetch, leaving the load-bearing half -- that the client passes
+        // its own LastGraphQlRateLimit -- untested, so a regression feeding the predicate a
+        // stale value, or nothing at all, would stay green.
+        var observed = new List<GraphQlRateLimit?>();
+
         var states = await client.GetPullRequestMergeStatesAsync(
             RepoName,
             [181],
             TestContext.Current.CancellationToken,
-            _ =>
-                ReviewSignalEnrichmentWorker.IsBelowReserve(
+            budget =>
+            {
+                observed.Add(budget);
+                return ReviewSignalEnrichmentWorker.IsBelowReserve(
                     new GraphQlRateLimit(1, 999, "2026-08-02T17:38:33Z"),
                     1000,
                     Instant.FromUtc(2026, 8, 2, 17, 10)
-                )
+                );
+            }
         );
 
         _ = states.Should().BeNull();
         _ = handler.GraphQlCalls.Should().Be(0);
+        // Cold start: no GraphQL response has been parsed yet, so the client's own observation
+        // is null and null is exactly what the predicate must receive. IsBelowReserve fails
+        // OPEN on null by design, so this asserts the wiring, not a breach.
+        _ = observed
+            .Should()
+            .ContainSingle("the client must consult the predicate once, before spending")
+            .Which.Should()
+            .BeNull();
+    }
+
+    [Fact]
+    public async Task Merge_state_fetch_hands_the_predicate_the_budget_parsed_from_the_previous_response()
+    {
+        // The other half of the same wiring: once a GraphQL response HAS been parsed, the
+        // value the predicate receives must be that response's rateLimit, not null and not a
+        // value the caller supplied.
+        const string mergeStateWithBudget = """
+            {"data":{
+              "repository":{"pr181":{"number":181,"isDraft":false,"mergeable":"MERGEABLE",
+                "mergeStateStatus":"CLEAN","headRefOid":"sha"}},
+              "rateLimit":{"cost":1,"remaining":4242,"resetAt":"2026-08-22T18:00:00Z"}
+            }}
+            """;
+        var handler = new RoutingHandler(mergeStateWithBudget, HttpStatusCode.OK, "[]");
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
+        var client = new GitHubOrgClient(
+            http,
+            Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
+            dashboardOptions,
+            new GitHubETagStore()
+        );
+
+        _ = await client.GetPullRequestMergeStatesAsync(RepoName, [181], TestContext.Current.CancellationToken);
+
+        var observed = new List<GraphQlRateLimit?>();
+        _ = await client.GetPullRequestMergeStatesAsync(
+            RepoName,
+            [181],
+            TestContext.Current.CancellationToken,
+            budget =>
+            {
+                observed.Add(budget);
+                return false;
+            }
+        );
+
+        _ = observed.Should().ContainSingle().Which.Should().NotBeNull();
+        _ = observed[0]!.Remaining.Should().Be(4242);
     }
 
     [Theory]
