@@ -344,7 +344,7 @@ dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-bu
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Backend container exits at startup with `OptionsValidationException: GitHub:Owner must be configured` (frontend stays up) | `GITHUB_TOKEN` / `GITHUB_OWNER` not set — no `.env` in the project directory and nothing exported | `cp .env.example .env` and fill both in, then `docker compose up -d` |
+| Backend container exits at startup with `OptionsValidationException: GitHub:Owner must be configured` (frontend stays up) | `GITHUB_OWNER` not set, or no credential for the mode in use — no `.env` in the project directory and nothing exported | `cp .env.example .env`, then fill in `GITHUB_OWNER` plus either `GITHUB_TOKEN` (PAT mode) or the `GITHUBAPP__*` settings (App mode), and `docker compose up -d` |
 | Snapshot returns stale data after a workflow run | Refresh worker polls on a 20 s cadence; run completed between polls | Wait up to 20 s, or restart to force an immediate poll |
 | Snapshot endpoint returns `204 No Content` | No snapshot yet — the first poll has not completed, or every poll has failed | Allow ~5 s after startup; if it persists, check the container logs for `GitHubAuthException` |
 | `MetricsEnrichmentWorker` logs `git clone` errors | Credential lacks **Contents** read | App mode: grant `contents` and accept the request on the installation. PAT mode: re-issue with Contents (read) and update `GitHub__Token` — which is **ignored** in App mode, so check which mode is live first |
@@ -352,7 +352,7 @@ dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-bu
 | Secret Scanning pill stuck at `pending`, nothing in the logs | The installation has `security_events` but not `secret_scanning_alerts`. GitHub answers that route **404, not 403**, so the count returns null and the "unreadable" warning never fires | Grant `secret_scanning_alerts` on the App, then **accept the request on the installation** — widening the App alone does nothing. `gh api apps/<slug> -q .permissions` and `gh api orgs/<owner>/installations` read different things; a moved installation `updated_at` is the proof it took. Installation tokens are cached up to an hour, so restart the active revision to pick it up now |
 | Review pills degraded or absent across every repository | Running in PAT mode: a PAT cannot read check runs, and that failure takes the whole GraphQL document with it | Move to App mode — see [Authentication](#authentication-github-githubapp) |
 | CORS errors in the browser | Board UI origin not in `Cors:AllowedOrigins` | Add origin via `Cors__AllowedOrigins__0` (or the equivalent `Cors:AllowedOrigins` configuration key) |
-| `401 Unauthorized` from GitHub API | Token expired, revoked, or the value is not a GitHub PAT (fine-grained tokens start `github_pat_`, classic ones `ghp_`) | Generate a new fine-grained PAT and update the secret or env var |
+| `401 Unauthorized` from GitHub API | **PAT mode**: token expired, revoked, or not a GitHub PAT (fine-grained start `github_pat_`, classic `ghp_`). **App mode**: the private key no longer matches the App, or the App was uninstalled | PAT mode: generate a new fine-grained PAT and update the secret or env var. App mode: re-issue `GitHubApp__PrivateKeyPem` from the App's settings page and confirm the installation still exists — `GitHub__Token` is ignored here and changing it will not help |
 
 ## Contributing
 

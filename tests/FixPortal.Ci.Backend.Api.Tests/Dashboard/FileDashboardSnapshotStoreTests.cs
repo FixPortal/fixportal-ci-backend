@@ -392,4 +392,52 @@ public class FileDashboardSnapshotStoreTests
         _ = reordered.FilterFingerprint().Should().Be(baseline.FilterFingerprint());
         _ = changed.FilterFingerprint().Should().NotBe(baseline.FilterFingerprint());
     }
+
+    [Theory]
+    // A delimiter-joined encoding collides whenever a pattern can contain the delimiter:
+    // one pattern holding the separator encodes identically to two patterns split on it.
+    // A collision means a snapshot written under DIFFERENT filters passes the provenance
+    // check, which is the exact failure the fingerprint exists to prevent.
+    [InlineData("ab")]
+    [InlineData("a;b")]
+    [InlineData("a|b")]
+    [InlineData("2:ab")]
+    public void FilterFingerprint_should_not_collide_when_a_pattern_contains_a_separator(string joined)
+    {
+        var parts = new DashboardOptions
+        {
+            SnapshotPath = "x",
+            RefreshSeconds = 20,
+            ExcludeRepositories = ["a", "b"],
+        };
+        var single = new DashboardOptions
+        {
+            SnapshotPath = "x",
+            RefreshSeconds = 20,
+            ExcludeRepositories = [joined],
+        };
+
+        _ = single.FilterFingerprint().Should().NotBe(parts.FilterFingerprint());
+    }
+
+    [Fact]
+    public void FilterFingerprint_should_not_collide_across_different_filter_kinds()
+    {
+        // The same pattern in a different list is a different configuration: excluding
+        // "legacy-*" is not including it.
+        var excluded = new DashboardOptions
+        {
+            SnapshotPath = "x",
+            RefreshSeconds = 20,
+            ExcludeRepositories = ["legacy-*"],
+        };
+        var included = new DashboardOptions
+        {
+            SnapshotPath = "x",
+            RefreshSeconds = 20,
+            IncludeRepositories = ["legacy-*"],
+        };
+
+        _ = included.FilterFingerprint().Should().NotBe(excluded.FilterFingerprint());
+    }
 }

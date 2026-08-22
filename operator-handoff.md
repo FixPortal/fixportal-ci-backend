@@ -26,7 +26,10 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 | Setting | Default | What it does |
 |---|---|---|
 | `GitHub:Owner` | `FixPortal` | The GitHub organization whose repositories are enumerated. **The one setting most forks change.** |
-| `GitHub:Token` | *(empty)* | Fine-grained read-only PAT (see **GitHub**). Required — the app fails fast at startup if empty. |
+| `GitHub:Token` | *(empty)* | Fine-grained read-only PAT (see **GitHub**). Required in **PAT mode** only, and the app fails fast at startup if empty; **ignored** when `GitHubApp:AppId` and `GitHubApp:PrivateKeyPem` are both set. |
+| `GitHubApp:AppId` | *(empty)* | Numeric App ID. Set with `PrivateKeyPem` to select App mode (see **GitHub**). |
+| `GitHubApp:PrivateKeyPem` | *(empty)* | PEM contents, not a path. Set with `AppId` to select App mode. |
+| `GitHubApp:InstallationId` | *(empty)* | Optional. Discovered once via `GET /orgs/{owner}/installation` when unset. |
 | `Dashboard:RefreshSeconds` | `20` | Snapshot refresh cadence. Must be > 0. The collector issues conditional GETs (see **GitHub**), so a tight cadence stays well within the rate budget. |
 | `Dashboard:SnapshotPath` | `App_Data/dashboard-snapshot.json` | Last-known-good snapshot, relative to the content root. |
 | `Dashboard:ExcludeArchived` | `true` | Skip archived repositories. |
@@ -137,11 +140,13 @@ Both the frontend and backend can be run locally with
 pulled anonymously; no `docker login` or package-read token is required.
 
 ### Configure Environment and Run
-Once authenticated, configure the collector and start the containers. Both
-`GITHUB_TOKEN` and `GITHUB_OWNER` are **required** — the backend validates them at
-startup and exits immediately if either is missing, logging
-`GitHub:Owner must be configured (e.g. set GitHub__Owner).` The frontend still
-starts, so a dead backend with a live UI means these are unset.
+Once authenticated, configure the collector and start the containers. `GITHUB_OWNER` is
+**always required**; the credential beside it depends on the mode. In PAT mode that is
+`GITHUB_TOKEN`; in App mode it is `GITHUBAPP__APPID` and `GITHUBAPP__PRIVATEKEYPEM`
+instead, and `GITHUB_TOKEN` is ignored. The backend validates at startup and exits
+immediately if what it needs is missing, logging
+`GitHub:Owner must be configured (e.g. set GitHub__Owner).` The frontend still starts, so
+a dead backend with a live UI means the configuration is incomplete.
 
 The simplest route is a `.env` file, which Compose auto-loads from the project
 directory:
