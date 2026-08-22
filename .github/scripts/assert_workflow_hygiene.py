@@ -33,11 +33,18 @@ except ImportError:
     # Same policy as assert_gate_coverage.py: fail legibly rather than installing
     # PyYAML at CI time. This gates merges, so an arbitrary-at-install-time
     # dependency must not enter the gating path.
-    sys.exit(
+    #
+    # sys.exit(2), not sys.exit(<str>): the string form prints to stderr and exits 1,
+    # which is the code this module documents for a real violation. Both fail the step,
+    # but a consumer branching on 2 ("infra problem, retry") versus 1 ("violation, do
+    # not retry") would misclassify a missing interpreter dependency as a bad workflow.
+    print(
         "PyYAML is not available to this runner. Install it in the image rather "
         "than at gate time, or restore '.github/workflows/**' to the review "
-        "policy's high tier so a reviewer sees these diffs."
+        "policy's high tier so a reviewer sees these diffs.",
+        file=sys.stderr,
     )
+    sys.exit(2)
 
 WORKFLOWS = Path(".github/workflows")
 SHA_LEN = 40
