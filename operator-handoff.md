@@ -140,13 +140,20 @@ Both the frontend and backend can be run locally with
 pulled anonymously; no `docker login` or package-read token is required.
 
 ### Configure Environment and Run
-Once authenticated, configure the collector and start the containers. `GITHUB_OWNER` is
-**always required**; the credential beside it depends on the mode. In PAT mode that is
-`GITHUB_TOKEN`; in App mode it is `GITHUBAPP__APPID` and `GITHUBAPP__PRIVATEKEYPEM`
-instead, and `GITHUB_TOKEN` is ignored. The backend validates at startup and exits
-immediately if what it needs is missing, logging
-`GitHub:Owner must be configured (e.g. set GitHub__Owner).` The frontend still starts, so
-a dead backend with a live UI means the configuration is incomplete.
+Once authenticated, configure the collector and start the containers.
+
+`GITHUB_OWNER` is **required under Compose specifically**, even though `GitHub:Owner`
+ships with a default of `FixPortal` in `appsettings.json`. The reason is the indirection:
+`docker-compose.yml` sets `GitHub__Owner: ${GITHUB_OWNER}`, and an unset variable
+substitutes as an **empty string**, which overrides the default with nothing. The backend
+then exits at startup logging
+`GitHub:Owner must be configured (e.g. set GitHub__Owner).` Running the image directly,
+without that env mapping, the default applies and no owner need be supplied.
+
+The credential beside it depends on the mode: `GITHUB_TOKEN` in PAT mode;
+`GITHUBAPP__APPID` and `GITHUBAPP__PRIVATEKEYPEM` in App mode, where `GITHUB_TOKEN` is
+ignored. The frontend starts either way, so a dead backend behind a live UI means the
+configuration is incomplete.
 
 The simplest route is a `.env` file, which Compose auto-loads from the project
 directory:

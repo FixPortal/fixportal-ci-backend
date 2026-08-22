@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -45,7 +46,21 @@ public sealed class DashboardOptions
         // off the board. Prefixing each value with its length removes the ambiguity without
         // constraining what a pattern may contain.
         var canonical = new StringBuilder();
-        void Append(string value) => canonical.Append(value.Length).Append(':').Append(value).Append(';');
+        // Each UTF-16 code unit as fixed-width hex, so the canonical string is pure ASCII
+        // and its UTF-8 encoding is lossless. Appending the raw value was not:
+        // Encoding.UTF8.GetBytes substitutes U+FFFD for an ISOLATED surrogate, and nothing
+        // validates patterns against one, so "\uD800" and "\uD801" hashed identically --
+        // another route into the collision this encoding exists to rule out.
+        void Append(string value)
+        {
+            _ = canonical.Append(value.Length).Append(':');
+            foreach (var unit in value)
+            {
+                _ = canonical.Append(((int)unit).ToString("x4", CultureInfo.InvariantCulture));
+            }
+
+            _ = canonical.Append(';');
+        }
         void AppendAll(IReadOnlyList<string> patterns)
         {
             _ = canonical.Append(patterns.Count).Append('|');
