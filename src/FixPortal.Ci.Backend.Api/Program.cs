@@ -93,6 +93,19 @@ builder
                 .All(pattern => !string.IsNullOrWhiteSpace(pattern)),
         "Dashboard:IncludeRepositories, Dashboard:ExcludeRepositories, Dashboard:IncludeTopics, and Dashboard:ExcludeTopics cannot contain blank patterns."
     )
+    // Padded patterns are rejected for the same reason blank ones are, and the failure is
+    // quieter: FileSystemName.MatchesSimpleExpression treats the space as a literal, so
+    // "api-* " matches nothing and a populated include list empties the whole board while
+    // startup stays green. Same posture as CI_IDE_API_KEY, which already refuses
+    // leading/trailing whitespace.
+    .Validate(
+        o =>
+            o.IncludeRepositories.Concat(o.ExcludeRepositories)
+                .Concat(o.IncludeTopics)
+                .Concat(o.ExcludeTopics)
+                .All(pattern => pattern == pattern.Trim()),
+        "Dashboard:IncludeRepositories, Dashboard:ExcludeRepositories, Dashboard:IncludeTopics, and Dashboard:ExcludeTopics cannot contain patterns with leading or trailing whitespace."
+    )
     .ValidateOnStart();
 builder
     .Services.AddOptions<AdminOptions>()
@@ -175,7 +188,11 @@ builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
     var path = Path.IsPathRooted(dashboardOptions.SnapshotPath)
         ? dashboardOptions.SnapshotPath
         : Path.Combine(environment.ContentRootPath, dashboardOptions.SnapshotPath);
-    return new FileDashboardSnapshotStore(path);
+    return new FileDashboardSnapshotStore(
+        path,
+        dashboardOptions.FilterFingerprint(),
+        sp.GetRequiredService<ILogger<FileDashboardSnapshotStore>>()
+    );
 });
 
 builder.Services.AddSingleton<GitHubInventoryCache>();

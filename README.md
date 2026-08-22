@@ -139,6 +139,40 @@ sets them. The one most forks change is
 reusable/CodeQL filters, metrics, merged-PR tracking, and job lanes — is
 documented in **[operator-handoff.md](operator-handoff.md#configuration-model)**.
 
+### Authentication (`GitHub`, `GitHubApp`)
+
+The dashboard authenticates **outbound** to GitHub in one of two modes. There is no
+inbound GitHub auth: the App subscribes to no webhook events and is polling credentials
+only.
+
+| Mode | Selected when | Credential |
+|---|---|---|
+| GitHub App *(recommended)* | `GitHubApp:AppId` **and** `GitHubApp:PrivateKeyPem` are both non-blank | Installation token, minted per hour |
+| Personal access token | either App setting is missing | `GitHub:Token` |
+
+The App wins whenever both of its settings are present, and `GitHub:Token` is then
+ignored entirely.
+
+| Setting | Required | Notes |
+|---|---|---|
+| `GitHubApp__AppId` | for App mode | Numeric App ID |
+| `GitHubApp__PrivateKeyPem` | for App mode | PEM contents, not a path |
+| `GitHubApp__InstallationId` | no | Discovered once via `GET /orgs/{owner}/installation` when unset, so a reinstall needs no configuration change |
+| `GitHub__Token` | for PAT mode | Ignored in App mode |
+
+**A fine-grained PAT degrades every review pill, not only the check-run ones.** A PAT
+cannot read check runs at all: `statusCheckRollup` answers *"Resource not accessible by
+personal access token"* per node, and the PAT UI offers no "Checks" permission to grant.
+That field shares one GraphQL document with `reviews`, `reviewThreads` and `comments`
+(`Integrations/GitHub/GitHubOrgClient.cs`), and the client treats any `errors` array as a
+failed call — so the whole repository's signals fall back to last-known-good, including
+the Secret Scanning pill, which is fetched over REST. Treat PAT mode as degraded, not as
+missing one source.
+
+The second reason is budget: the GraphQL points allowance is metered **per user**, so a
+PAT-authenticated dashboard competes with whoever is running `gh` at a terminal. An
+installation gets its own. Both reasons are recorded in full on `GitHubAppOptions`.
+
 ### Repository selection (`Dashboard`)
 
 Repository filters are optional and empty by default. Name and topic includes are
@@ -258,8 +292,17 @@ Each reviewer resolves to one of **four** pill states, not three:
 | `pending` | Required here, but there is no evidence it has run yet. **Not a pass** — a paused or rate-limited reviewer lands here, indistinguishable from one that simply has not started. |
 | `disabled` | Not required on this pull request, e.g. `RequiredLabel` is set and the PR lacks that label. |
 
-A `CodeScanning` reviewer needs the **Code scanning alerts: read** PAT
-permission — see [operator-handoff.md](operator-handoff.md#github).
+Reviewer sources need read access to what they read. In **App mode** that is
+`security_events` for a `CodeScanning` reviewer and the separate
+`secret_scanning_alerts` for a `SecretScanning` one; in **PAT mode** it is the
+**Code scanning alerts: read** permission, with the degradation described under
+[Authentication](#authentication-github-githubapp) applying to every pill. See
+[operator-handoff.md](operator-handoff.md#github).
+
+> `security_events` does **not** cover secret scanning. Without
+> `secret_scanning_alerts`, GitHub answers that route **404, not 403**, so the count
+> reads as "no such repository" rather than "not permitted", the alert count comes back
+> null, and the pill sits at `pending` with nothing in the logs.
 
 ## Deployment
 
@@ -304,8 +347,10 @@ dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-bu
 | Backend container exits at startup with `OptionsValidationException: GitHub:Owner must be configured` (frontend stays up) | `GITHUB_TOKEN` / `GITHUB_OWNER` not set — no `.env` in the project directory and nothing exported | `cp .env.example .env` and fill both in, then `docker compose up -d` |
 | Snapshot returns stale data after a workflow run | Refresh worker polls on a 20 s cadence; run completed between polls | Wait up to 20 s, or restart to force an immediate poll |
 | Snapshot endpoint returns `204 No Content` | No snapshot yet — the first poll has not completed, or every poll has failed | Allow ~5 s after startup; if it persists, check the container logs for `GitHubAuthException` |
-| `MetricsEnrichmentWorker` logs `git clone` errors | PAT lacks **Contents** read permission | Re-issue PAT with Contents (read) and update `GitHub__Token` |
-| PRs not appearing | PAT lacks **Pull requests** read permission | Re-issue PAT with Pull requests (read) and update `GitHub__Token` |
+| `MetricsEnrichmentWorker` logs `git clone` errors | Credential lacks **Contents** read | App mode: grant `contents` and accept the request on the installation. PAT mode: re-issue with Contents (read) and update `GitHub__Token` — which is **ignored** in App mode, so check which mode is live first |
+| PRs not appearing | Credential lacks **Pull requests** read | App mode: grant `pull_requests`. PAT mode: re-issue with Pull requests (read) and update `GitHub__Token` |
+| Secret Scanning pill stuck at `pending`, nothing in the logs | The installation has `security_events` but not `secret_scanning_alerts`. GitHub answers that route **404, not 403**, so the count returns null and the "unreadable" warning never fires | Grant `secret_scanning_alerts` on the App, then **accept the request on the installation** — widening the App alone does nothing. `gh api apps/<slug> -q .permissions` and `gh api orgs/<owner>/installations` read different things; a moved installation `updated_at` is the proof it took. Installation tokens are cached up to an hour, so restart the active revision to pick it up now |
+| Review pills degraded or absent across every repository | Running in PAT mode: a PAT cannot read check runs, and that failure takes the whole GraphQL document with it | Move to App mode — see [Authentication](#authentication-github-githubapp) |
 | CORS errors in the browser | Board UI origin not in `Cors:AllowedOrigins` | Add origin via `Cors__AllowedOrigins__0` (or the equivalent `Cors:AllowedOrigins` configuration key) |
 | `401 Unauthorized` from GitHub API | Token expired, revoked, or the value is not a GitHub PAT (fine-grained tokens start `github_pat_`, classic ones `ghp_`) | Generate a new fine-grained PAT and update the secret or env var |
 

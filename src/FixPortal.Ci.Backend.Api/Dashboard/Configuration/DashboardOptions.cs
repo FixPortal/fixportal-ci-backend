@@ -1,3 +1,6 @@
+using System.Security.Cryptography;
+using System.Text;
+
 namespace FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 
 // Properties are populated by Microsoft.Extensions.Configuration binding.
@@ -20,6 +23,37 @@ public sealed class DashboardOptions
     public string MetricsWorkDirectory { get; init; } = ""; // "" -> temp subdir
     public bool MergedPrEnabled { get; init; } = true;
     public int MergedPrRefreshSeconds { get; init; } = 300;
+
+    /// <summary>
+    /// Identity of the repository-filter configuration, used to decide whether a persisted
+    /// snapshot may be restored. A snapshot carries whatever repository set was live when it
+    /// was written, and restore republishes it ahead of the first refresh — including to the
+    /// anonymous public projection, and with no time bound while GitHub is unreachable.
+    /// <para>Re-applying the filters at restore instead is not possible:
+    /// <c>RepositorySnapshot</c> stores no topics, so the topic gates would have nothing to
+    /// evaluate against.</para>
+    /// <para>Lists are sorted before hashing — reordering an include list is not a semantic
+    /// change and must not cost the trend history a discard.</para>
+    /// </summary>
+    public string FilterFingerprint()
+    {
+        const char unitSeparator = '';
+        const char recordSeparator = '';
+
+        string Canonical(IReadOnlyList<string> patterns) =>
+            string.Join(unitSeparator, patterns.Order(StringComparer.Ordinal));
+
+        var canonical = string.Join(
+            recordSeparator,
+            ExcludeArchived ? "archived:excluded" : "archived:included",
+            Canonical(IncludeRepositories),
+            Canonical(ExcludeRepositories),
+            Canonical(IncludeTopics),
+            Canonical(ExcludeTopics)
+        );
+
+        return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
+    }
 
     // Compiled fallback lanes, used when no Dashboard:JobLanes are configured. These
     // are deliberately NOT the default of the bound JobLanes property below: the

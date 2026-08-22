@@ -16,6 +16,11 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 // RemoveAll<IHostedService>() and seed DashboardSnapshotState directly instead).
 public class SnapshotRestoreServiceTests
 {
+    // Constant fingerprint: these cases are about restore behaviour, not filter identity, so
+    // save and load must agree on it. FileDashboardSnapshotStoreTests owns the mismatch case.
+    private static FileDashboardSnapshotStore NewStore(string path) =>
+        new(path, "same-filters", NullLogger<FileDashboardSnapshotStore>.Instance);
+
     private static DashboardSnapshot SnapshotWithPrivateRepo() =>
         new(
             Instant.FromUtc(2026, 6, 1, 0, 0),
@@ -78,7 +83,7 @@ public class SnapshotRestoreServiceTests
         // leak could ride along a file across a code change, so this must be computed
         // fresh from the persisted full snapshot, not read verbatim from disk.
         var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
-        var store = new FileDashboardSnapshotStore(path);
+        var store = NewStore(path);
         var snapshot = SnapshotWithPrivateRepo();
         await store.SaveAsync(snapshot, TestContext.Current.CancellationToken);
         try
@@ -104,7 +109,7 @@ public class SnapshotRestoreServiceTests
     public async Task StartingAsync_should_strip_head_scoped_review_state_from_a_persisted_snapshot()
     {
         var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
-        var store = new FileDashboardSnapshotStore(path);
+        var store = NewStore(path);
         await store.SaveAsync(SnapshotWithHeadScopedReviewState(), TestContext.Current.CancellationToken);
         try
         {

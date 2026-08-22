@@ -6,8 +6,24 @@ using NodaTime.Serialization.SystemTextJson;
 
 namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 
-public sealed class FileDashboardSnapshotStore(string snapshotPath) : IDashboardSnapshotStore
+public sealed class FileDashboardSnapshotStore(
+    string snapshotPath,
+    string filterFingerprint,
+    ILogger<FileDashboardSnapshotStore> logger
+) : IDashboardSnapshotStore
 {
+    /// <summary>
+    /// On-disk envelope. The fingerprint is persistence-only state — it decides whether the
+    /// saved repository set is still the one the current filters would produce — so it lives
+    /// here rather than on <see cref="DashboardSnapshot"/>, which is also the API payload.
+    /// <para>A file written before this envelope existed deserializes with a null
+    /// <see cref="Snapshot"/> and is discarded, costing one empty board and one refresh of
+    /// trend history. That is the same self-healing path the hour-alignment discard below
+    /// already takes, and the alternative — restoring a snapshot whose filter provenance
+    /// cannot be established — is what this envelope exists to prevent.</para>
+    /// </summary>
+    private sealed record PersistedSnapshot(string? FilterFingerprint, DashboardSnapshot? Snapshot);
+
     // The snapshot carries NodaTime Instants, which default System.Text.Json
     // cannot round-trip. Configure the serializer for NodaTime at this I/O
     // boundary so persisted snapshots reload faithfully.
@@ -34,11 +50,30 @@ public sealed class FileDashboardSnapshotStore(string snapshotPath) : IDashboard
 
         await using (stream)
         {
-            var snapshot = await JsonSerializer.DeserializeAsync<DashboardSnapshot>(
+            var persisted = await JsonSerializer.DeserializeAsync<PersistedSnapshot>(
                 stream,
                 SerializerOptions,
                 cancellationToken
             );
+            var snapshot = persisted?.Snapshot;
+
+            // The saved repository set was filtered by whatever Dashboard:Include/Exclude
+            // configuration was live when it was written. Restoring it under different
+            // filters republishes the OLD, wider set — to the anonymous public projection
+            // as well — until a refresh succeeds, which never happens while GitHub is
+            // unreachable. Fail closed: a snapshot whose provenance cannot be established
+            // is discarded, not served.
+            if (
+                snapshot is not null
+                && !string.Equals(persisted?.FilterFingerprint, filterFingerprint, StringComparison.Ordinal)
+            )
+            {
+                logger.LogInformation(
+                    "Discarding the persisted snapshot: it was written under different repository filters. "
+                        + "Starting with an empty board until the first refresh."
+                );
+                return null;
+            }
 
             // Trend buckets have been clock-hour-anchored since the CI-trend rewrite.
             // A snapshot from before that change carries buckets anchored to an
@@ -74,7 +109,12 @@ public sealed class FileDashboardSnapshotStore(string snapshotPath) : IDashboard
         {
             await using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
             {
-                await JsonSerializer.SerializeAsync(stream, snapshot, SerializerOptions, cancellationToken);
+                await JsonSerializer.SerializeAsync(
+                    stream,
+                    new PersistedSnapshot(filterFingerprint, snapshot),
+                    SerializerOptions,
+                    cancellationToken
+                );
                 await stream.FlushAsync(cancellationToken);
                 // Synchronous by design: FileStream has no async overload that
                 // forces an fsync (flushToDisk). This is a cold persistence path,

@@ -459,7 +459,11 @@ public class DashboardRefreshServiceRefreshAsyncTests
         var sut = new DashboardRefreshService(
             client,
             inventory,
-            new FileDashboardSnapshotStore(Path.Join("TestResults", "unused-cib-4.json")),
+            new FileDashboardSnapshotStore(
+                Path.Join("TestResults", "unused-cib-4.json"),
+                "test-filters",
+                NullLogger<FileDashboardSnapshotStore>.Instance
+            ),
             state,
             new PerRepoCache<RepoMetrics>(),
             new PerRepoCache<IReadOnlyList<JobSignal>>(),

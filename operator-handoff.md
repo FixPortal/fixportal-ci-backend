@@ -53,7 +53,43 @@ repos and workflows therefore appear without a deployment change.
 
 ## GitHub
 
-The collector needs a **fine-grained, read-only** Personal Access Token.
+The collector authenticates outbound in one of two modes. **Production runs as a
+GitHub App**; the PAT path remains supported and is the simpler start for a fork or a
+local run.
+
+### Option A - GitHub App (what production uses)
+
+1. Create an organization-owned App. It needs **no webhook events**: these are polling
+   credentials, not an event receiver.
+2. Grant read-only `actions`, `checks`, `contents`, `metadata`, `pull_requests` and
+   `statuses`, plus `security_events` for a `CodeScanning` reviewer and
+   `secret_scanning_alerts` for a `SecretScanning` one. Those last two are separate
+   grants: `security_events` covers code scanning only, and a missing
+   `secret_scanning_alerts` makes GitHub answer that route **404, not 403**, so the
+   count reads as absent rather than forbidden and the pill sits at `pending` with
+   nothing in the logs.
+3. Install it on the organization, then set `GitHubApp__AppId` and
+   `GitHubApp__PrivateKeyPem` (PEM contents, not a path). `GitHubApp__InstallationId`
+   is optional - discovered once when unset, so a reinstall needs no configuration
+   change.
+
+Two things that catch people out. Widening the **App** does not widen an existing
+**installation**: the organization has to accept the request, and a moved installation
+`updated_at` is the proof it took (`gh api apps/<slug> -q .permissions` and
+`gh api orgs/<owner>/installations` read different things). And installation tokens are
+cached for up to an hour, so restart the active revision to make a new grant effective
+now.
+
+Prefer this mode. A fine-grained PAT cannot read check runs at all, and because that
+field shares one GraphQL document with the rest of the review facts, the failure takes
+**every** review pill down for that repository - not only the check-run-derived ones.
+The GraphQL points budget is also metered per user, so a PAT-authenticated dashboard
+competes with whoever is running `gh` at a terminal; an installation gets its own.
+
+### Option B - fine-grained personal access token
+
+Used whenever either App setting is absent. In App mode `GitHub:Token` is ignored
+entirely, so check which mode is live before re-issuing a token to fix a symptom.
 
 1. Create it: GitHub → your avatar → **Settings** → **Developer settings** →
    **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.

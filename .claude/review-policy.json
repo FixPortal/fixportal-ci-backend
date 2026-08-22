@@ -47,6 +47,8 @@
   "high": [
     ".claude/review-policy.json",
     ".coderabbit.yaml",
+    ".github/workflows/review-policy-guard.yml",
+    ".github/scripts/assert_workflow_hygiene.py",
     "deploy/**",
     "**/*.bicep",
     ".config/dotnet-tools.json",

@@ -75,7 +75,7 @@ public sealed class MergeStateEnrichmentWorker(
                 return new Dictionary<int, PrMergeState>();
             }
 
-            return await Client.GetPullRequestMergeStatesAsync(
+            var states = await Client.GetPullRequestMergeStatesAsync(
                 repo.Name,
                 open.Keys.ToList(),
                 ct,
@@ -86,6 +86,22 @@ public sealed class MergeStateEnrichmentWorker(
                         clock.GetCurrentInstant()
                     )
             );
+
+            // Say so when the reserve stops a sweep. The sibling review-signal worker counts
+            // and reports its budget skips precisely because silence reads as health: if a
+            // breach outlasts the merge cache TTL every ReadyToMerge decays, the board's
+            // ready filter empties, and nothing distinguishes "budget-guarded" from "broken".
+            if (states is null)
+            {
+                logger.LogWarning(
+                    "Merge-state sweep for {Repo} stopped below the GraphQL reserve floor of {ReservePoints} points; "
+                        + "keeping last-known-good. Ready-to-merge verdicts will decay if this persists.",
+                    repo.Name,
+                    reviewOptions.Value.ReserveBudgetPoints
+                );
+            }
+
+            return states;
         }
         // Same soft-fail set as the review-signal worker: degrade to last-known-good rather
         // than letting a transient transport error count as a sweep failure and drive the
