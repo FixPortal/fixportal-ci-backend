@@ -421,6 +421,29 @@ public class FileDashboardSnapshotStoreTests
     }
 
     [Fact]
+    public void FilterFingerprint_should_not_collide_on_isolated_surrogates()
+    {
+        // Encoding.UTF8.GetBytes substitutes U+FFFD for an isolated surrogate, so every
+        // lone-surrogate pattern hashed to the same bytes. Nothing in the validators
+        // rejects one, and the consequence is the same as any other collision: a snapshot
+        // written under different filters passes the provenance check.
+        var high = new DashboardOptions
+        {
+            SnapshotPath = "x",
+            RefreshSeconds = 20,
+            ExcludeRepositories = ["\uD800"],
+        };
+        var other = new DashboardOptions
+        {
+            SnapshotPath = "x",
+            RefreshSeconds = 20,
+            ExcludeRepositories = ["\uD801"],
+        };
+
+        _ = other.FilterFingerprint().Should().NotBe(high.FilterFingerprint());
+    }
+
+    [Fact]
     public void FilterFingerprint_should_not_collide_across_different_filter_kinds()
     {
         // The same pattern in a different list is a different configuration: excluding
