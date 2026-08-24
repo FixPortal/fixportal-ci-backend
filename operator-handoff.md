@@ -3,7 +3,7 @@
 This backend polls the **GitHub Actions API for selected repositories owned by
 a GitHub organization**, normalizes the results into a JSON snapshot, and serves
 the API. With no repository filters configured, every non-archived repository is
-selected. It is read-only with deep links out to the underlying runs.
+selected. Polling is read-only; the admin-gated merge endpoint is its only GitHub mutation.
 
 The dashboard is two separately published images: this backend API and the
 `fixportal-ci-frontend` board UI. Docker Compose runs both; the frontend's nginx
@@ -26,7 +26,7 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 | Setting | Default | What it does |
 |---|---|---|
 | `GitHub:Owner` | `FixPortal` | The GitHub organization whose repositories are enumerated. **The one setting most forks change.** |
-| `GitHub:Token` | *(empty)* | Fine-grained read-only PAT (see **GitHub**). Required in **PAT mode** only, and the app fails fast at startup if empty; **ignored** when `GitHubApp:AppId` and `GitHubApp:PrivateKeyPem` are both set. |
+| `GitHub:Token` | *(empty)* | Fine-grained PAT (see **GitHub**). `Contents: Read and write` is required for the merge endpoint; read-only permissions are enough for polling. Required in **PAT mode** only, and the app fails fast at startup if empty; **ignored** when `GitHubApp:AppId` and `GitHubApp:PrivateKeyPem` are both set. |
 | `GitHubApp:AppId` | *(empty)* | Numeric App ID. Set with `PrivateKeyPem` to select App mode (see **GitHub**). |
 | `GitHubApp:PrivateKeyPem` | *(empty)* | PEM contents, not a path. Set with `AppId` to select App mode. |
 | `GitHubApp:InstallationId` | *(empty)* | Optional. Discovered once via `GET /orgs/{owner}/installation` when unset. |
@@ -45,8 +45,8 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 | `Dashboard:MergedPrRefreshSeconds` | `150` | Merged-PR cadence (2.5 min). |
 | `Dashboard:JobLanes` | deploys, packages | Named lanes that surface matching workflow **jobs** (by name pattern) as their own status chips. |
 | `ReviewSignals:Reviewers` | *(empty)* | Per-reviewer status pills (CodeRabbit, Gitar, CodeQL, …) on each open PR. Empty by default — the feature is off and issues no GitHub requests until reviewers are configured. Full option reference: **[README.md § Review signals](README.md#review-signals-reviewsignals)**. |
-| `Cors:AllowedOrigins` | *(empty)* | Origins allowed to read the anonymous public snapshot; configure as `Cors__AllowedOrigins__0`, etc. |
-| `Admin:AdminKey` / `IdeIntegration:ApiKey` | *(empty)* | Shared secrets for the private admin snapshot and IDE v1 endpoints. Keep them out of source. |
+| `Cors:AllowedOrigins` | *(empty)* | Origins allowed to read the anonymous public snapshot and call the admin merge endpoint; configure as `Cors__AllowedOrigins__0`, etc. |
+| `Admin:AdminKey` / `IdeIntegration:ApiKey` | *(empty)* | Shared secrets for the private admin snapshot and merge endpoint, and for IDE v1 endpoints. Keep them out of source. |
 
 There is **no hardcoded repository list** — the board auto-discovers repos under
 `GitHub:Owner`, then applies the optional filters above. The repository-name and
@@ -64,8 +64,9 @@ local run.
 
 1. Create an organization-owned App. It needs **no webhook events**: these are polling
    credentials, not an event receiver.
-2. Grant read-only `actions`, `checks`, `contents`, `metadata`, `pull_requests` and
-   `statuses`, plus `security_events` for a `CodeScanning` reviewer and
+2. Grant read-only `actions`, `checks`, `metadata`, `pull_requests` and `statuses`,
+   plus **read and write `contents`** for the merge endpoint. Add `security_events`
+   for a `CodeScanning` reviewer and
    `secret_scanning_alerts` for a `SecretScanning` one. Those last two are separate
    grants: `security_events` covers code scanning only, and a missing
    `secret_scanning_alerts` makes GitHub answer that route **404, not 403**, so the
@@ -82,6 +83,12 @@ Two things that catch people out. Widening the **App** does not widen an existin
 `gh api orgs/<owner>/installations` read different things). And installation tokens are
 cached for up to an hour, so restart the active revision to make a new grant effective
 now.
+
+To enable merging on an existing installation, change **Contents** to **Read and
+write** under the App's repository permissions, save, and approve the requested
+permission on the organization installation. Verify the installation itself now
+reports `contents: write`, then restart the active backend revision so its cached
+installation token is replaced immediately.
 
 Prefer this mode. A fine-grained PAT cannot read check runs at all, and because that
 field shares one GraphQL document with the rest of the review facts, the failure takes
@@ -101,28 +108,34 @@ entirely, so check which mode is live before re-issuing a token to fix a symptom
      `GitHub:Owner` value).
    - **Repository access** → **All repositories** (so newly created matching repos
      are picked up automatically), or **Only select repositories** to limit the board.
-   - **Permissions** → **Repository permissions**, all *Read-only*:
+   - **Permissions** → **Repository permissions**:
      - **Actions** — workflow-run status (the core signal). Setting this
        auto-adds **Metadata: Read-only**, a mandatory dependency — leave it.
      - **Pull requests** — open PRs and the most-recently-merged PR.
-     - **Contents** — `git clone` for the Lizard code-metrics worker.
+     - **Contents — Read and write** — rebase merging through
+       `POST /api/dashboard/merge`; read access also covers `git clone` for the
+       Lizard code-metrics worker.
      - **Code scanning alerts** — open CodeQL alert counts, needed only if
        `ReviewSignals` configures a `CodeScanning` reviewer. Without it that
        reviewer reports "not yet reviewed" (`pending`) on every pull request;
        no other review signal is affected.
-   - Leave every other permission at **No access**. A fine-grained PAT has no
-     single "read-only" switch; it is read-only purely because every granted
-     permission is *Read*. (A classic PAT's nearest scope, `repo`, grants write
-     too, so it cannot be made genuinely read-only at this granularity.)
+   - Leave every other permission at **No access**. `Contents` is the only write
+     permission; a classic PAT's nearest scope, `repo`, is broader and should not
+     be used for this service.
 3. Generate and copy the token (shown once).
 
 > **Permission ↔ data mapping.** With **Actions** only, private repos show
-> workflow signals but no PRs and no metrics. Add **Pull requests** for PR data
-> and **Contents** for metrics. A missing permission degrades gracefully (the
-> affected section is empty) rather than blanking the repo.
+> workflow signals but no PRs and no metrics. Add **Pull requests: Read** for PR
+> data and **Contents: Read** for metrics; merging needs **Contents: Read and
+> write**. A missing read permission degrades the affected snapshot section
+> rather than blanking the repo.
 
 The dashboard never exposes the token to the browser; all GitHub calls happen
 server-side in the background collector.
+
+`POST /api/dashboard/merge` is the only write path. It requires the configured
+`X-Admin-Key`, accepts one pull request at a time, validates the repository
+against the current dashboard snapshot, and always requests a rebase merge.
 
 > **Rate limits & conditional requests.** A fine-grained PAT allows 5000 REST
 > requests/hour. The collector caches an ETag per URL and re-validates with
@@ -225,7 +238,7 @@ domain is a plain **Variable**. Set them once per deployment:
 | Secret | Example | What |
 |---|---|---|
 | `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | *(GUIDs)* | OIDC login for the deploy identity (set by the bootstrap script). |
-| `DASHBOARD_GH_TOKEN` | *(PAT)* | Read-only PAT, written into the container-app secret on each deploy (set by the bootstrap script). |
+| `DASHBOARD_GH_TOKEN` | *(PAT)* | Fine-grained PAT fallback, written into the container-app secret on each deploy (set by the bootstrap script). Use `Contents: Read and write` when the merge endpoint is enabled. |
 | `AZURE_RESOURCE_GROUP` | `rg-myapp-prod` | Resource group the container app is deployed into. |
 | `ACR_NAME` | `myregistry` | Registry that receives the image imported from GHCR. |
 | `ACR_LOGIN_SERVER` | `myregistry.azurecr.io` | Login server the image is pulled from. |
@@ -255,7 +268,7 @@ domain is a plain **Variable**. Set them once per deployment:
 > first run, complete the steps below before merging.
 
 1. Authenticate locally: `az login` and `gh auth login`.
-2. Create the fine-grained read-only PAT (see **GitHub**).
+2. Create the fine-grained PAT (see **GitHub**).
 3. From the repo root, run the bootstrap once (PowerShell 7). It creates a
    resource group, an Entra app with a GitHub OIDC federated credential, grants
    it Contributor on that group, and sets the four OIDC/token repository
@@ -291,15 +304,15 @@ Actions secret, redeploy".
 
 | Actions secret | Container-app secret | Env var | What it is |
 |---|---|---|---|
-| `DASHBOARD_GH_TOKEN` | `github-token` | `GitHub__Token` | Read-only PAT the collector polls GitHub with. |
-| `CI_ADMIN_KEY` | `admin-key` | `Admin__AdminKey` | Shared key guarding `/api/dashboard/snapshot/admin`. Any client that calls the admin snapshot endpoint **must present the same value** — rotate both together or the admin snapshot starts returning 401. |
+| `DASHBOARD_GH_TOKEN` | `github-token` | `GitHub__Token` | Fine-grained PAT fallback; `Contents: Read and write` is required for merging. Ignored in production GitHub App mode. |
+| `CI_ADMIN_KEY` | `admin-key` | `Admin__AdminKey` | Shared key guarding `/api/dashboard/snapshot/admin` and `/api/dashboard/merge`. Any client that calls either endpoint **must present the same value** — rotate both together or admin calls start returning 401. |
 
 To rotate either:
 
-1. Generate the new value (a new read-only PAT, or a new random admin key).
+1. Generate the new value (a new fine-grained PAT, or a new random admin key).
 2. `gh secret set DASHBOARD_GH_TOKEN --body '<new-PAT>'` (or `CI_ADMIN_KEY`).
-   For the admin key, set the **same** value on every client that calls the
-   admin snapshot endpoint in the same change.
+   For the admin key, set the **same** value on every client that calls either
+   admin endpoint in the same change.
 3. Re-run the CI workflow on `main`. The deploy rewrites the container-app secret.
 
 > ACA caches secrets on the running revision: if you rotate an Actions secret

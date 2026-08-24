@@ -26,11 +26,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     private HttpClient CreateClient(DashboardSnapshot? seed, string? adminKey) =>
         CreateClient(seed, adminKey, githubHandler: null);
 
-    private HttpClient CreateClient(
-        DashboardSnapshot? seed,
-        string? adminKey,
-        HttpMessageHandler? githubHandler
-    ) =>
+    private HttpClient CreateClient(DashboardSnapshot? seed, string? adminKey, HttpMessageHandler? githubHandler) =>
         factory
             .WithWebHostBuilder(builder =>
             {
@@ -55,10 +51,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                     if (githubHandler is not null)
                     {
                         _ = services.RemoveAll<GitHubOrgClient>();
-                        var http = new HttpClient(githubHandler)
-                        {
-                            BaseAddress = new Uri("https://api.github.com/"),
-                        };
+                        var http = new HttpClient(githubHandler) { BaseAddress = new Uri("https://api.github.com/") };
                         _ = services.AddSingleton(
                             new GitHubOrgClient(
                                 http,
