@@ -1,12 +1,17 @@
 using System.Net;
+using System.Net.Http.Json;
+using System.Text;
 using System.Text.Json;
 using AwesomeAssertions;
+using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
+using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using NodaTime;
 using NodaTime.Text;
 using Xunit;
@@ -19,6 +24,13 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     private HttpClient CreateClient(DashboardSnapshot? seed) => CreateClient(seed, adminKey: null);
 
     private HttpClient CreateClient(DashboardSnapshot? seed, string? adminKey) =>
+        CreateClient(seed, adminKey, githubHandler: null);
+
+    private HttpClient CreateClient(
+        DashboardSnapshot? seed,
+        string? adminKey,
+        HttpMessageHandler? githubHandler
+    ) =>
         factory
             .WithWebHostBuilder(builder =>
             {
@@ -40,9 +52,51 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                         state.Update(seed, DashboardSnapshotState.ComputePublicSnapshot(seed, seed.PublicCiTrend));
                     }
                     _ = services.AddSingleton(state);
+                    if (githubHandler is not null)
+                    {
+                        _ = services.RemoveAll<GitHubOrgClient>();
+                        var http = new HttpClient(githubHandler)
+                        {
+                            BaseAddress = new Uri("https://api.github.com/"),
+                        };
+                        _ = services.AddSingleton(
+                            new GitHubOrgClient(
+                                http,
+                                Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "test-token" }),
+                                Options.Create(
+                                    new DashboardOptions { SnapshotPath = "snapshot.json", RefreshSeconds = 60 }
+                                ),
+                                new GitHubETagStore(),
+                                state
+                            )
+                        );
+                    }
                 });
             })
             .CreateClient();
+
+    private sealed class MergeHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+        public HttpMethod? Method { get; private set; }
+        public string? Path { get; private set; }
+        public string? Body { get; private set; }
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            RequestCount++;
+            Method = request.Method;
+            Path = request.RequestUri?.AbsolutePath;
+            Body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+            return new HttpResponseMessage(statusCode)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            };
+        }
+    }
 
     [Fact]
     public async Task Get_snapshot_should_return_latest_dashboard_snapshot()
@@ -484,6 +538,158 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             .ToList();
         _ = names.Should().Contain("public-repo");
         _ = names.Should().Contain("private-repo");
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("definitely-the-wrong-key")]
+    public async Task Merge_should_return_401_when_the_admin_key_is_missing_or_wrong(string? adminKey)
+    {
+        var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = CreateMergeRequest("public-repo", 42, adminKey);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.Unauthorized);
+        _ = (await ReadErrorAsync(response)).Should().NotBeNullOrWhiteSpace();
+        _ = handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Merge_should_reject_an_unknown_repository_without_calling_GitHub()
+    {
+        var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = CreateMergeRequest("unknown-repo", 42);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.NotFound);
+        _ = (await ReadErrorAsync(response)).Should().NotBeNullOrWhiteSpace();
+        _ = handler.RequestCount.Should().Be(0);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task Merge_should_reject_a_non_positive_pull_request_number(int pullNumber)
+    {
+        var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = CreateMergeRequest("public-repo", pullNumber);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        _ = (await ReadErrorAsync(response)).Should().NotBeNullOrWhiteSpace();
+        _ = handler.RequestCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task Merge_should_rebase_the_pull_request_and_return_its_sha()
+    {
+        var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = CreateMergeRequest("public-repo", 42);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var responseBody = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        _ = responseBody.RootElement.GetProperty("merged").GetBoolean().Should().BeTrue();
+        _ = responseBody.RootElement.GetProperty("sha").GetString().Should().Be("abc123");
+        _ = handler.Method.Should().Be(HttpMethod.Put);
+        _ = handler.Path.Should().Be("/repos/FixPortal/public-repo/pulls/42/merge");
+        using var githubBody = JsonDocument.Parse(handler.Body!);
+        _ = githubBody.RootElement.GetProperty("merge_method").GetString().Should().Be("rebase");
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.MethodNotAllowed)]
+    [InlineData(HttpStatusCode.Conflict)]
+    public async Task Merge_should_map_a_non_mergeable_GitHub_response_to_409(HttpStatusCode githubStatus)
+    {
+        var handler = new MergeHandler(githubStatus, """{"message":"Pull request is not mergeable"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = CreateMergeRequest("public-repo", 42);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        _ = (await ReadErrorAsync(response)).Should().Be("Pull request is not mergeable");
+    }
+
+    [Fact]
+    public async Task Merge_should_still_map_a_405_without_a_json_body_to_409()
+    {
+        var handler = new MergeHandler(HttpStatusCode.MethodNotAllowed, "");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = CreateMergeRequest("public-repo", 42);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        _ = (await ReadErrorAsync(response)).Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task Merge_should_map_other_GitHub_failures_to_502()
+    {
+        var handler = new MergeHandler(HttpStatusCode.InternalServerError, """{"message":"GitHub is unavailable"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = CreateMergeRequest("public-repo", 42);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        _ = (await ReadErrorAsync(response)).Should().Be("GitHub is unavailable");
+    }
+
+    [Fact]
+    public async Task Merge_should_allow_cross_origin_post_from_the_configured_origin()
+    {
+        var client = factory
+            .WithWebHostBuilder(builder =>
+            {
+                _ = builder.UseSetting("GitHub:Token", "test-token");
+                _ = builder.UseSetting("Cors:AllowedOrigins:0", "https://app.fixportal.org");
+                _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
+            })
+            .CreateClient();
+        using var request = new HttpRequestMessage(HttpMethod.Options, "/api/dashboard/merge");
+        request.Headers.Add("Origin", "https://app.fixportal.org");
+        request.Headers.Add("Access-Control-Request-Method", "POST");
+        request.Headers.Add("Access-Control-Request-Headers", "content-type,x-admin-key");
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.NoContent);
+        _ = response.Headers.GetValues("Access-Control-Allow-Origin").Should().Contain("https://app.fixportal.org");
+        _ = string.Join(',', response.Headers.GetValues("Access-Control-Allow-Methods")).Should().Contain("POST");
+    }
+
+    private static HttpRequestMessage CreateMergeRequest(string repo, int pullNumber, string? adminKey = AdminKey)
+    {
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/dashboard/merge")
+        {
+            Content = JsonContent.Create(new { repo, pullNumber }),
+        };
+        if (adminKey is not null)
+        {
+            request.Headers.Add("X-Admin-Key", adminKey);
+        }
+        return request;
+    }
+
+    private static async Task<string?> ReadErrorAsync(HttpResponseMessage response)
+    {
+        using var body = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        return body.RootElement.GetProperty("error").GetString();
     }
 
     // CB-C2: /api/health is unauthenticated, so it must never echo state.LastAuthError

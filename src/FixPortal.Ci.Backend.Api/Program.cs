@@ -141,7 +141,7 @@ MergeStateOptions.AddMergeStateOptions(builder.Services, builder.Configuration);
 var corsOrigins = builder.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
 builder.Services.AddCors(options =>
 {
-    options.AddPolicy("FixPortalSpa", policy => policy.WithOrigins(corsOrigins).WithMethods("GET").AllowAnyHeader());
+    options.AddPolicy("FixPortalSpa", policy => policy.WithOrigins(corsOrigins).WithMethods("GET", "POST").AllowAnyHeader());
 });
 
 // Singleton so the per-URL ETag cache outlives the transient typed-client instances

@@ -115,6 +115,10 @@ public sealed record CodeScanningAlertDto(CodeScanningInstanceDto? MostRecentIns
 // Only the count matters, but a payload shape is still needed to deserialize the list.
 public sealed record SecretScanningAlertDto(int Number);
 
+public sealed record GitHubMergeResult(HttpStatusCode StatusCode, bool Merged, string? Sha, string? Message);
+
+internal sealed record GitHubMergeResponse(bool Merged, string? Sha, string? Message);
+
 public sealed class GitHubOrgClient(
     HttpClient httpClient,
     IOptions<GitHubOptions> gitHub,
@@ -720,6 +724,29 @@ public sealed class GitHubOrgClient(
         }
 
         return filtered;
+    }
+
+    public async Task<GitHubMergeResult> MergePullRequestAsync(string repo, int pullNumber, CancellationToken ct)
+    {
+        var path = $"repos/{_gitHub.Owner}/{repo}/pulls/{pullNumber}/merge";
+        using var request = new HttpRequestMessage(HttpMethod.Put, path)
+        {
+            Content = JsonContent.Create(new { merge_method = "rebase" }, options: SerializerOptions),
+        };
+        await AddStandardHeadersAsync(request, ct);
+
+        using var response = await httpClient.SendAsync(request, ct);
+        GuardResponse(response, path, affectsAuthState: true);
+        GitHubMergeResponse? body;
+        try
+        {
+            body = await response.Content.ReadFromJsonAsync<GitHubMergeResponse>(SerializerOptions, ct);
+        }
+        catch (JsonException) when (!response.IsSuccessStatusCode)
+        {
+            body = null;
+        }
+        return new GitHubMergeResult(response.StatusCode, body?.Merged == true, body?.Sha, body?.Message);
     }
 
     internal static bool IncludeRepository(GitHubRepoDto repo, DashboardOptions options) =>
