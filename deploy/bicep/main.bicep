@@ -30,7 +30,7 @@ param image string
 @description('GitHub org/owner that hosts the tracked repos.')
 param gitHubOwner string
 
-@description('Fine-grained read-only GitHub PAT (Actions, Pull requests, Contents, and Code scanning alerts: Read-only).')
+@description('Fine-grained GitHub PAT. Contents: Read and write enables the admin merge endpoint; other required repository permissions stay read-only.')
 @secure()
 param gitHubToken string
 
@@ -45,7 +45,7 @@ param gitHubAppId string = ''
 @secure()
 param gitHubAppPrivateKey string = ''
 
-@description('Shared key for the /api/dashboard/snapshot/admin endpoint. Must match the Admin__Key secret in the simulator backend.')
+@description('Shared key for the /api/dashboard/snapshot/admin and /api/dashboard/merge endpoints. Must match the Admin__Key secret in the simulator backend.')
 @secure()
 param adminKey string
 
@@ -56,9 +56,9 @@ param ideApiKey string
 @description('Background refresh cadence in seconds. ETag conditional GETs keep a tight cadence within the GitHub rate budget (304s are not billed).')
 param refreshSeconds int = 30
 
-@description('''Origins permitted to GET the snapshot cross-origin (the FixPortal SPA).
+@description('''Origins permitted to read the snapshot and submit merge requests cross-origin (the FixPortal SPA).
 Emitted as Cors__AllowedOrigins__N env vars and read by the API's CORS policy.
-Empty (the default) allows no cross-origin reads.''')
+Empty (the default) allows no cross-origin dashboard access.''')
 param corsAllowedOrigins array = []
 
 @description('Custom domain bound to the ingress (empty — the default — disables the binding and serves on the generated FQDN).')

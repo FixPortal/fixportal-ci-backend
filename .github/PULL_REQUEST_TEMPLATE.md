@@ -11,5 +11,5 @@
 - [ ] Tests added or updated (see [CONTRIBUTING.md](../CONTRIBUTING.md) for how to run them)
 - [ ] `build` / `test` pass locally
 - [ ] One focused change; no unrelated churn
-- [ ] Service stays read-only (no write scopes, no GitHub mutations)
+- [ ] Any GitHub mutation is admin-gated, allow-listed, tested, and uses the narrowest documented write scope (or N/A)
 - [ ] `DashboardSnapshot` contract changes called out above

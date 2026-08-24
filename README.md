@@ -3,7 +3,7 @@
 
 # FixPortal CI Dashboard — Backend API
 
-> The backend for a read-only, **org-wide** CI/CD status board. Point it at a
+> The backend for an **org-wide** CI/CD status board. Point it at a
 > GitHub org and it auto-discovers repositories and workflows, optionally narrows
 > the sweep by repository-name or GitHub-topic filters, polls the GitHub Actions
 > API server-side, and exposes a single snapshot of build, deploy, package, PR,
@@ -11,11 +11,11 @@
 > render that snapshot; the open-source
 > [`@fix-portal/ci-frontend`](https://github.com/FixPortal/fixportal-ci-frontend)
 > board is one such UI. This service is a pure ASP.NET Core API with no
-> database — all calls are server-side with a read-only PAT.
+> database — all GitHub calls are server-side.
 
 ## What it does
 
-Give it a `GitHub:Owner` and a read-only token, and by default it surfaces — for
+Give it a `GitHub:Owner` and a token, and by default it surfaces — for
 **every** non-archived repo in that org, with no per-repo configuration:
 
 - **Workflow status** — latest run state per workflow (success / failure /
@@ -28,9 +28,10 @@ Give it a `GitHub:Owner` and a read-only token, and by default it surfaces — f
   [Lizard](https://github.com/terryyin/lizard), refreshed on a slow cadence.
 - **A "No CI" treatment** for repos with no workflows, plus a hide toggle.
 
-It is deliberately **read-only**: the token grants only *Read* permissions, the
-token never reaches the browser, and the board keeps the last-known-good snapshot
-if a refresh fails rather than blanking.
+Polling remains read-only. The sole mutation is the admin-key-protected
+`POST /api/dashboard/merge`, which performs a rebase merge for a repository in
+the current dashboard snapshot. The token never reaches the browser, and the
+board keeps the last-known-good snapshot if a refresh fails rather than blanking.
 
 ## Architecture
 
@@ -56,12 +57,13 @@ graph LR
         JW --> SNAP
         SNAP --> API
     end
-    GH["GitHub Actions API<br/>(read-only PAT)"]
+    GH["GitHub API<br/>(App token or PAT)"]
     SPA["Board UI<br/>(any snapshot consumer,<br/>e.g. @fix-portal/ci-frontend)"]
     RW -.poll.-> GH
     MW -.clone.-> GH
     PW -.poll.-> GH
     JW -.poll.-> GH
+    API -.admin rebase merge.-> GH
     API -.CORS.-> SPA
 ```
 
@@ -110,14 +112,13 @@ Both images are on GHCR and updated on every push to `main`.
 
 Prerequisites: **.NET 10 SDK** and a fine-grained GitHub PAT (see
 [operator-handoff.md](operator-handoff.md#github) for exact scopes — read-only
-**Actions** at minimum; add **Pull requests** and **Contents** for PR and metrics
-data).
+permissions are enough for polling; merging requires **Contents: Read and write**).
 
 ```
 # 1. Configure the token (user secrets keep it out of source)
 cd src/FixPortal.Ci.Backend.Api
 dotnet user-secrets init
-dotnet user-secrets set "GitHub:Token" "<your-read-only-PAT>"
+dotnet user-secrets set "GitHub:Token" "<your-GitHub-PAT>"
 dotnet user-secrets set "GitHub:Owner" "<your-org>"
 
 # 2. Run the API (http profile listens on http://localhost:5049)
@@ -348,6 +349,7 @@ dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-bu
 | Snapshot returns stale data after a workflow run | Refresh worker polls on a 20 s cadence; run completed between polls | Wait up to 20 s, or restart to force an immediate poll |
 | Snapshot endpoint returns `204 No Content` | No snapshot yet — the first poll has not completed, or every poll has failed | Allow ~5 s after startup; if it persists, check the container logs for `GitHubAuthException` |
 | `MetricsEnrichmentWorker` logs `git clone` errors | Credential lacks **Contents** read | App mode: grant `contents` and accept the request on the installation. PAT mode: re-issue with Contents (read) and update `GitHub__Token` — which is **ignored** in App mode, so check which mode is live first |
+| Merge endpoint returns `502` with a GitHub authorization failure | Credential lacks **Contents: Read and write** | App mode: grant `contents: write`, save, and accept the request on the organization installation. PAT mode: re-issue with Contents (read and write). Restart the backend revision to replace a cached installation token immediately |
 | PRs not appearing | Credential lacks **Pull requests** read | App mode: grant `pull_requests`. PAT mode: re-issue with Pull requests (read) and update `GitHub__Token` |
 | Secret Scanning pill stuck at `pending`, nothing in the logs | The installation has `security_events` but not `secret_scanning_alerts`. GitHub answers that route **404, not 403**, so the count returns null and the "unreadable" warning never fires | Grant `secret_scanning_alerts` on the App, then **accept the request on the installation** — widening the App alone does nothing. `gh api apps/<slug> -q .permissions` and `gh api orgs/<owner>/installations` read different things; a moved installation `updated_at` is the proof it took. Installation tokens are cached up to an hour, so restart the active revision to pick it up now |
 | Review pills degraded or absent across every repository | Running in PAT mode: a PAT cannot read check runs, and that failure takes the whole GraphQL document with it | Move to App mode — see [Authentication](#authentication-github-githubapp) |

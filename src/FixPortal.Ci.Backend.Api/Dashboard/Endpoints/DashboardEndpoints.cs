@@ -81,10 +81,9 @@ public static class DashboardEndpoints
                     return Error(HttpStatusCode.BadRequest, "Pull number must be greater than zero.");
                 }
 
-                var repository = state
-                    .Current?.Repositories.FirstOrDefault(candidate =>
-                        string.Equals(candidate.Name, merge.Repo, StringComparison.OrdinalIgnoreCase)
-                    );
+                var repository = state.Current?.Repositories.FirstOrDefault(candidate =>
+                    string.Equals(candidate.Name, merge.Repo, StringComparison.OrdinalIgnoreCase)
+                );
                 if (repository is null)
                 {
                     return Error(HttpStatusCode.NotFound, "Repository not found.");
@@ -95,10 +94,10 @@ public static class DashboardEndpoints
                 {
                     result = await gitHub.MergePullRequestAsync(repository.Name, merge.PullNumber, ct);
                 }
-                catch (Exception ex) when (
-                    ex is GitHubAuthException or GitHubRateLimitException or HttpRequestException or JsonException
-                    || ex is OperationCanceledException && !ct.IsCancellationRequested
-                )
+                catch (Exception ex)
+                    when (ex is GitHubAuthException or GitHubRateLimitException or HttpRequestException or JsonException
+                        || ex is OperationCanceledException && !ct.IsCancellationRequested
+                    )
                 {
                     return Error(HttpStatusCode.BadGateway, "GitHub merge request failed.");
                 }
@@ -143,7 +142,10 @@ public static class DashboardEndpoints
     {
         var provided = request.Headers["X-Admin-Key"].FirstOrDefault() ?? "";
         return !string.IsNullOrEmpty(configured)
-            && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(provided), Encoding.UTF8.GetBytes(configured));
+            && CryptographicOperations.FixedTimeEquals(
+                Encoding.UTF8.GetBytes(provided),
+                Encoding.UTF8.GetBytes(configured)
+            );
     }
 
     private static void PreventSensitiveCaching(HttpResponse response)

@@ -8,11 +8,11 @@
 
 ## What this is
 
-The backend for a read-only, **org-wide** CI/CD status board. Point it at a
+The backend for an **org-wide** CI/CD status board. Point it at a
 GitHub org and it auto-discovers non-archived repositories and workflows,
 optionally narrows the sweep by repository-name or GitHub-topic filters, polls
-the GitHub Actions API **server-side** with read-only credentials -- a GitHub App
-installation token, or a fine-grained PAT -- and exposes one
+the GitHub Actions API **server-side** with a GitHub App installation token or a
+fine-grained PAT, and exposes one
 snapshot of build / deploy / package / PR / code-metrics signals over
 `GET /api/dashboard/snapshot`. That anonymous endpoint is the public projection;
 the private admin and IDE contracts are separately authenticated. A single deployable ASP.NET Core **minimal API**
@@ -24,7 +24,7 @@ board is one such UI.
 ## The spine (data flow)
 
 ```
-GitHub Actions API  (App installation token, or read-only PAT)
+GitHub API  (App installation token or fine-grained PAT)
         │  poll / clone
         ▼
   Integrations/GitHub/GitHubOrgClient ...... the single upstream gateway
@@ -47,7 +47,8 @@ GitHub Actions API  (App installation token, or read-only PAT)
   Dashboard/Services/DashboardSnapshotState  in-memory last-known-good snapshot
         │   .ComputePublicSnapshot() ........ privacy projection — excludes private repos
         ▼
-  Dashboard/Endpoints/DashboardEndpoints ... public snapshot, private admin snapshot, health
+  Dashboard/Endpoints/DashboardEndpoints ... public/private snapshots, admin rebase merge, health
+        │   POST /api/dashboard/merge → allow-listed GitHub rebase merge
   Ide/IdeEndpoints ........................ authenticated IDE v1 snapshot + diagnosis
         │   non-API routes → 301 redirect to www.fixportal.org/ci
         ▼
@@ -75,6 +76,10 @@ data immediately instead of blanking.
   The in-memory snapshot holds everything; the public projection strips private
   repos before the anonymous endpoint serves it. Get this projection wrong and
   private repo names leak. It is the security-critical method in the service.
+- **The merge endpoint is the sole mutation boundary.** It requires the shared
+  admin key, accepts only repositories in the current full snapshot, and always
+  requests a rebase merge through `GitHubOrgClient`. The GitHub credential's only
+  write grant is `Contents`.
 - **Review and merge facts are intentionally separate.** `ReviewSignalEnrichmentWorker`
   is enabled only with a reviewer roster and incrementally refreshes changed PRs;
   `MergeStateEnrichmentWorker`, enabled by default, refreshes GitHub's merge

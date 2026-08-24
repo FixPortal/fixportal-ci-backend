@@ -13,14 +13,15 @@ best-effort basis; issues and pull requests are welcome.
 
 ## Getting set up
 
-Prerequisites: **.NET 10 SDK** and a fine-grained read-only GitHub PAT (see
-[operator-handoff.md](operator-handoff.md#github) for the exact scopes).
+Prerequisites: **.NET 10 SDK** and a fine-grained GitHub PAT (see
+[operator-handoff.md](operator-handoff.md#github) for the exact scopes). Read-only
+permissions are sufficient unless you are exercising the merge endpoint.
 
 ```bash
 git clone https://github.com/FixPortal/fixportal-ci-backend.git
 cd fixportal-ci-backend
 dotnet user-secrets init --project src/FixPortal.Ci.Backend.Api
-dotnet user-secrets set "GitHub:Token" "<your-read-only-PAT>" --project src/FixPortal.Ci.Backend.Api
+dotnet user-secrets set "GitHub:Token" "<your-GitHub-PAT>" --project src/FixPortal.Ci.Backend.Api
 dotnet user-secrets set "GitHub:Owner" "<your-org>" --project src/FixPortal.Ci.Backend.Api
 dotnet run --project src/FixPortal.Ci.Backend.Api # API on http://localhost:5049
 ```
@@ -52,7 +53,7 @@ optional.
 
 - One focused change per PR.
 - Tests for new behaviour or a bug fix that would have caught the regression.
-- Keep the service **read-only**: it must never request write scopes or mutate
-  anything on GitHub.
+- Keep GitHub mutations admin-gated, repository-allow-listed, tested, and limited
+  to the narrowest documented write permission.
 - Changes to the `DashboardSnapshot` JSON shape are a published contract shared
   with the frontend — call them out explicitly in the PR description.
