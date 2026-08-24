@@ -736,7 +736,7 @@ public sealed class GitHubOrgClient(
         await AddStandardHeadersAsync(request, ct);
 
         using var response = await httpClient.SendAsync(request, ct);
-        GuardResponse(response, path, affectsAuthState: true);
+        GuardResponse(response, path, affectsAuthState: false);
         GitHubMergeResponse? body;
         try
         {

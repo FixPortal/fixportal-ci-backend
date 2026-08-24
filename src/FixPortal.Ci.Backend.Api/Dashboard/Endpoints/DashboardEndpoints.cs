@@ -94,7 +94,12 @@ public static class DashboardEndpoints
                     return Error(HttpStatusCode.BadRequest, "Pull number must be greater than zero.");
                 }
 
-                var repository = state.Current?.Repositories.FirstOrDefault(candidate =>
+                if (state.Current is null)
+                {
+                    return Error(HttpStatusCode.ServiceUnavailable, "No dashboard snapshot available yet.");
+                }
+
+                var repository = state.Current.Repositories.FirstOrDefault(candidate =>
                     string.Equals(candidate.Name, merge.Repo, StringComparison.OrdinalIgnoreCase)
                 );
                 if (repository is null)

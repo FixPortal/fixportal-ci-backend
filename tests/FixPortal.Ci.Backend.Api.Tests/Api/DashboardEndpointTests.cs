@@ -599,6 +599,20 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         _ = handler.RequestCount.Should().Be(0);
     }
 
+    [Fact]
+    public async Task Merge_should_return_503_when_no_snapshot_is_available()
+    {
+        var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
+        var client = CreateClient(seed: null, AdminKey, handler);
+        using var request = CreateMergeRequest("public-repo", 42);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.ServiceUnavailable);
+        _ = (await ReadErrorAsync(response)).Should().NotBeNullOrWhiteSpace();
+        _ = handler.RequestCount.Should().Be(0);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
@@ -615,12 +629,14 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         _ = handler.RequestCount.Should().Be(0);
     }
 
-    [Fact]
-    public async Task Merge_should_rebase_the_pull_request_and_return_its_sha()
+    [Theory]
+    [InlineData("public-repo")]
+    [InlineData("private-repo")]
+    public async Task Merge_should_rebase_the_pull_request_and_return_its_sha(string repo)
     {
         var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
         var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
-        using var request = CreateMergeRequest("public-repo", 42);
+        using var request = CreateMergeRequest(repo, 42);
 
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
@@ -631,7 +647,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         _ = responseBody.RootElement.GetProperty("merged").GetBoolean().Should().BeTrue();
         _ = responseBody.RootElement.GetProperty("sha").GetString().Should().Be("abc123");
         _ = handler.Method.Should().Be(HttpMethod.Put);
-        _ = handler.Path.Should().Be("/repos/FixPortal/public-repo/pulls/42/merge");
+        _ = handler.Path.Should().Be($"/repos/FixPortal/{repo}/pulls/42/merge");
         using var githubBody = JsonDocument.Parse(handler.Body!);
         _ = githubBody.RootElement.GetProperty("merge_method").GetString().Should().Be("rebase");
     }
@@ -694,7 +710,21 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     }
 
     [Fact]
-    public async Task Merge_should_allow_cross_origin_post_from_the_configured_origin()
+    public async Task Merge_auth_failure_should_not_degrade_snapshot_health()
+    {
+        var handler = new MergeHandler(HttpStatusCode.Forbidden, "{}");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = CreateMergeRequest("private-repo", 42);
+
+        var mergeResponse = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        var healthResponse = await client.GetAsync("/api/health", TestContext.Current.CancellationToken);
+
+        _ = mergeResponse.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        _ = healthResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+    }
+
+    [Fact]
+    public async Task Merge_should_block_cross_origin_post_from_the_configured_snapshot_origin()
     {
         var client = factory
             .WithWebHostBuilder(builder =>
@@ -712,8 +742,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         _ = response.StatusCode.Should().Be(HttpStatusCode.NoContent);
-        _ = response.Headers.GetValues("Access-Control-Allow-Origin").Should().Contain("https://app.fixportal.org");
-        _ = string.Join(',', response.Headers.GetValues("Access-Control-Allow-Methods")).Should().Contain("POST");
+        _ = string.Join(',', response.Headers.GetValues("Access-Control-Allow-Methods")).Should().NotContain("POST");
     }
 
     private static HttpRequestMessage CreateMergeRequest(string repo, int pullNumber, string? adminKey = AdminKey)

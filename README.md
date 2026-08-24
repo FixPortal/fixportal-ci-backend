@@ -64,7 +64,7 @@ graph LR
     PW -.poll.-> GH
     JW -.poll.-> GH
     API -.admin rebase merge.-> GH
-    API -.CORS.-> SPA
+    API -.snapshot CORS.-> SPA
 ```
 
 | Layer | Tech |
@@ -427,6 +427,7 @@ and `:sha-<full commit SHA>`.
 |---|---|
 | `GET /api/dashboard/snapshot` | Anonymous public projection: private repositories are removed server-side unless the security-sensitive `Admin:ExposePrivateToGuests=true` escape hatch is deliberately set. CORS applies; returns `204` before a snapshot exists. Use that escape hatch only on a private, trusted network. |
 | `GET /api/dashboard/snapshot/admin` | Full private-inclusive snapshot. Requires `X-Admin-Key`; every response is `Cache-Control: private, no-store` and `Vary: X-Admin-Key`. |
+| `POST /api/dashboard/merge` | Rebase-merges one pull request in a repository from the current snapshot. Requires `X-Admin-Key`; call through a same-origin host/backend proxy because cross-origin browser POST is blocked and the shared key must stay server-side. |
 | `GET /api/health` | Anonymous credential health: `200` healthy or `503` degraded, without exposing the underlying GitHub error. |
 | `GET /api/ide/v1/snapshot` | Full IDE projection. Requires `X-CI-IDE-Key`; `Cache-Control: no-store`, `Vary: X-CI-IDE-Key`, and supports ETag conditional requests. |
 | `GET /api/ide/v1/repositories/{repository}/runs/{runId}/diagnosis` | Failure diagnosis for an IDE snapshot run. Requires `X-CI-IDE-Key`; `Cache-Control: no-store` and `Vary: X-CI-IDE-Key`. |

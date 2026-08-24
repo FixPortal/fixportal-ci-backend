@@ -45,7 +45,7 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 | `Dashboard:MergedPrRefreshSeconds` | `150` | Merged-PR cadence (2.5 min). |
 | `Dashboard:JobLanes` | deploys, packages | Named lanes that surface matching workflow **jobs** (by name pattern) as their own status chips. |
 | `ReviewSignals:Reviewers` | *(empty)* | Per-reviewer status pills (CodeRabbit, Gitar, CodeQL, …) on each open PR. Empty by default — the feature is off and issues no GitHub requests until reviewers are configured. Full option reference: **[README.md § Review signals](README.md#review-signals-reviewsignals)**. |
-| `Cors:AllowedOrigins` | *(empty)* | Origins allowed to read the anonymous public snapshot and call the admin merge endpoint; configure as `Cors__AllowedOrigins__0`, etc. |
+| `Cors:AllowedOrigins` | *(empty)* | Origins allowed to read the anonymous public snapshot; configure as `Cors__AllowedOrigins__0`, etc. The merge endpoint does not allow cross-origin browser requests. |
 | `Admin:AdminKey` / `IdeIntegration:ApiKey` | *(empty)* | Shared secrets for the private admin snapshot and merge endpoint, and for IDE v1 endpoints. Keep them out of source. |
 
 There is **no hardcoded repository list** — the board auto-discovers repos under
@@ -135,7 +135,9 @@ server-side in the background collector.
 
 `POST /api/dashboard/merge` is the only write path. It requires the configured
 `X-Admin-Key`, accepts one pull request at a time, validates the repository
-against the current dashboard snapshot, and always requests a rebase merge.
+against the current dashboard snapshot, and always requests a rebase merge. Call
+it through a same-origin host/backend proxy that adds the shared key server-side;
+never expose that key to browser JavaScript.
 
 > **Rate limits & conditional requests.** A fine-grained PAT allows 5000 REST
 > requests/hour. The collector caches an ETag per URL and re-validates with

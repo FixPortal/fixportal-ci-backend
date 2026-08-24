@@ -56,9 +56,9 @@ param ideApiKey string
 @description('Background refresh cadence in seconds. ETag conditional GETs keep a tight cadence within the GitHub rate budget (304s are not billed).')
 param refreshSeconds int = 30
 
-@description('''Origins permitted to read the snapshot and submit merge requests cross-origin (the FixPortal SPA).
+@description('''Origins permitted to GET the snapshot cross-origin (the FixPortal SPA).
 Emitted as Cors__AllowedOrigins__N env vars and read by the API's CORS policy.
-Empty (the default) allows no cross-origin dashboard access.''')
+Empty (the default) allows no cross-origin reads.''')
 param corsAllowedOrigins array = []
 
 @description('Custom domain bound to the ingress (empty — the default — disables the binding and serves on the generated FQDN).')
