@@ -97,6 +97,7 @@ public static class DashboardEndpoints
                 }
                 catch (Exception ex) when (
                     ex is GitHubAuthException or GitHubRateLimitException or HttpRequestException or JsonException
+                    || ex is OperationCanceledException && !ct.IsCancellationRequested
                 )
                 {
                     return Error(HttpStatusCode.BadGateway, "GitHub merge request failed.");
