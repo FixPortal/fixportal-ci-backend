@@ -52,6 +52,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                     {
                         _ = services.RemoveAll<GitHubOrgClient>();
                         var http = new HttpClient(githubHandler) { BaseAddress = new Uri("https://api.github.com/") };
+                        _ = services.AddSingleton(http);
                         _ = services.AddSingleton(
                             new GitHubOrgClient(
                                 http,
