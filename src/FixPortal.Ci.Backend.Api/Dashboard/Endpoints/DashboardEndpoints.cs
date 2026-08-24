@@ -64,7 +64,6 @@ public static class DashboardEndpoints
             async (
                 HttpRequest request,
                 HttpResponse response,
-                MergePullRequestRequest merge,
                 DashboardSnapshotState state,
                 GitHubOrgClient gitHub,
                 IOptions<AdminOptions> admin,
@@ -75,6 +74,20 @@ public static class DashboardEndpoints
                 if (!IsAdmin(request, admin.Value.AdminKey))
                 {
                     return Error(HttpStatusCode.Unauthorized, "Unauthorized.");
+                }
+
+                MergePullRequestRequest? merge;
+                try
+                {
+                    merge = await request.ReadFromJsonAsync<MergePullRequestRequest>(ct);
+                }
+                catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+                {
+                    return Error(HttpStatusCode.BadRequest, "Invalid request body.");
+                }
+                if (merge is null)
+                {
+                    return Error(HttpStatusCode.BadRequest, "Invalid request body.");
                 }
                 if (merge.PullNumber <= 0)
                 {
