@@ -98,6 +98,14 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         }
     }
 
+    private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) => Task.FromException<HttpResponseMessage>(exception);
+    }
+
     [Fact]
     public async Task Get_snapshot_should_return_latest_dashboard_snapshot()
     {
@@ -646,6 +654,22 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
 
         _ = response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
         _ = (await ReadErrorAsync(response)).Should().Be("GitHub is unavailable");
+    }
+
+    [Fact]
+    public async Task Merge_should_map_a_GitHub_timeout_to_502()
+    {
+        var client = CreateClient(
+            SnapshotWithPrivateRepo(),
+            AdminKey,
+            new ThrowingHandler(new TaskCanceledException("GitHub timed out"))
+        );
+        using var request = CreateMergeRequest("public-repo", 42);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        _ = (await ReadErrorAsync(response)).Should().NotBeNullOrWhiteSpace();
     }
 
     [Fact]
