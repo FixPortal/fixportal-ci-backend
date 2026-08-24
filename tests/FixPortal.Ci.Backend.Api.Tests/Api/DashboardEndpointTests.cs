@@ -557,6 +557,34 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         _ = handler.RequestCount.Should().Be(0);
     }
 
+    [Theory]
+    [InlineData("{", null, HttpStatusCode.Unauthorized)]
+    [InlineData("{", AdminKey, HttpStatusCode.BadRequest)]
+    [InlineData("{\"repo\":\"public-repo\",\"pullNumber\":\"not-a-number\"}", AdminKey, HttpStatusCode.BadRequest)]
+    public async Task Merge_should_authenticate_before_returning_a_json_error_for_an_invalid_body(
+        string body,
+        string? adminKey,
+        HttpStatusCode expectedStatus
+    )
+    {
+        var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/dashboard/merge")
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+        if (adminKey is not null)
+        {
+            request.Headers.Add("X-Admin-Key", adminKey);
+        }
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(expectedStatus);
+        _ = (await ReadErrorAsync(response)).Should().NotBeNullOrWhiteSpace();
+        _ = handler.RequestCount.Should().Be(0);
+    }
+
     [Fact]
     public async Task Merge_should_reject_an_unknown_repository_without_calling_GitHub()
     {
