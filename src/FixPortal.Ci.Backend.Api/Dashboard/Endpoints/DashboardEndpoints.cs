@@ -1,9 +1,15 @@
+using System.Net;
 using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
+using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Options;
 
 namespace FixPortal.Ci.Backend.Api.Dashboard.Endpoints;
+
+public sealed record MergePullRequestRequest(string Repo, int PullNumber);
 
 public static class DashboardEndpoints
 {
@@ -37,17 +43,8 @@ public static class DashboardEndpoints
             "/api/dashboard/snapshot/admin",
             (HttpRequest request, HttpResponse response, DashboardSnapshotState state, IOptions<AdminOptions> admin) =>
             {
-                response.Headers.CacheControl = "private, no-store";
-                response.Headers.Vary = "X-Admin-Key";
-                var configured = admin.Value.AdminKey;
-                var provided = request.Headers["X-Admin-Key"].FirstOrDefault() ?? "";
-                if (
-                    string.IsNullOrEmpty(configured)
-                    || !CryptographicOperations.FixedTimeEquals(
-                        System.Text.Encoding.UTF8.GetBytes(provided),
-                        System.Text.Encoding.UTF8.GetBytes(configured)
-                    )
-                )
+                PreventSensitiveCaching(response);
+                if (!IsAdmin(request, admin.Value.AdminKey))
                 {
                     return Results.Unauthorized();
                 }
@@ -59,6 +56,61 @@ public static class DashboardEndpoints
                 }
 
                 return Results.Ok(snapshot);
+            }
+        );
+
+        _ = endpoints.MapPost(
+            "/api/dashboard/merge",
+            async (
+                HttpRequest request,
+                HttpResponse response,
+                MergePullRequestRequest merge,
+                DashboardSnapshotState state,
+                GitHubOrgClient gitHub,
+                IOptions<AdminOptions> admin,
+                CancellationToken ct
+            ) =>
+            {
+                PreventSensitiveCaching(response);
+                if (!IsAdmin(request, admin.Value.AdminKey))
+                {
+                    return Error(HttpStatusCode.Unauthorized, "Unauthorized.");
+                }
+                if (merge.PullNumber <= 0)
+                {
+                    return Error(HttpStatusCode.BadRequest, "Pull number must be greater than zero.");
+                }
+
+                var repository = state
+                    .Current?.Repositories.FirstOrDefault(candidate =>
+                        string.Equals(candidate.Name, merge.Repo, StringComparison.OrdinalIgnoreCase)
+                    );
+                if (repository is null)
+                {
+                    return Error(HttpStatusCode.NotFound, "Repository not found.");
+                }
+
+                GitHubMergeResult result;
+                try
+                {
+                    result = await gitHub.MergePullRequestAsync(repository.Name, merge.PullNumber, ct);
+                }
+                catch (Exception ex) when (
+                    ex is GitHubAuthException or GitHubRateLimitException or HttpRequestException or JsonException
+                )
+                {
+                    return Error(HttpStatusCode.BadGateway, "GitHub merge request failed.");
+                }
+
+                if (result.StatusCode == HttpStatusCode.OK && result.Merged && !string.IsNullOrWhiteSpace(result.Sha))
+                {
+                    return Results.Ok(new { merged = true, sha = result.Sha });
+                }
+
+                var error = string.IsNullOrWhiteSpace(result.Message) ? "GitHub merge request failed." : result.Message;
+                return result.StatusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.Conflict
+                    ? Error(HttpStatusCode.Conflict, error)
+                    : Error(HttpStatusCode.BadGateway, error);
             }
         );
 
@@ -85,4 +137,20 @@ public static class DashboardEndpoints
 
         return endpoints;
     }
+
+    private static bool IsAdmin(HttpRequest request, string? configured)
+    {
+        var provided = request.Headers["X-Admin-Key"].FirstOrDefault() ?? "";
+        return !string.IsNullOrEmpty(configured)
+            && CryptographicOperations.FixedTimeEquals(Encoding.UTF8.GetBytes(provided), Encoding.UTF8.GetBytes(configured));
+    }
+
+    private static void PreventSensitiveCaching(HttpResponse response)
+    {
+        response.Headers.CacheControl = "private, no-store";
+        response.Headers.Vary = "X-Admin-Key";
+    }
+
+    private static IResult Error(HttpStatusCode status, string message) =>
+        Results.Json(new { error = message }, statusCode: (int)status);
 }
