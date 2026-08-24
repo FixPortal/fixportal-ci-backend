@@ -17,7 +17,7 @@
     <PackageVersion Include="NodaTime.Serialization.SystemTextJson" Version="1.4.0" />
     <PackageVersion Include="NodaTime.Testing" Version="3.3.3" />
     <!-- Scalar -->
-    <PackageVersion Include="Scalar.AspNetCore" Version="2.16.20" />
+    <PackageVersion Include="Scalar.AspNetCore" Version="2.17.1" />
     <!-- OpenApi vuln override -->
     <PackageVersion Include="Microsoft.OpenApi" Version="2.12.0" />
   </ItemGroup>
