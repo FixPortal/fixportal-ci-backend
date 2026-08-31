@@ -126,9 +126,16 @@ public static class DashboardEndpoints
                 }
 
                 var error = string.IsNullOrWhiteSpace(result.Message) ? "GitHub merge request failed." : result.Message;
-                return result.StatusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.Conflict
-                    ? Error(HttpStatusCode.Conflict, error)
-                    : Error(HttpStatusCode.BadGateway, error);
+                if (result.StatusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.Conflict)
+                {
+                    // GitHub itself just said no — a real conflict or a blocked required check,
+                    // not a transport hiccup. Write that verdict straight into the served
+                    // snapshot so the pill reflects it now, instead of leaving it "Ready to
+                    // merge" until the next merge-state sweep (up to 120s).
+                    state.MarkNotMergeable(repository.Name, merge.PullNumber);
+                    return Error(HttpStatusCode.Conflict, error);
+                }
+                return Error(HttpStatusCode.BadGateway, error);
             }
         );
 
