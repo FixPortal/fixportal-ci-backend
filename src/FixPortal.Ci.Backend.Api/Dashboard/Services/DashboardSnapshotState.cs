@@ -35,6 +35,52 @@ public sealed class DashboardSnapshotState
     public void Update(DashboardSnapshot current, DashboardSnapshot publicSnap) =>
         _snapshots = new Snapshots(current, publicSnap);
 
+    // The merge endpoint calls this the instant GitHub itself reports a pull request as not
+    // mergeable (a real conflict or a blocked required check) rather than waiting for the next
+    // MergeStateEnrichmentWorker sweep (up to MergeState:RefreshSeconds, 120s by default) to
+    // catch up. GitHub's own merge attempt is the most authoritative verdict there is; throwing
+    // it away and leaving the pill "Ready to merge" for up to two minutes reads as a broken
+    // button. HeadSha is left untouched: this PR's head has not moved, only its mergeability
+    // verdict has, and the next sweep still supersedes this patch with a fresh verdict.
+    public void MarkNotMergeable(string repo, int pullNumber)
+    {
+        var snapshots = _snapshots;
+        if (snapshots.Current is null)
+        {
+            return;
+        }
+        _snapshots = new Snapshots(
+            snapshots.Current with
+            {
+                Repositories = PatchNotMergeable(snapshots.Current.Repositories, repo, pullNumber),
+            },
+            snapshots.Public is null
+                ? null
+                : snapshots.Public with
+                {
+                    Repositories = PatchNotMergeable(snapshots.Public.Repositories, repo, pullNumber),
+                }
+        );
+    }
+
+    private static IReadOnlyList<RepositorySnapshot> PatchNotMergeable(
+        IReadOnlyList<RepositorySnapshot> repositories,
+        string repo,
+        int pullNumber
+    ) =>
+        repositories
+            .Select(r =>
+                !string.Equals(r.Name, repo, StringComparison.OrdinalIgnoreCase)
+                    ? r
+                    : r with
+                    {
+                        PullRequests = r
+                            .PullRequests.Select(pr => pr.Number == pullNumber ? pr with { ReadyToMerge = false } : pr)
+                            .ToList(),
+                    }
+            )
+            .ToList();
+
     public static DashboardSnapshot ComputePublicSnapshot(
         DashboardSnapshot full,
         IReadOnlyList<CiTrendBucket>? publicCiTrend = null
