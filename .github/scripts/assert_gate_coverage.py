@@ -67,7 +67,11 @@ NEEDS_RESULT = re.compile(r"needs\.[A-Za-z0-9_*-]+\.result")
 # A STEP-level `if:`, i.e. deeper than the four-space job-level one JOB_IF_VALUE matches,
 # in either the plain form (`        if: ...`) or as a list item's first key
 # (`      - if: ...`). Used to insist the gate's aggregation lives on a condition.
-STEP_IF_VALUE = re.compile(r"""^\s{5,}(?:-\s+)?(?:'if'|"if"|if)\s*:\s*(.*?)\s*$""")
+# Group 1 is everything before the key, so its length is the key's own COLUMN. A block
+# scalar's continuation must out-indent THAT, not the line: measuring the line put the bar
+# at the `- ` of a dash-form step, so the sibling `run:` and its body were swallowed into
+# the condition (see step_conditions).
+STEP_IF_VALUE = re.compile(r"""^(\s{5,}(?:-\s+)?)(?:'if'|"if"|if)\s*:\s*(.*?)\s*$""")
 # A step `if:` may open a YAML block scalar and carry its condition on the following,
 # more-indented lines. Those lines are part of the condition and must be searched too, or
 # a perfectly good gate written as `if: >` reads as having no condition at all.
@@ -207,13 +211,17 @@ def step_conditions(block):
         match = STEP_IF_VALUE.match(line)
         if not match:
             continue
-        value = strip_comment(match.group(1)).strip()
+        value = strip_comment(match.group(2)).strip()
         if value and not BLOCK_SCALAR.match(value):
             yield value
             continue
         # An empty value or a block-scalar indicator: the condition is on the following
-        # lines, which are indented past the `if:` key itself.
-        indent = len(line) - len(line.lstrip())
+        # lines, which are indented past the `if:` KEY -- its own column, not the line's.
+        # Measuring the line put the bar at the dash of a `- if: >-` step, so the sibling
+        # `run:` at the key's column and its whole body were absorbed into the condition. A
+        # gate folded to `false` with the diagnostic echo of `join(needs.*.result, ', ')`
+        # below it then passed, which is the fail-OPEN shape this check exists to reject.
+        indent = len(match.group(1))
         continuation = []
         for following in block[index + 1 :]:
             if COMMENT_OR_BLANK.match(following):
