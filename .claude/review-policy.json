@@ -54,7 +54,9 @@
     ".config/dotnet-tools.json",
     "nuget.config",
     "global.json",
-    "Directory.Build.props"
+    "Directory.Build.props",
+    ".github/workflows/ci.yml",
+    ".github/scripts/assert_gate_coverage.py"
   ],
 
   "low": [
