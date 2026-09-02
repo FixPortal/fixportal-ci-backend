@@ -64,6 +64,21 @@ JOB_IF_VALUE = re.compile(r"""^    (?:'if'|"if"|if)\s*:\s*(.*?)\s*$""")
 # form or the per-job `needs.build.result` form. Requiring the literal wildcard would
 # red a workflow that aggregates job by job, which is equally correct.
 NEEDS_RESULT = re.compile(r"needs\.[A-Za-z0-9_*-]+\.result")
+# A STEP-level `if:`, i.e. deeper than the four-space job-level one JOB_IF_VALUE matches,
+# in either the plain form (`        if: ...`) or as a list item's first key
+# (`      - if: ...`). Used to insist the gate's aggregation lives on a condition.
+STEP_IF_VALUE = re.compile(r"""^\s{5,}(?:-\s+)?(?:'if'|"if"|if)\s*:\s*(.*?)\s*$""")
+# A step `if:` may open a YAML block scalar and carry its condition on the following,
+# more-indented lines. Those lines are part of the condition and must be searched too, or
+# a perfectly good gate written as `if: >` reads as having no condition at all.
+#
+# The header is `|` or `>` followed by an indentation indicator and a chomping indicator
+# in either order -- `|`, `>-`, `|2`, `>2-`, `|-2` are all valid. Matching only `[|>][+-]?`
+# missed the digit forms, so `if: >2` looked like an ordinary truthy value, its
+# continuation lines were never read, and the checker reported a spurious "no step
+# conditioned on" failure. Rare shape, but the failure direction is a false RED on
+# correct configuration.
+BLOCK_SCALAR = re.compile(r"^[|>](?:[0-9][+-]?|[+-][0-9]?)?$")
 
 
 def _first_group(match):
@@ -186,6 +201,29 @@ def normalise_condition(value):
     return value.replace(" ", "")
 
 
+def step_conditions(block):
+    """Every step-level `if:` condition in a job body, block scalars included."""
+    for index, line in enumerate(block):
+        match = STEP_IF_VALUE.match(line)
+        if not match:
+            continue
+        value = strip_comment(match.group(1)).strip()
+        if value and not BLOCK_SCALAR.match(value):
+            yield value
+            continue
+        # An empty value or a block-scalar indicator: the condition is on the following
+        # lines, which are indented past the `if:` key itself.
+        indent = len(line) - len(line.lstrip())
+        continuation = []
+        for following in block[index + 1 :]:
+            if COMMENT_OR_BLANK.match(following):
+                continue
+            if len(following) - len(following.lstrip()) <= indent:
+                break
+            continuation.append(strip_comment(following).strip())
+        yield " ".join(continuation)
+
+
 def assert_gate_semantics(workflow_path, lines, jobs, gate_job):
     block = job_block(lines, jobs, gate_job)
 
@@ -201,11 +239,28 @@ def assert_gate_semantics(workflow_path, lines, jobs, gate_job):
             "required check cannot block a merge."
         )
 
-    if not any(NEEDS_RESULT.search(strip_comment(line)) for line in block):
+    # The reference must sit on a STEP CONDITION, not merely somewhere in the block.
+    # Searching the whole block accepted a gate whose failing `if:` had been deleted, so
+    # long as a diagnostic line survived -- and the house skeleton ships exactly such a
+    # line right beside the condition:
+    #
+    #     - name: Fail if any upstream job did not succeed
+    #       if: contains(needs.*.result, 'failure') || ...        <- the actual gate
+    #       run: |
+    #         echo "Upstream results: ${{ join(needs.*.result, ', ') }}"   <- matched too
+    #
+    # Delete the `if:` and the step runs unconditionally and never fails, while the echo
+    # keeps this assertion green. That is precisely the "guts only the aggregation step"
+    # neuter the function exists to catch, so the check was blind to its own subject.
+    # Demonstrated 2026-09-02 on a fixture with the condition removed: exit 0, reported
+    # as "aggregates its needs". Found by Gitar on fixportal-initiator#225.
+    if not any(NEEDS_RESULT.search(condition) for condition in step_conditions(block)):
         sys.exit(
-            f"{workflow_path}: '{gate_job}' has no step conditioned on a "
+            f"{workflow_path}: '{gate_job}' has no step whose `if:` references a "
             "`needs.<job>.result`.\n"
-            "The gate aggregates nothing and reports success unconditionally."
+            "The gate aggregates nothing and reports success unconditionally. A "
+            "`needs.*.result` appearing only in a `run:` body -- an echo of the upstream "
+            "results, say -- gates nothing."
         )
 
 
