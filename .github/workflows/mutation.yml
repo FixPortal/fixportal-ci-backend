@@ -15,11 +15,27 @@ permissions:
 jobs:
   stryker:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 120, not 45. The old ceiling was sized while `mutate` was narrowed to a single file:
+    # the 2026-08-15 run tested ONE mutant, skipped 1981 as "Removed by mutate filter", and
+    # reported "The final mutation score is 100.00 %" in 1.6 minutes. Once the scope was
+    # restored to the whole source tree the same lane creates 2654 mutants and tests 1895 of
+    # them, and both scheduled runs since (2026-08-22 and 2026-08-29) were killed at exactly
+    # 45 minutes with no score at all.
+    #
+    # The new bound is deliberately generous rather than fitted, because no completed run
+    # exists to fit it to -- the honest total is still unmeasured, and the next green run is
+    # what will supply it. Runner minutes are free on this public repository, so the only
+    # cost of the wider bound is a longer wait when Stryker genuinely hangs.
+    #
+    # If it still cancels, the next lever is `coverage-analysis` in stryker-config.json:
+    # it is `off`, so every one of the 1895 mutants re-runs all 518 tests. `perTest` runs
+    # only the covering tests. That is an estate-wide default worth revisiting on its own
+    # evidence, not a change to slip in under a timeout fix.
+    timeout-minutes: 120
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -29,7 +45,7 @@ jobs:
         with:
           shellcheck: true
 
-      - uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+      - uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
 
@@ -56,14 +72,14 @@ jobs:
 
       - name: Upload mutation summary
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-summary
           path: tests/FixPortal.Ci.Backend.Api.Tests/StrykerOutput/**/reports/mutation-summary.*
 
       - name: Upload mutation report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@v7
         with:
           name: mutation-report
           path: tests/FixPortal.Ci.Backend.Api.Tests/StrykerOutput/**

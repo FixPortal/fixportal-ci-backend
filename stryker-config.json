@@ -16,7 +16,6 @@
       "low": 70,
       "break": 0
     },
-    "test-case-filter": "Category!=Integration",
     // Whole source tree, not a single file: a narrowed list silently stops
     // mutation-testing everything else. Excludes stay at Stryker's defaults.
     "mutate": [
