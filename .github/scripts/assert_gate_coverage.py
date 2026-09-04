@@ -38,6 +38,7 @@ patched per repo.
 import os
 import re
 import sys
+from pathlib import Path
 
 
 ID = r"[A-Za-z_][A-Za-z0-9_-]*"
@@ -83,6 +84,16 @@ STEP_IF_VALUE = re.compile(r"""^(\s{5,}(?:-\s+)?)(?:'if'|"if"|if)\s*:\s*(.*?)\s*
 # conditioned on" failure. Rare shape, but the failure direction is a false RED on
 # correct configuration.
 BLOCK_SCALAR = re.compile(r"^[|>](?:[0-9][+-]?|[+-][0-9]?)?$")
+# Any OTHER step-body key that opens a block scalar (`run: |`, `run: >-`, ...). Its
+# payload is arbitrary text -- a heredoc/echo line shaped like `if: contains(...)`
+# inside a `run:` body is not a real YAML key, but STEP_IF_VALUE cannot tell the
+# difference by itself. Used to skip such spans wholesale before they reach
+# STEP_IF_VALUE. Group 1 is the key's own indent prefix, same convention as
+# STEP_IF_VALUE, so the span ends the same way: content must out-indent it.
+# The key may be quoted, exactly as STEP_IF_VALUE above admits 'if' and "if". Bare-only
+OTHER_BLOCK_KEY = re.compile(
+    r"""^(\s{5,}(?:-\s+)?)(?:'[A-Za-z_][A-Za-z0-9_-]*'|"[A-Za-z_][A-Za-z0-9_-]*"|[A-Za-z_][A-Za-z0-9_-]*)\s*:\s*[|>](?:[0-9][+-]?|[+-][0-9]?)?\s*$"""
+)
 
 
 def _first_group(match):
@@ -206,30 +217,63 @@ def normalise_condition(value):
 
 
 def step_conditions(block):
-    """Every step-level `if:` condition in a job body, block scalars included."""
-    for index, line in enumerate(block):
-        match = STEP_IF_VALUE.match(line)
-        if not match:
-            continue
-        value = strip_comment(match.group(2)).strip()
-        if value and not BLOCK_SCALAR.match(value):
-            yield value
-            continue
-        # An empty value or a block-scalar indicator: the condition is on the following
-        # lines, which are indented past the `if:` KEY -- its own column, not the line's.
-        # Measuring the line put the bar at the dash of a `- if: >-` step, so the sibling
-        # `run:` at the key's column and its whole body were absorbed into the condition. A
-        # gate folded to `false` with the diagnostic echo of `join(needs.*.result, ', ')`
-        # below it then passed, which is the fail-OPEN shape this check exists to reject.
-        indent = len(match.group(1))
-        continuation = []
-        for following in block[index + 1 :]:
-            if COMMENT_OR_BLANK.match(following):
+    """Every step-level `if:` condition in a job body, block scalars included.
+
+    A preceding step's own block scalar (`run: |`, `run: >-`, ...) is skipped
+    wholesale before its lines ever reach STEP_IF_VALUE: its payload is arbitrary
+    text, and a heredoc/echo line shaped like `if: contains(needs.*.result, ...)`
+    is not a real YAML key. Without this, deleting the actual step-level `if:`
+    while a diagnostic `run:` body still echoed a `needs.*.result`-shaped string
+    let the gate keep reporting a condition that no longer existed -- the same
+    fail-OPEN shape assert_gate_semantics's own docstring already documents for a
+    different line. Found by CodeRabbit on fixportal-quickfixn#68.
+    """
+    index = 0
+    skip_until_indent = None
+    while index < len(block):
+        line = block[index]
+
+        if skip_until_indent is not None:
+            if COMMENT_OR_BLANK.match(line) or len(line) - len(line.lstrip()) > skip_until_indent:
+                index += 1
                 continue
-            if len(following) - len(following.lstrip()) <= indent:
-                break
-            continuation.append(strip_comment(following).strip())
-        yield " ".join(continuation)
+            skip_until_indent = None
+            # Fall through: this line is back at or above the opener's indent, so it
+            # may itself be a real `if:` (or another block-scalar opener) and must be
+            # examined normally rather than skipped.
+
+        match = STEP_IF_VALUE.match(line)
+        if match:
+            value = strip_comment(match.group(2)).strip()
+            if value and not BLOCK_SCALAR.match(value):
+                yield value
+                index += 1
+                continue
+            # An empty value or a block-scalar indicator: the condition is on the
+            # following lines, indented past the `if:` KEY -- its own column, not the
+            # line's. Measuring the line put the bar at the dash of a `- if: >-` step,
+            # so the sibling `run:` at the key's column and its whole body were
+            # absorbed into the condition.
+            indent = len(match.group(1))
+            continuation = []
+            following_index = index + 1
+            while following_index < len(block):
+                following = block[following_index]
+                if COMMENT_OR_BLANK.match(following):
+                    following_index += 1
+                    continue
+                if len(following) - len(following.lstrip()) <= indent:
+                    break
+                continuation.append(strip_comment(following).strip())
+                following_index += 1
+            yield " ".join(continuation)
+            index = following_index
+            continue
+
+        other_block = OTHER_BLOCK_KEY.match(line)
+        if other_block:
+            skip_until_indent = len(other_block.group(1))
+        index += 1
 
 
 def assert_gate_semantics(workflow_path, lines, jobs, gate_job):
@@ -272,32 +316,36 @@ def assert_gate_semantics(workflow_path, lines, jobs, gate_job):
         )
 
 
-def main(argv):
-    if len(argv) < 2:
-        sys.exit("usage: assert_gate_coverage.py <workflow-file> [gate-job-id]")
+def parse_jobs(workflow_path):
+    """The job-name set for one file, read once so callers can validate exemptions
+    against it before (or across, in directory mode) running the full assertion."""
+    with open(workflow_path, encoding="utf-8") as handle:
+        lines = handle.readlines()
+    jobs, _, _ = read_gate_contract(lines, "")
+    return set(jobs)
 
-    workflow_path = argv[1]
-    gate_job = argv[2] if len(argv) > 2 else os.environ.get("GATE_JOB", "ci-gate")
+
+def check_file(workflow_path, gate_job, exempt, conditional_exempt, *, on_empty="fail"):
+    """Assert one file's full gate contract. Returns True when the file contains the
+    gate job (and every assertion ran), False when it has no gate job at all.
+
+    Exemption-name validation is the CALLER's job, not this function's: in directory
+    mode a job named in GATE_EXEMPT exists in exactly one workflow, so validating it
+    against a single file's job set here reddened every OTHER workflow that also
+    contains the gate job with a false "names jobs that do not exist". Found by
+    CodeRabbit on fixportal-workflows#26.
+    """
 
     with open(workflow_path, encoding="utf-8") as handle:
         lines = handle.readlines()
     jobs, needs, conditional = read_gate_contract(lines, gate_job)
 
     if not jobs:
+        if on_empty == "skip":
+            return None
         sys.exit(f"{workflow_path}: no jobs found -- refusing to report coverage over nothing.")
     if gate_job not in jobs:
-        sys.exit(f"{workflow_path}: no '{gate_job}' job found.")
-
-    exempt = set(os.environ.get("GATE_EXEMPT", "").replace(",", " ").split())
-    conditional_exempt = set(
-        os.environ.get("GATE_CONDITIONAL_EXEMPT", "").replace(",", " ").split()
-    )
-
-    # A stale exemption is worse than a missing one: it reads as a deliberate decision
-    # while covering nothing, and it survives the rename that made it meaningless.
-    unknown = sorted((exempt | conditional_exempt) - set(jobs))
-    if unknown:
-        sys.exit(f"{workflow_path}: GATE_EXEMPT/GATE_CONDITIONAL_EXEMPT name jobs that do not exist: {', '.join(unknown)}")
+        return False
 
     missing = sorted(set(jobs) - set(needs) - exempt - {gate_job})
     if missing:
@@ -325,6 +373,79 @@ def main(argv):
         f"{workflow_path}: all {len(jobs)} job(s) accounted for by '{gate_job}', "
         "which runs always() and aggregates its needs."
     )
+    return True
+
+
+def split_env(name):
+    return set(os.environ.get(name, "").replace(",", " ").split())
+
+
+def main(argv):
+    if len(argv) < 2:
+        sys.exit("usage: assert_gate_coverage.py <workflow-file|workflow-dir> [gate-job-id]")
+
+    target = argv[1]
+    gate_job = argv[2] if len(argv) > 2 else os.environ.get("GATE_JOB", "ci-gate")
+    exempt = split_env("GATE_EXEMPT")
+    conditional_exempt = split_env("GATE_CONDITIONAL_EXEMPT")
+
+    if not Path(target).is_dir():
+        unknown = sorted((exempt | conditional_exempt) - parse_jobs(target))
+        if unknown:
+            sys.exit(
+                f"{target}: GATE_EXEMPT/GATE_CONDITIONAL_EXEMPT name jobs that do not "
+                f"exist: {', '.join(unknown)}"
+            )
+        check_file(target, gate_job, exempt, conditional_exempt)
+        return
+
+    files = sorted(
+        path.as_posix()
+        for path in list(Path(target).glob("*.yml")) + list(Path(target).glob("*.yaml"))
+    )
+    if not files:
+        sys.exit(f"{target}: no workflow files found -- refusing to report coverage over nothing.")
+
+    file_exempt = {name.replace("\\", "/") for name in split_env("GATE_FILE_EXEMPT")}
+    stale = sorted(file_exempt - set(files))
+    if stale:
+        sys.exit(f"GATE_FILE_EXEMPT names workflows that do not exist: {', '.join(stale)}")
+
+    # Validate GATE_EXEMPT/GATE_CONDITIONAL_EXEMPT against the UNION of every
+    # file's jobs, not any one file -- a job named in either list exists in
+    # exactly one workflow, so checking it per-file reddened every other
+    # workflow that also has a gate job. Found by CodeRabbit on
+    # fixportal-workflows#26.
+    all_jobs = set()
+    for workflow_path in files:
+        all_jobs |= parse_jobs(workflow_path)
+    unknown = sorted((exempt | conditional_exempt) - all_jobs)
+    if unknown:
+        sys.exit(
+            f"{target}: GATE_EXEMPT/GATE_CONDITIONAL_EXEMPT name jobs that do not "
+            f"exist in any workflow: {', '.join(unknown)}"
+        )
+
+    gated = 0
+    for workflow_path in files:
+        result = check_file(workflow_path, gate_job, exempt, conditional_exempt, on_empty="skip")
+        if result is None:
+            print(f"{workflow_path}: no jobs -- not a workflow, skipped.")
+            continue
+        if result:
+            gated += 1
+        elif workflow_path in file_exempt:
+            print(f"{workflow_path}: exempt from '{gate_job}' coverage (GATE_FILE_EXEMPT).")
+        else:
+            sys.exit(
+                f"{workflow_path}: no '{gate_job}' job and not in GATE_FILE_EXEMPT, so its jobs "
+                "are not merge-blocking. Give the file its own gate job wired the same way, or "
+                "exempt it deliberately. Reusable workflow_call workflows belong on the exempt "
+                "list: their jobs run in the caller and must NOT be wired into this repo's gate."
+            )
+
+    if not gated:
+        sys.exit(f"{target}: no file contains a '{gate_job}' job -- refusing to report coverage over nothing.")
 
 
 if __name__ == "__main__":
