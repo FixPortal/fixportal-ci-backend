@@ -87,7 +87,13 @@ foreach ($status in ($allStatuses | Sort-Object)) {
 # RuntimeError is a legitimate final status (Stryker crashed the mutant's host, not an
 # assurance gap), and it is parsed and summarised above — omitting it here would trip
 # the unapproved-status check on a real run.
-$approvedFinalStatuses = @('Killed', 'Timeout', 'Survived', 'NoCoverage', 'CompileError', 'Ignored', 'RuntimeError')
+$approvedFinalStatuses = @('Killed', 'Timeout', 'Survived', 'NoCoverage', 'CompileError', 'RuntimeError', 'Ignored')
+# RuntimeError sits beside CompileError deliberately: both are non-viable mutants
+# (never validly tested), both are excluded from the score denominator, and the
+# summary still tallies each separately so a nonzero count stays visible. Leaving
+# RuntimeError off the approved list would mark any run containing one
+# inconclusive -- and with -FailOnInconclusive in the mutation lane, fail the job
+# -- for a status Stryker itself treats the same as CompileError.
 $unapprovedStatuses = @(
     $statusTotals.GetEnumerator() |
         Where-Object { $_.Key -notin $approvedFinalStatuses -and $_.Value -gt 0 }
