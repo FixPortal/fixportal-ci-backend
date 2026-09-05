@@ -33,6 +33,7 @@ resolve a reusable workflow in another repository, and pinning is checked by SHA
 """
 
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -55,10 +56,53 @@ WORKFLOWS = Path(".github/workflows")
 SHA_LEN = 40
 DIGEST_LEN = 64
 
+# THE ONE REVIEWED EXCEPTION TO THE FIRST-PARTY MAJOR-TAG RULE, SCOPED BY FILENAME.
+#
+# The full-history secret sweep pins `actions/checkout` to a SHA instead of taking the
+# v7 tag, and that is a decision rather than drift. It is the one lane whose whole job
+# is to read every commit in the repository and send verified candidates to the
+# provider that issued them, so the estate fixes the exact reviewed checkout there
+# rather than tracking a tag that can move. scaffold-ci ships the asset that way, and
+# audit-ci's contract test asserts BOTH halves: that secret-sweep.yml carries the pin,
+# and that the private secret gate does not copy it.
+#
+# This checker has to know the same thing. Without it, correcting the rule-ordering
+# defect (L1) turns the estate's own reviewed decision into a hard failure in every
+# repository that carries the sweep -- which is exactly what happened: the fix reported
+# 19 repositories as non-conformant, and the "obvious" remedy of removing the pins was
+# caught by that contract test on the first pull request.
+#
+# Scoped to the FILENAME rather than an environment list on purpose. An exception the
+# caller can widen is an exception that spreads, and the contract this mirrors is
+# itself filename-scoped -- the sweep, and nothing else.
+SHA_PIN_EXEMPT_WORKFLOWS = frozenset({"secret-sweep.yml", "secret-sweep.yaml"})
+
 # Triggers that run in the base repo's privileged context. Both have legitimate uses;
 # none should land without being argued for, so they are refused here rather than
 # reviewed by glob.
 PRIVILEGED_TRIGGERS = ("pull_request_target", "workflow_run")
+
+# OPTIONAL NO-CHECKOUT EXEMPTION, off unless the environment sets it.
+#
+# A workflow that never checks out or executes PR/head code is not the attack shape
+# PRIVILEGED_TRIGGERS refuses -- pull_request_target is dangerous specifically because it
+# combines a write token with attacker-controlled code, and a workflow that only reads the
+# API against the base ref (label operations, a status comment) never does that. Setting
+# PRIVILEGED_TRIGGER_NO_CHECKOUT to a space- or comma-separated list of workflow FILENAMES
+# (matched by name, e.g. "review-tier.yml") exempts those files' PRIVILEGED_TRIGGERS use --
+# but the exemption is enforced, not merely granted: any exempted workflow that also uses
+# `actions/checkout` fails regardless, because that combination is exactly the dangerous
+# shape again.
+#
+# Deliberately opt-in and file-scoped rather than a blanket disable, so a new workflow
+# cannot inherit the exemption by accident, and the CI-guard copy of this script can still
+# stay byte-identical to the shipped asset -- the repo-specific exemption list lives in the
+# WORKFLOW that sets the environment variable, never hardcoded in this file.
+PRIVILEGED_TRIGGER_NO_CHECKOUT = frozenset(
+    entry
+    for entry in os.environ.get("PRIVILEGED_TRIGGER_NO_CHECKOUT", "").replace(",", " ").split()
+    if entry
+)
 
 # OPTIONAL STRICTER MODE, off unless the environment sets it.
 #
@@ -71,8 +115,12 @@ PRIVILEGED_TRIGGERS = ("pull_request_target", "workflow_run")
 # Deliberately opt-in. Defaulting it on with a short list would fail any repo using a
 # third-party action not in it, which across this estate is most of them; a gate that
 # reddens on adoption gets reverted rather than fixed.
+#
+# Entries are lowercased, because the refs they are matched against are: GitHub
+# resolves owner/repository case-insensitively, so an allowlisted action written with
+# different capitalisation must still match its own entry.
 TRUSTED_THIRD_PARTY_ACTIONS = frozenset(
-    entry
+    entry.lower()
     for entry in os.environ.get("TRUSTED_THIRD_PARTY_ACTIONS", "").replace(",", " ").split()
     if entry
 )
@@ -81,6 +129,38 @@ TRUSTED_THIRD_PARTY_ACTIONS = frozenset(
 def load(path):
     with path.open(encoding="utf-8") as handle:
         return yaml.safe_load(handle)
+
+
+def load_local(path):
+    """Parse a local YAML file, or None when it is missing, unparseable, or not a
+    mapping. Used on the DELEGATION paths, where a broken file is reported by its own
+    scan and re-reporting it from every caller would be noise."""
+    if path is None or not Path(path).is_file():
+        return None
+    try:
+        document = load(Path(path))
+    except yaml.YAMLError:
+        return None
+    return document if isinstance(document, dict) else None
+
+
+def ref_owner(ref):
+    """The `owner/repo[/subdir]` part of a ref, LOWERCASED.
+
+    GitHub resolves an action's owner and repository case-insensitively, so
+    `Actions/checkout@<40-hex>` runs actions/checkout while a literal `==` against
+    "actions/checkout" says it does not. That mis-classification reached two places at
+    once: the reference was treated as third-party (and its SHA satisfied the generic
+    pin check), and the no-checkout enforcement behind PRIVILEGED_TRIGGER_NO_CHECKOUT
+    stopped seeing the checkout it exists to refuse. Comparisons are therefore made
+    against this normalised value; the original spelling is kept for diagnostics.
+    """
+    return ref.split("@", 1)[0].lower()
+
+
+def local_key(ref):
+    """A stable identity for a local `./` ref, for the recursion's visited set."""
+    return os.path.normcase(os.path.normpath(ref))
 
 
 def triggers(document):
@@ -175,7 +255,7 @@ def is_pinned(ref):
     if "@" not in ref:
         return False
     revision = ref.rsplit("@", 1)[1]
-    if ref.startswith("docker://"):
+    if ref.lower().startswith("docker://"):
         algorithm, _, digest = revision.partition(":")
         return algorithm == "sha256" and len(digest) == DIGEST_LEN and all(
             char in "0123456789abcdef" for char in digest
@@ -228,13 +308,87 @@ def composite_step_refs(document):
     return refs
 
 
+def workflow_checks_out_code(document):
+    """True when this workflow fetches head/PR code, directly or through a local
+    composite action -- the property PRIVILEGED_TRIGGER_NO_CHECKOUT's exemption
+    requires be absent.
+
+    Checks direct `actions/checkout` `uses:` refs at job/step level, and follows every
+    LOCAL (`./`) delegation -- composite actions and reusable workflows alike, to any
+    depth -- because a workflow that never calls actions/checkout itself but delegates
+    to something that does is exactly as dangerous, and the direct check alone missed
+    it. See checks_out_code for the two escapes a single level left open.
+
+    KNOWN GAP, stated so a pass is not mistaken for more than it is: a `run:` step
+    that fetches code by shelling out (`git clone`, `curl` a tarball, `gh pr checkout`)
+    is not detected. That cannot be closed soundly by a regex over arbitrary shell --
+    the same reasoning `permission_blocks` above states for the write-all scope gap.
+    A workflow relying on that path to defeat the exemption is not caught here; treat
+    PRIVILEGED_TRIGGER_NO_CHECKOUT as reviewed-by-argument (the written rationale each
+    exempted workflow must carry), not as a fully mechanical guarantee.
+    """
+    return checks_out_code(document, set())
+
+
+def checks_out_code(document, visited):
+    """workflow_checks_out_code's recursive body, over one workflow document.
+
+    Local delegation is followed to ANY depth, in both of its forms. A single level
+    left two escapes open. A composite chain `workflow -> ./action-a -> ./action-b ->
+    actions/checkout` stopped at action-a. And a local REUSABLE WORKFLOW was excluded
+    outright, even though `./.github/workflows/_x.yml` runs in the CALLER's context
+    with the caller's token -- so a checkout there is a checkout here, and scanning
+    `_x.yml` on its own never catches the chain because its only trigger is
+    `workflow_call`, which is not privileged.
+
+    `visited` is the cycle guard: local composites and reusable workflows may
+    legitimately reference each other, and a self-reference would otherwise recurse
+    until the stack ran out.
+    """
+    for _, ref in action_refs(document):
+        if ref_owner(ref) == "actions/checkout":
+            return True
+        if not ref.startswith("./"):
+            continue
+        key = local_key(ref)
+        if key in visited:
+            continue
+        visited.add(key)
+        if is_reusable_workflow_ref(ref):
+            inner = load_local(ref)
+            if inner is not None and checks_out_code(inner, visited):
+                return True
+            continue
+        inner = load_local(local_manifest(ref))
+        if inner is not None and composite_checks_out_code(inner, visited):
+            return True
+    return False
+
+
+def composite_checks_out_code(document, visited):
+    """The same question asked of a composite action manifest, recursively."""
+    for ref in composite_step_refs(document):
+        if ref_owner(ref) == "actions/checkout":
+            return True
+        if not ref.startswith("./") or is_reusable_workflow_ref(ref):
+            continue
+        key = local_key(ref)
+        if key in visited:
+            continue
+        visited.add(key)
+        inner = load_local(local_manifest(ref))
+        if inner is not None and composite_checks_out_code(inner, visited):
+            return True
+    return False
+
+
 def check_ref(job, ref, origin, unpinned):
     """One pin check, shared by workflow refs and composite-action refs.
 
     Returns (failed, unpinned), with `unpinned` incremented for a first-party notice.
     """
-    owner = ref.split("@", 1)[0]
-    third_party = not ref.startswith(("actions/", "./", "docker://"))
+    owner = ref_owner(ref)
+    third_party = not owner.startswith(("actions/", "./", "docker://"))
 
     # The allowlist names ACTIONS by `owner/repo`, so it must only gate action refs.
     # `action_refs` also yields container and service IMAGES, which reach here as bare
@@ -257,11 +411,16 @@ def check_ref(job, ref, origin, unpinned):
         and ":" not in owner
     )
 
+    # An action may live in a subdirectory (`owner/repo/subdir/action@<sha>`), but the
+    # allowlist names REPOSITORIES. Comparing the full `owner` value against it means a
+    # subdirectory action from an already-trusted repo never matches its own entry.
+    repository = "/".join(owner.split("/")[:2])
+
     if (
         TRUSTED_THIRD_PARTY_ACTIONS
         and third_party
         and action_shaped
-        and owner not in TRUSTED_THIRD_PARTY_ACTIONS
+        and repository not in TRUSTED_THIRD_PARTY_ACTIONS
     ):
         print(
             f"::error file={origin}::Third-party action '{ref}' ({job}) is not in "
@@ -270,21 +429,45 @@ def check_ref(job, ref, origin, unpinned):
         )
         return True, unpinned
 
+    # actions/* is GitHub's own namespace, and the house standard is the INVERSE of
+    # the third-party rule: first-party actions take the major tag, and audit-ci
+    # grades a SHA-pinned first-party action as drift. "Take the major tag" is
+    # enforced here, not assumed -- a branch ref (actions/checkout@main) or a bare
+    # action name is just as mutable as an unpinned third-party tag and can change
+    # after review.
+    #
+    # Evaluated BEFORE the generic is_pinned() return, not after. A 40-hex SHA on a
+    # first-party action satisfies is_pinned, so the ordering meant such a ref
+    # returned clean without the major-tag rule ever running -- the documented policy
+    # was unenforceable in exactly the case it is written about, and the conformance
+    # count in the summary under-reported by the same references.
+    #
+    # Digest-pinned refs are excluded: only a container IMAGE pins with `@sha256:`,
+    # and an image that happens to sit under an `actions/` name is not an action the
+    # major-tag rule speaks about.
+    if owner.startswith("actions/") and not revision.startswith("sha256:"):
+        if re.fullmatch(r"v\d+(\.\d+)*", revision):
+            # Conformant -- a vN release tag (major or dotted minor/patch). Counted
+            # only so the summary shows the split.
+            return False, unpinned + 1
+        # The sweep's reviewed SHA pin. Deliberately NOT counted as tag-conformant --
+        # it is an exception, and a summary that folded it into the conformant total
+        # would hide the very thing the exception exists to make explicit.
+        if Path(origin).name in SHA_PIN_EXEMPT_WORKFLOWS and is_pinned(ref):
+            print(
+                f"::notice file={origin}::First-party action '{ref}' ({job}) is "
+                "SHA-pinned under the reviewed secret-sweep exception."
+            )
+            return False, unpinned
+        print(
+            f"::error file={origin}::First-party action '{ref}' ({job}) is not on "
+            "a vN release tag (major, or dotted minor/patch). A branch ref or a "
+            "bare action name is mutable and can change after review."
+        )
+        return True, unpinned
+
     if is_pinned(ref):
         return False, unpinned
-
-    # actions/* is GitHub's own namespace, and a mutable tag there means trusting
-    # GitHub -- which every workflow already does by running on their runners. A
-    # third-party mutable tag means trusting that owner forever, with no re-review
-    # when they move it. Only the second is gated. Measured 2026-08-19 across 28
-    # estate repos: 319 unpinned refs, every one sampled `actions/*` -- a hard gate on
-    # all owners would have failed 27 of 28 repos on their next PR.
-    if ref.startswith("actions/"):
-        print(
-            f"::notice file={origin}::'{ref}' ({job}) is not SHA-pinned. First-party "
-            "(GitHub) action, so not failed -- pin it when convenient."
-        )
-        return False, unpinned + 1
 
     print(
         f"::error file={origin}::Third-party action or image '{ref}' ({job}) is not "
@@ -293,14 +476,66 @@ def check_ref(job, ref, origin, unpinned):
     return True, unpinned
 
 
+def check_local_action(job, ref, origin, unpinned, visited):
+    """Pin-check one local composite action's own `uses:` refs, and recursively the
+    local composites IT calls. Returns (failed, unpinned).
+
+    A local composite is this repository's own reviewed code, but the actions it calls
+    are not -- and they are invisible to a scan that stops at .github/workflows.
+    Opening only the composites a workflow names DIRECTLY left the same hole one level
+    down: `workflow -> ./action-a -> ./action-b -> third-party/action@v1` was reported
+    as fully pinned while action-b's mutable third-party ref was never looked at.
+
+    `visited` carries across the whole run, and its guard sits at ENTRY rather than
+    around the recursive call. Guarding only the nested call still let a composite
+    referenced by two workflows be scanned twice: every pin error inside it was
+    printed twice and the first-party conformance total in the summary counted it
+    twice. The pass/fail verdict was unaffected; the report was not.
+    """
+    key = local_key(ref)
+    if key in visited:
+        return False, unpinned
+    visited.add(key)
+
+    failed = False
+    manifest = local_manifest(ref)
+    if manifest is None:
+        print(
+            f"::error file={origin}::Local action '{ref}' ({job}) has no "
+            "action.yml/action.yaml. The ref cannot resolve at run time."
+        )
+        return True, unpinned
+    try:
+        inner = load(manifest)
+    except yaml.YAMLError as error:
+        print(f"::error file={manifest}::Not parseable as YAML: {error}")
+        return True, unpinned
+    if not isinstance(inner, dict):
+        return False, unpinned
+
+    for inner_ref in composite_step_refs(inner):
+        bad, unpinned = check_ref(f"{job} -> {ref}", inner_ref, manifest, unpinned)
+        failed = failed or bad
+        if not inner_ref.startswith("./") or is_reusable_workflow_ref(inner_ref):
+            continue
+        bad, unpinned = check_local_action(
+            f"{job} -> {ref}", inner_ref, manifest, unpinned, visited
+        )
+        failed = failed or bad
+    return failed, unpinned
+
+
 def main():
     if not WORKFLOWS.is_dir():
         print(f"::error::{WORKFLOWS} does not exist; the guard cannot assert anything.")
         return 2
 
     failed = False
-    unpinned_first_party = 0
+    first_party_tag = 0
     scanned = 0
+    # Shared across every workflow: a composite reached from two of them is checked
+    # once, and a reference cycle terminates.
+    local_visited = set()
 
     paths = sorted(
         path
@@ -328,15 +563,35 @@ def main():
             failed = True
             events = []
 
+        exempted = path.name in PRIVILEGED_TRIGGER_NO_CHECKOUT
+        uses_checkout = workflow_checks_out_code(document)
         for event in events:
             if event in PRIVILEGED_TRIGGERS:
+                if exempted and not uses_checkout:
+                    print(
+                        f"::notice file={path}::Target-context trigger exempted via "
+                        "PRIVILEGED_TRIGGER_NO_CHECKOUT -- this workflow never checks out "
+                        "head code."
+                    )
+                    continue
+                if exempted and uses_checkout:
+                    print(
+                        f"::error file={path}::This workflow is named in "
+                        "PRIVILEGED_TRIGGER_NO_CHECKOUT but also uses actions/checkout -- "
+                        "that combination is exactly the dangerous shape the exemption "
+                        "requires absence of. Remove the checkout, or remove the exemption "
+                        "and restructure onto plain pull_request."
+                    )
+                    failed = True
+                    continue
                 print(
                     f"::error file={path}::This workflow uses a target-context trigger "
                     "(see the refused event list in this script), which runs in the base "
                     "repository's context with its secrets and a write-scoped token while "
                     "able to reach untrusted head code. Restructure so untrusted code runs "
-                    "under the plain pull_request trigger, or remove this assertion "
-                    "deliberately with a written rationale."
+                    "under the plain pull_request trigger, or name this file in "
+                    "PRIVILEGED_TRIGGER_NO_CHECKOUT if it genuinely never checks out head "
+                    "code, with a written rationale in the workflow itself."
                 )
                 failed = True
 
@@ -362,7 +617,7 @@ def main():
                 failed = True
 
         for job, ref in action_refs(document):
-            bad, unpinned_first_party = check_ref(job, ref, path, unpinned_first_party)
+            bad, first_party_tag = check_ref(job, ref, path, first_party_tag)
             failed = failed or bad
 
             if not ref.startswith("./"):
@@ -382,30 +637,10 @@ def main():
                     )
                     failed = True
                 continue
-            manifest = local_manifest(ref)
-            if manifest is None:
-                print(
-                    f"::error file={path}::Local action '{ref}' ({job}) has no "
-                    "action.yml/action.yaml. The ref cannot resolve at run time."
-                )
-                failed = True
-                continue
-            try:
-                inner = load(manifest)
-            except yaml.YAMLError as error:
-                print(f"::error file={manifest}::Not parseable as YAML: {error}")
-                failed = True
-                continue
-            if not isinstance(inner, dict):
-                continue
-            # A local composite action is this repository's own reviewed code, but the
-            # actions IT calls are not -- and they are invisible to a scan that stops
-            # at .github/workflows.
-            for inner_ref in composite_step_refs(inner):
-                bad, unpinned_first_party = check_ref(
-                    f"{job} -> {ref}", inner_ref, manifest, unpinned_first_party
-                )
-                failed = failed or bad
+            bad, first_party_tag = check_local_action(
+                job, ref, path, first_party_tag, local_visited
+            )
+            failed = failed or bad
 
     if failed:
         return 1
@@ -419,10 +654,16 @@ def main():
         if TRUSTED_THIRD_PARTY_ACTIONS
         else ""
     )
+    mode += (
+        f", {len(PRIVILEGED_TRIGGER_NO_CHECKOUT)} workflow(s) exempted from the "
+        "target-context trigger refusal"
+        if PRIVILEGED_TRIGGER_NO_CHECKOUT
+        else ""
+    )
     print(
         f"Workflow hygiene: {scanned} workflow(s) scanned -- no target-context trigger, "
         f"no write-all token, every third-party action and container image pinned "
-        f"({unpinned_first_party} first-party ref(s) unpinned, not gated){mode}."
+        f"({first_party_tag} first-party ref(s) on a vN release tag, conformant){mode}."
     )
     return 0
 
