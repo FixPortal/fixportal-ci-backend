@@ -25,15 +25,23 @@ $rows = foreach ($file in $files) {
     foreach ($mutant in $mutants) {
         [void]$allStatuses.Add([string]$mutant.status)
     }
+    $survivedCount = @($mutants | Where-Object status -eq 'Survived').Count
+    $noCoverageCount = @($mutants | Where-Object status -eq 'NoCoverage').Count
     [pscustomobject]@{
         file         = [System.IO.Path]::GetFileName($file.Name)
         killed       = @($mutants | Where-Object status -eq 'Killed').Count
         timeout      = @($mutants | Where-Object status -eq 'Timeout').Count
-        survived     = @($mutants | Where-Object status -eq 'Survived').Count
-        noCoverage   = @($mutants | Where-Object status -eq 'NoCoverage').Count
+        survived     = $survivedCount
+        noCoverage   = $noCoverageCount
         compileError = @($mutants | Where-Object status -eq 'CompileError').Count
         runtimeError = @($mutants | Where-Object status -eq 'RuntimeError').Count
         ignored      = @($mutants | Where-Object status -eq 'Ignored').Count
+        # Stryker's own undetected total, per file. The hotspot table ranks on THIS, not
+        # on `survived` alone: both statuses count identically against the score, so a
+        # file with 40 NoCoverage mutants and none survived was dragging the score down
+        # while the report printed "No surviving mutants" over it - the one file most
+        # worth opening was the one the summary hid.
+        undetected   = $survivedCount + $noCoverageCount
         total        = $mutants.Count
     }
 }
@@ -71,8 +79,8 @@ $valid = $detected + $undetected
 $score = if ($valid -eq 0) { 0 } else { [math]::Round(($detected / $valid) * 100, 1) }
 $hotspots = @(
     $rows |
-        Where-Object survived -gt 0 |
-        Sort-Object -Property @{ Expression = 'survived'; Descending = $true }, file |
+        Where-Object undetected -gt 0 |
+        Sort-Object -Property @{ Expression = 'undetected'; Descending = $true }, file |
         Select-Object -First 5
 )
 $statusTotals = [ordered]@{}
@@ -160,14 +168,16 @@ if ($extraStatuses.Count -gt 0) {
 }
 
 if ($hotspots.Count -gt 0) {
-    $markdown += "| File | Killed | Survived | Ignored |"
-    $markdown += "| --- | ---: | ---: | ---: |"
+    # No coverage is a column, not a footnote: it is half of what the ranking is now
+    # ordered by, and a row showing 0 survived / 31 no-coverage is otherwise unreadable.
+    $markdown += "| File | Killed | Survived | No coverage | Ignored |"
+    $markdown += "| --- | ---: | ---: | ---: | ---: |"
     foreach ($hotspot in $hotspots) {
-        $markdown += "| $($hotspot.file) | $($hotspot.killed) | $($hotspot.survived) | $($hotspot.ignored) |"
+        $markdown += "| $($hotspot.file) | $($hotspot.killed) | $($hotspot.survived) | $($hotspot.noCoverage) | $($hotspot.ignored) |"
     }
 }
 else {
-    $markdown += "No surviving mutants."
+    $markdown += "No undetected mutants."
 }
 
 $markdown += ''
