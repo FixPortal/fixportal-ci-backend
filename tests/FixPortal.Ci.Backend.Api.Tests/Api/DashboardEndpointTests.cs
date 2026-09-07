@@ -51,19 +51,19 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                     if (githubHandler is not null)
                     {
                         _ = services.RemoveAll<GitHubOrgClient>();
-                        var http = new HttpClient(githubHandler) { BaseAddress = new Uri("https://api.github.com/") };
-                        _ = services.AddSingleton(http);
-                        _ = services.AddSingleton(
-                            new GitHubOrgClient(
-                                http,
-                                Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "test-token" }),
-                                Options.Create(
-                                    new DashboardOptions { SnapshotPath = "snapshot.json", RefreshSeconds = 60 }
-                                ),
-                                new GitHubETagStore(),
-                                state
-                            )
-                        );
+                        _ = services.AddSingleton(_ => new HttpClient(githubHandler)
+                        {
+                            BaseAddress = new Uri("https://api.github.com/"),
+                        });
+                        _ = services.AddSingleton(provider => new GitHubOrgClient(
+                            provider.GetRequiredService<HttpClient>(),
+                            Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "test-token" }),
+                            Options.Create(
+                                new DashboardOptions { SnapshotPath = "snapshot.json", RefreshSeconds = 60 }
+                            ),
+                            new GitHubETagStore(),
+                            state
+                        ));
                     }
                 });
             })
@@ -72,9 +72,19 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     private sealed class MergeHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
     {
         public int RequestCount { get; private set; }
+        public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public HttpMethod? Method { get; private set; }
         public string? Path { get; private set; }
         public string? Body { get; private set; }
+
+        protected override void Dispose(bool disposing)
+        {
+            base.Dispose(disposing);
+            if (disposing)
+            {
+                Disposed.TrySetResult();
+            }
+        }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -90,6 +100,26 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
         }
+    }
+
+    [Fact]
+    public async Task Test_host_should_dispose_its_GitHub_client()
+    {
+        using var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
+        await using (var testFactory = new WebApplicationFactory<Program>())
+        {
+            var tests = new DashboardEndpointTests(testFactory);
+            using var client = tests.CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+            using var request = CreateMergeRequest("public-repo", 42);
+            using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            handler.RequestCount.Should().Be(1);
+            handler.Disposed.Task.IsCompleted.Should().BeFalse();
+        }
+
+        // Program.RunAsync can finish disposing the host on its own continuation.
+        await handler.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
     }
 
     private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
