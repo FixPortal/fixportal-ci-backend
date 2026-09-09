@@ -768,9 +768,12 @@ def step_can_fail(block, span, key_indent):
         match = run_key.match(block[i])
         if not match or len(match.group(1)) != key_indent:
             continue
-        value = strip_comment(match.group(2)).strip()
+        raw = match.group(2).strip()
+        value = decode_yaml_scalar(raw)
+        if value == raw:
+            value = decode_yaml_scalar(strip_comment(raw).strip())
         if value and not BLOCK_SCALAR.match(value):
-            body = [decode_yaml_scalar(value)]
+            body = [value]
         else:
             body, _ = continuation_lines(block, i, key_indent)
         # JOIN first, then fold backslash continuations, so quote state and continued

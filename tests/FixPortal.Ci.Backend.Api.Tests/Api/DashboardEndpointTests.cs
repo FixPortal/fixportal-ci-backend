@@ -144,6 +144,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
 
     private sealed class BlockingMergeHandler : HttpMessageHandler
     {
+        private readonly Lock _concurrencyLock = new();
         private int _active;
         private int _requestCount;
         private int _maxConcurrency;
@@ -159,7 +160,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         )
         {
             var active = Interlocked.Increment(ref _active);
-            lock (this)
+            lock (_concurrencyLock)
             {
                 _maxConcurrency = Math.Max(_maxConcurrency, active);
             }
@@ -773,7 +774,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         var mergeStates = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>();
         mergeStates.Update(
             "public-repo",
-            new Dictionary<int, PrMergeState> { [42] = new(42, false, "MERGEABLE", "CLEAN", HeadSha) }
+            new Dictionary<int, PrMergeState> { [42] = new(42, true, "MERGEABLE", "CLEAN", HeadSha) }
         );
         var handler = new MergeHandler(HttpStatusCode.Conflict, """{"message":"Head branch was modified"}""");
         var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler, mergeStates);
@@ -785,6 +786,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         _ = mergeStates.TryGet("public-repo", out var cached).Should().BeTrue();
         var rejected = cached![42];
         _ = rejected.HeadSha.Should().Be(HeadSha);
+        _ = rejected.IsDraft.Should().BeTrue();
         _ = rejected.IsMergeClean.Should().BeFalse();
         var pr = new PullRequest(
             42,

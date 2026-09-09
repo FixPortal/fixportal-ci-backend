@@ -46,7 +46,7 @@ jobs:
             "contains(needs.*.result, 'failure') && 'left' == 'right'",
             "contains(needs.*.result, 'failure') && 1 == 2",
             "contains(needs.*.result, 'failure') && 'same' != 'SAME'",
-            "! true && contains(needs.*.result, 'failure')",
+            '"!true && contains(needs.*.result, \'failure\')"',
             "contains(needs.*.result, 'failure') && 1 > 2",
         ):
             with self.subTest(condition=condition):
@@ -60,7 +60,14 @@ jobs:
 
     def test_quoted_yaml_run_scalars_are_decoded_before_shell_inspection(self):
         condition = "contains(needs.*.result, 'failure')"
-        for command in ('"exit 1"', "'exit 1'", '"echo \\"blocked\\"; exit 1"', "'echo ''blocked''; exit 1'"):
+        for command in (
+            '"exit 1"',
+            "'exit 1'",
+            '"echo \\"blocked\\"; exit 1"',
+            "'echo ''blocked''; exit 1'",
+            '"echo \'#blocked\'; exit 1"',
+            '"exit 1" # gate',
+        ):
             with self.subTest(command=command):
                 self.assertEqual(0, self.run_checker(condition, command).returncode)
 

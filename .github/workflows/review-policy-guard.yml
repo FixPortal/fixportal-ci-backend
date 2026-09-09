@@ -112,7 +112,7 @@ jobs:
           # ci.yml path if this repo's main workflow is named differently.
           for required in .claude/review-policy.json .coderabbit.yaml \
             .github/workflows/ci.yml .github/workflows/review-policy-guard.yml \
-            .github/scripts/assert_gate_coverage.py \
+            .github/scripts/assert_gate_coverage.py .github/scripts/test_assert_gate_coverage.py \
             .github/scripts/assert_workflow_hygiene.py; do
             if ! jq -e --arg r "$required" '.high | index($r)' "$policy" >/dev/null; then
               echo "::error file=$policy::'$required' is missing from the high list. An edit to it would get the lighter review."
