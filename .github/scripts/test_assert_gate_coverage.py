@@ -8,6 +8,10 @@ from pathlib import Path
 
 SCRIPT = Path(__file__).with_name("assert_gate_coverage.py")
 
+# A gate must fail for BOTH terminal results: a cancelled dependency is not a passing
+# one. Every condition a test expects to be ACCEPTED therefore covers both.
+BOTH = "contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')"
+
 
 class GateCoverageTests(unittest.TestCase):
     def run_checker(self, condition, command):
@@ -56,12 +60,12 @@ jobs:
 
     def test_literal_comparisons_follow_github_equality_semantics(self):
         for comparison in ("'VALUE' == 'value'", "'1' == 1", "! false", "2 > 1"):
-            condition = f"contains(needs.*.result, 'failure') && {comparison}"
+            condition = f"({BOTH}) && {comparison}"
             with self.subTest(comparison=comparison):
                 self.assertEqual(0, self.run_checker(condition, "exit 1").returncode)
 
     def test_quoted_yaml_run_scalars_are_decoded_before_shell_inspection(self):
-        condition = "contains(needs.*.result, 'failure')"
+        condition = BOTH
         for command in (
             '"exit 1"',
             "'exit 1'",
@@ -74,7 +78,7 @@ jobs:
                 self.assertEqual(0, self.run_checker(condition, command).returncode)
 
     def test_exit_status_must_be_in_the_shell_nonzero_range(self):
-        condition = "contains(needs.*.result, 'failure')"
+        condition = BOTH
         self.assertEqual(0, self.run_checker(condition, "exit 255").returncode)
         result = self.run_checker(condition, "exit 256")
         self.assertNotEqual(0, result.returncode)
