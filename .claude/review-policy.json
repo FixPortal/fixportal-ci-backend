@@ -45,6 +45,7 @@
   "version": 1,
 
   "high": [
+    ".github/scripts/summarize_coverage.py",
     ".claude/review-policy.json",
     ".coderabbit.yaml",
     ".github/workflows/review-policy-guard.yml",
