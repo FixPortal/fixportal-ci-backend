@@ -162,20 +162,22 @@ public static class DashboardEndpoints
                         repository.Name,
                         current =>
                         {
+                            PrMergeState? existing = null;
+                            _ = current?.TryGetValue(merge.PullNumber, out existing);
                             if (
-                                current?.TryGetValue(merge.PullNumber, out var existing) == true
+                                existing is not null
                                 && !string.IsNullOrEmpty(existing.HeadSha)
                                 && !DashboardRefreshService.SameHead(existing.HeadSha, merge.HeadSha)
                             )
                             {
-                                return current;
+                                return current!;
                             }
                             var updated =
                                 current?.ToDictionary(pair => pair.Key, pair => pair.Value)
                                 ?? new Dictionary<int, PrMergeState>();
                             updated[merge.PullNumber] = new PrMergeState(
                                 merge.PullNumber,
-                                false,
+                                existing?.IsDraft ?? false,
                                 "CONFLICTING",
                                 "DIRTY",
                                 merge.HeadSha

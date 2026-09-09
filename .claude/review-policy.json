@@ -56,7 +56,8 @@
     "global.json",
     "Directory.Build.props",
     ".github/workflows/ci.yml",
-    ".github/scripts/assert_gate_coverage.py"
+    ".github/scripts/assert_gate_coverage.py",
+    ".github/scripts/test_assert_gate_coverage.py"
   ],
 
   "low": [
