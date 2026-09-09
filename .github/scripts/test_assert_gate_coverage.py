@@ -189,5 +189,56 @@ jobs:
         self.assertIn("probe.py", result.stderr)
 
 
+    def test_a_gate_script_after_a_literal_hash_in_a_quoted_scalar_is_seen(self):
+        """A `#` inside a QUOTED YAML scalar is data, not a comment.
+
+        Truncating there hid the script that follows, so it escaped the HIGH-tier
+        requirement -- fail-open on this control. Both quote styles, because their
+        escape rules differ.
+        """
+        for command in (
+            '"printf \'tag # audit\'; python .github/scripts/probe.py"',
+            '\'printf "tag # audit"; python .github/scripts/probe.py\'',
+        ):
+            with self.subTest(command=command):
+                workflow = f"""name: test
+on: push
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - run: {command}
+  ci-gate:
+    if: always()
+    needs: [build]
+    runs-on: ubuntu-latest
+    steps:
+      - if: {BOTH}
+        run: exit 1
+"""
+                result = self.run_in_repo(
+                    workflow,
+                    '{"version":1,"high":[],"low":[]}',
+                    [".github/scripts/probe.py"],
+                )
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("probe.py", result.stderr)
+
+    def test_a_quoted_run_body_carrying_a_literal_hash_still_fails(self):
+        """The same bug from the other side: truncating left an unterminated fragment,
+        so a gate that DOES fail read as one that cannot."""
+        result = self.run_checker(BOTH, '\'echo " # progress"; exit 1\' # gate')
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_an_unquoted_run_value_is_truncated_by_yaml_at_a_hash(self):
+        """SHELL quotes do not protect a hash from YAML.
+
+        In a plain scalar the runner never receives what follows ` #`, so vouching for
+        it would vouch for a command that does not run.
+        """
+        result = self.run_checker(BOTH, "echo 'tag # audit'; exit 1")
+        self.assertNotEqual(0, result.returncode)
+
+
 if __name__ == "__main__":
     unittest.main()
