@@ -35,6 +35,8 @@ out with CRLF got `set: pipefail: invalid option name` and a permanently red req
 check. Python does not care about CRLF, so the failure mode is designed out rather than
 patched per repo.
 """
+import json
+import math
 import os
 import re
 import sys
@@ -50,13 +52,6 @@ COMMENT_OR_BLANK = re.compile(r"^\s*(?:\#.*)?$")
 # the assertion that matters: a gate declaring `needs: [build, lint]` whose condition
 # names only `build` reports success while `lint` fails.
 NEEDS_RESULT = re.compile(r"needs\.([A-Za-z0-9_*-]+)\.result")
-# A `run:` command that ends the shell non-zero. `exit 0`, `true`, or no exit at all
-# leaves the step incapable of failing whatever its condition says.
-NONZERO_EXIT = re.compile(r"^(?:exit\s+0*[1-9][0-9]*|false)\b")
-# Where one shell command ends and the next begins. Matching NONZERO_EXIT only at the
-# start of a line rejected the ordinary one-liner `if [ -n "$x" ]; then exit 1; fi`,
-# which is a false RED on a correct gate.
-COMMAND_BOUNDARY = re.compile(r"(?:;|&&|\|\||\bthen\b|\belse\b|\bdo\b|\{)")
 BACKSLASH = "\\"
 
 # The gate step's failing command, in the forms this checker will vouch for. Anything
@@ -79,7 +74,8 @@ _REDIR = r"(?:\s*[12]?>>?\s*(?:&[12]|[^\s;|&]+))*"
 # `echo "::error::..." >&2 && exit 1`, and an echo body that could swallow `>` or `&`
 # would either miss the separator that follows or run past it.
 _ECHO = rf"(?:echo|printf)\s+[^\n|&;<>]*{_REDIR}"
-_FAIL = rf"(?:exit\s+0*[1-9][0-9]*|false){_REDIR}"
+_NONZERO_STATUS = r"0*(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])"
+_FAIL = rf"(?:exit\s+{_NONZERO_STATUS}|false){_REDIR}"
 ACCEPTED_FAILING_FORMS = tuple(
     re.compile(pattern)
     for pattern in (
@@ -101,11 +97,11 @@ ACCEPTED_FAILING_FORMS = tuple(
         # change with its own rollout. (CodeRabbit, PR #135.)
         #
         # echo "..." ; exit 1     (message then failure, either separator style)
-        rf"{_ECHO}\s*(?:;|&&)\s*exit\s+0*[1-9][0-9]*",
+        rf"{_ECHO}\s*(?:;|&&)\s*exit\s+{_NONZERO_STATUS}",
         # if <test>; then <echo>; exit 1; fi   -- the house one-liner
-        rf"if\s+.+?;\s*then\s+(?:{_ECHO};\s*)?exit\s+0*[1-9][0-9]*;\s*fi",
+        rf"if\s+.+?;\s*then\s+(?:{_ECHO};\s*)?exit\s+{_NONZERO_STATUS};\s*fi",
         # if <test>; then exit 1; fi   with the echo inside on its own already covered
-        r"if\s+.+?;\s*then\s+exit\s+0*[1-9][0-9]*;\s*fi",
+        rf"if\s+.+?;\s*then\s+exit\s+{_NONZERO_STATUS};\s*fi",
         # PowerShell. `shell: pwsh` gate steps are house style in the .NET repos and
         # `throw 'upstream failed'` is how one fails, so rejecting it was a false RED
         # on a correct gate - the direction that gets a working control deleted to make
@@ -435,6 +431,179 @@ def normalise_condition(value):
     return value.replace(" ", "")
 
 
+def decode_yaml_scalar(value):
+    """Decode the quoted single-line YAML scalars used for `run:` and `if:` values."""
+    if len(value) < 2 or value[0] != value[-1] or value[0] not in "'\"":
+        return value
+    if value[0] == "'":
+        inner = value[1:-1]
+        return value if "'" in inner.replace("''", "") else inner.replace("''", "'")
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return value
+
+
+def split_top_level(expression, operator):
+    parts = []
+    start = 0
+    depth = 0
+    quote = None
+    index = 0
+    while index < len(expression):
+        char = expression[index]
+        if quote == '"' and char == BACKSLASH and index + 1 < len(expression):
+            index += 2
+            continue
+        if quote == "'" and char == "'" and index + 1 < len(expression) and expression[index + 1] == "'":
+            index += 2
+            continue
+        if quote is not None:
+            if char == quote:
+                quote = None
+            index += 1
+            continue
+        if char in "'\"":
+            quote = char
+        elif char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif depth == 0 and expression.startswith(operator, index):
+            parts.append(expression[start:index])
+            index += len(operator)
+            start = index
+            continue
+        index += 1
+    parts.append(expression[start:])
+    return parts
+
+
+def strip_outer_parentheses(expression):
+    while expression.startswith("(") and expression.endswith(")"):
+        depth = 0
+        closes_at_end = True
+        quote = None
+        for index, char in enumerate(expression):
+            if quote is not None:
+                if char == quote and (quote == "'" or index == 0 or expression[index - 1] != BACKSLASH):
+                    quote = None
+                continue
+            if char in "'\"":
+                quote = char
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0 and index != len(expression) - 1:
+                    closes_at_end = False
+                    break
+        if not closes_at_end:
+            break
+        expression = expression[1:-1].strip()
+    return expression
+
+
+_UNKNOWN = object()
+_LITERAL = r"(?:true|false|null|-?[0-9]+(?:\.[0-9]+)?|'(?:''|[^'])*'|\"(?:\\.|[^\"])*\")"
+
+
+def literal_value(value):
+    lowered = value.lower()
+    if lowered == "true":
+        return True
+    if lowered == "false":
+        return False
+    if lowered == "null":
+        return None
+    if value.startswith("'"):
+        return value[1:-1].replace("''", "'")
+    if value.startswith('"'):
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return _UNKNOWN
+    try:
+        return float(value)
+    except ValueError:
+        return _UNKNOWN
+
+
+def github_equal(left, right):
+    if type(left) is type(right):
+        return left.casefold() == right.casefold() if isinstance(left, str) else left == right
+
+    def to_number(value):
+        if value is None:
+            return 0.0
+        if isinstance(value, bool):
+            return 1.0 if value else 0.0
+        if isinstance(value, float):
+            return value
+        if isinstance(value, str):
+            if not value:
+                return 0.0
+            try:
+                parsed = json.loads(value)
+                return float(parsed) if isinstance(parsed, (int, float)) and not isinstance(parsed, bool) else math.nan
+            except (json.JSONDecodeError, ValueError, OverflowError):
+                return math.nan
+        return math.nan
+
+    left_number = to_number(left)
+    right_number = to_number(right)
+    return not (math.isnan(left_number) or math.isnan(right_number)) and left_number == right_number
+
+
+def static_truth(condition):
+    """Fold only literal boolean branches; unknown GitHub context/function values stay unknown."""
+    expression = decode_yaml_scalar(strip_comment(condition).strip()).strip()
+    if expression.startswith("${{") and expression.endswith("}}"):
+        expression = expression[3:-2].strip()
+    expression = strip_outer_parentheses(expression)
+
+    parts = split_top_level(expression, "||")
+    if len(parts) > 1:
+        values = [static_truth(part) for part in parts]
+        if any(value is True for value in values):
+            return True
+        return False if all(value is False for value in values) else _UNKNOWN
+
+    parts = split_top_level(expression, "&&")
+    if len(parts) > 1:
+        values = [static_truth(part) for part in parts]
+        if any(value is False for value in values):
+            return False
+        return True if all(value is True for value in values) else _UNKNOWN
+
+    expression = strip_outer_parentheses(expression)
+    if expression.startswith("!"):
+        value = static_truth(expression[1:])
+        return not value if value is True or value is False else _UNKNOWN
+    if expression.lower() == "true":
+        return True
+    if expression.lower() == "false":
+        return False
+    match = re.fullmatch(rf"\s*({_LITERAL})\s*(==|!=|<=|>=|<|>)\s*({_LITERAL})\s*", expression, re.IGNORECASE)
+    if match:
+        left = literal_value(match.group(1))
+        right = literal_value(match.group(3))
+        if left is _UNKNOWN or right is _UNKNOWN:
+            return _UNKNOWN
+        operation = match.group(2)
+        if operation in ("==", "!="):
+            return github_equal(left, right) == (operation == "==")
+        if not isinstance(left, float) or not isinstance(right, float):
+            return _UNKNOWN
+        return {
+            "<": left < right,
+            "<=": left <= right,
+            ">": left > right,
+            ">=": left >= right,
+        }[operation]
+    return _UNKNOWN
+
+
 def continuation_lines(block, index, indent):
     """The block-scalar body opened on `block[index]`, plus the index after it.
 
@@ -601,7 +770,7 @@ def step_can_fail(block, span, key_indent):
             continue
         value = strip_comment(match.group(2)).strip()
         if value and not BLOCK_SCALAR.match(value):
-            body = [value]
+            body = [decode_yaml_scalar(value)]
         else:
             body, _ = continuation_lines(block, i, key_indent)
         # JOIN first, then fold backslash continuations, so quote state and continued
@@ -740,6 +909,8 @@ def assert_gate_semantics(workflow_path, lines, jobs, gate_job, needs):
     referenced = set()
     failing = []
     for condition, index in step_conditions(block, step_indent):
+        if static_truth(condition) is False:
+            continue
         ids = NEEDS_RESULT.findall(condition)
         if not ids:
             continue

@@ -462,6 +462,9 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Test gate coverage checker
+        run: python3 .github/scripts/test_assert_gate_coverage.py
+
       - name: Assert every job in this workflow is gated
         env:
           GATE_EXEMPT: publish deploy

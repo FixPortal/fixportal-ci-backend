@@ -21,12 +21,19 @@ namespace FixPortal.Ci.Backend.Api.Tests.Api;
 public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     : IClassFixture<WebApplicationFactory<Program>>
 {
+    private const string HeadSha = "0123456789abcdef0123456789abcdef01234567";
+
     private HttpClient CreateClient(DashboardSnapshot? seed) => CreateClient(seed, adminKey: null);
 
     private HttpClient CreateClient(DashboardSnapshot? seed, string? adminKey) =>
         CreateClient(seed, adminKey, githubHandler: null);
 
-    private HttpClient CreateClient(DashboardSnapshot? seed, string? adminKey, HttpMessageHandler? githubHandler) =>
+    private HttpClient CreateClient(
+        DashboardSnapshot? seed,
+        string? adminKey,
+        HttpMessageHandler? githubHandler,
+        PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>? mergeStates = null
+    ) =>
         factory
             .WithWebHostBuilder(builder =>
             {
@@ -48,6 +55,11 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                         state.Update(seed, DashboardSnapshotState.ComputePublicSnapshot(seed, seed.PublicCiTrend));
                     }
                     _ = services.AddSingleton(state);
+                    if (mergeStates is not null)
+                    {
+                        _ = services.RemoveAll<PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>>();
+                        _ = services.AddSingleton(mergeStates);
+                    }
                     if (githubHandler is not null)
                     {
                         _ = services.RemoveAll<GitHubOrgClient>();
@@ -128,6 +140,45 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             HttpRequestMessage request,
             CancellationToken cancellationToken
         ) => Task.FromException<HttpResponseMessage>(exception);
+    }
+
+    private sealed class BlockingMergeHandler : HttpMessageHandler
+    {
+        private int _active;
+        private int _requestCount;
+        private int _maxConcurrency;
+
+        public TaskCompletionSource FirstEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int MaxConcurrency => _maxConcurrency;
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var active = Interlocked.Increment(ref _active);
+            lock (this)
+            {
+                _maxConcurrency = Math.Max(_maxConcurrency, active);
+            }
+            if (Interlocked.Increment(ref _requestCount) == 1)
+            {
+                FirstEntered.TrySetResult();
+            }
+            else
+            {
+                SecondEntered.TrySetResult();
+            }
+
+            await Release.Task.WaitAsync(cancellationToken);
+            _ = Interlocked.Decrement(ref _active);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("""{"merged":true,"sha":"abc123"}""", Encoding.UTF8, "application/json"),
+            };
+        }
     }
 
     [Fact]
@@ -681,6 +732,24 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         _ = handler.Path.Should().Be($"/repos/FixPortal/{repo}/pulls/42/merge");
         using var githubBody = JsonDocument.Parse(handler.Body!);
         _ = githubBody.RootElement.GetProperty("merge_method").GetString().Should().Be("rebase");
+        _ = githubBody.RootElement.GetProperty("sha").GetString().Should().Be(HeadSha);
+    }
+
+    [Fact]
+    public async Task Merge_should_reject_a_request_without_the_selected_head_sha()
+    {
+        var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/dashboard/merge")
+        {
+            Content = JsonContent.Create(new { repo = "public-repo", pullNumber = 42 }),
+        };
+        request.Headers.Add("X-Admin-Key", AdminKey);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.BadRequest);
+        _ = handler.RequestCount.Should().Be(0);
     }
 
     [Theory]
@@ -696,6 +765,83 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
 
         _ = response.StatusCode.Should().Be(HttpStatusCode.Conflict);
         _ = (await ReadErrorAsync(response)).Should().Be("Pull request is not mergeable");
+    }
+
+    [Fact]
+    public async Task Merge_rejection_should_replace_the_cached_verdict_for_the_selected_head()
+    {
+        var mergeStates = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>();
+        mergeStates.Update(
+            "public-repo",
+            new Dictionary<int, PrMergeState> { [42] = new(42, false, "MERGEABLE", "CLEAN", HeadSha) }
+        );
+        var handler = new MergeHandler(HttpStatusCode.Conflict, """{"message":"Head branch was modified"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler, mergeStates);
+        using var request = CreateMergeRequest("public-repo", 42);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        _ = mergeStates.TryGet("public-repo", out var cached).Should().BeTrue();
+        var rejected = cached![42];
+        _ = rejected.HeadSha.Should().Be(HeadSha);
+        _ = rejected.IsMergeClean.Should().BeFalse();
+        var pr = new PullRequest(
+            42,
+            "Ready PR",
+            "alice",
+            "https://github.com/FixPortal/public-repo/pull/42",
+            false,
+            Instant.FromUtc(2026, 5, 31, 0, 0),
+            HeadSha: HeadSha
+        );
+        _ = DashboardRefreshService
+            .ApplyReadyToMerge([pr], cached, reviewsConfigured: false, new HashSet<string>())
+            .Should()
+            .ContainSingle()
+            .Which.ReadyToMerge.Should()
+            .BeFalse();
+    }
+
+    [Fact]
+    public async Task Stale_merge_rejection_should_not_replace_a_newer_cached_head()
+    {
+        const string newerHead = "abcdef0123456789abcdef0123456789abcdef01";
+        var newer = new PrMergeState(42, false, "MERGEABLE", "CLEAN", newerHead);
+        var mergeStates = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>();
+        mergeStates.Update("public-repo", new Dictionary<int, PrMergeState> { [42] = newer });
+        var handler = new MergeHandler(HttpStatusCode.Conflict, """{"message":"Head branch was modified"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler, mergeStates);
+        using var request = CreateMergeRequest("public-repo", 42);
+
+        _ = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = mergeStates.TryGet("public-repo", out var cached).Should().BeTrue();
+        _ = cached![42].Should().BeSameAs(newer);
+    }
+
+    [Fact]
+    public async Task Concurrent_merge_requests_for_the_same_pull_request_should_be_serialized()
+    {
+        var handler = new BlockingMergeHandler();
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var firstRequest = CreateMergeRequest("public-repo", 42);
+        using var secondRequest = CreateMergeRequest("public-repo", 42);
+
+        var first = client.SendAsync(firstRequest, TestContext.Current.CancellationToken);
+        await handler.FirstEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var second = client.SendAsync(secondRequest, TestContext.Current.CancellationToken);
+        var secondBeforeRelease =
+            await Task.WhenAny(
+                handler.SecondEntered.Task,
+                Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken)
+            ) == handler.SecondEntered.Task;
+        handler.Release.TrySetResult();
+        using var firstResponse = await first;
+        using var secondResponse = await second;
+
+        _ = secondBeforeRelease.Should().BeFalse();
+        _ = handler.MaxConcurrency.Should().Be(1);
     }
 
     [Fact]
@@ -780,7 +926,14 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     {
         var request = new HttpRequestMessage(HttpMethod.Post, "/api/dashboard/merge")
         {
-            Content = JsonContent.Create(new { repo, pullNumber }),
+            Content = JsonContent.Create(
+                new
+                {
+                    repo,
+                    pullNumber,
+                    headSha = HeadSha,
+                }
+            ),
         };
         if (adminKey is not null)
         {

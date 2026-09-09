@@ -9,10 +9,19 @@ using Microsoft.Extensions.Options;
 
 namespace FixPortal.Ci.Backend.Api.Dashboard.Endpoints;
 
-public sealed record MergePullRequestRequest(string Repo, int PullNumber);
+public sealed record MergePullRequestRequest(string Repo, int PullNumber, string HeadSha);
 
 public static class DashboardEndpoints
 {
+    private sealed class MergeGate
+    {
+        public SemaphoreSlim Semaphore { get; } = new(1, 1);
+        public int Users { get; set; }
+    }
+
+    private static readonly Lock MergeGatesLock = new();
+    private static readonly Dictionary<(string Repo, int PullNumber), MergeGate> MergeGates = [];
+
     // Fluent endpoint-map return values are part of the conventional extension API even when this host does not chain it.
     // ReSharper disable once UnusedMethodReturnValue.Global
     public static IEndpointRouteBuilder MapDashboardEndpoints(this IEndpointRouteBuilder endpoints)
@@ -66,6 +75,7 @@ public static class DashboardEndpoints
                 HttpResponse response,
                 DashboardSnapshotState state,
                 GitHubOrgClient gitHub,
+                PerRepoCache<IReadOnlyDictionary<int, PrMergeState>> mergeStates,
                 IOptions<AdminOptions> admin,
                 CancellationToken ct
             ) =>
@@ -93,6 +103,10 @@ public static class DashboardEndpoints
                 {
                     return Error(HttpStatusCode.BadRequest, "Pull number must be greater than zero.");
                 }
+                if (string.IsNullOrWhiteSpace(merge.HeadSha))
+                {
+                    return Error(HttpStatusCode.BadRequest, "Head SHA is required.");
+                }
 
                 if (state.Current is null)
                 {
@@ -107,10 +121,15 @@ public static class DashboardEndpoints
                     return Error(HttpStatusCode.NotFound, "Repository not found.");
                 }
 
+                var mergeKey = (repository.Name, merge.PullNumber);
+                var gate = RentMergeGate(mergeKey);
+                var entered = false;
                 GitHubMergeResult result;
                 try
                 {
-                    result = await gitHub.MergePullRequestAsync(repository.Name, merge.PullNumber, ct);
+                    await gate.Semaphore.WaitAsync(ct);
+                    entered = true;
+                    result = await gitHub.MergePullRequestAsync(repository.Name, merge.PullNumber, merge.HeadSha, ct);
                 }
                 catch (Exception ex)
                     when (ex is GitHubAuthException or GitHubRateLimitException or HttpRequestException or JsonException
@@ -118,6 +137,14 @@ public static class DashboardEndpoints
                     )
                 {
                     return Error(HttpStatusCode.BadGateway, "GitHub merge request failed.");
+                }
+                finally
+                {
+                    if (entered)
+                    {
+                        _ = gate.Semaphore.Release();
+                    }
+                    ReturnMergeGate(mergeKey, gate);
                 }
 
                 if (result.StatusCode == HttpStatusCode.OK && result.Merged && !string.IsNullOrWhiteSpace(result.Sha))
@@ -129,10 +156,34 @@ public static class DashboardEndpoints
                 if (result.StatusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.Conflict)
                 {
                     // GitHub itself just said no — a real conflict or a blocked required check,
-                    // not a transport hiccup. Write that verdict straight into the served
-                    // snapshot so the pill reflects it now, instead of leaving it "Ready to
-                    // merge" until the next merge-state sweep (up to 120s).
-                    state.MarkNotMergeable(repository.Name, merge.PullNumber);
+                    // not a transport hiccup. Replace the cached verdict so refreshes keep it,
+                    // then patch the served snapshot so the pill reflects it immediately.
+                    mergeStates.Update(
+                        repository.Name,
+                        current =>
+                        {
+                            if (
+                                current?.TryGetValue(merge.PullNumber, out var existing) == true
+                                && !string.IsNullOrEmpty(existing.HeadSha)
+                                && !DashboardRefreshService.SameHead(existing.HeadSha, merge.HeadSha)
+                            )
+                            {
+                                return current;
+                            }
+                            var updated =
+                                current?.ToDictionary(pair => pair.Key, pair => pair.Value)
+                                ?? new Dictionary<int, PrMergeState>();
+                            updated[merge.PullNumber] = new PrMergeState(
+                                merge.PullNumber,
+                                false,
+                                "CONFLICTING",
+                                "DIRTY",
+                                merge.HeadSha
+                            );
+                            return updated;
+                        }
+                    );
+                    state.MarkNotMergeable(repository.Name, merge.PullNumber, merge.HeadSha);
                     return Error(HttpStatusCode.Conflict, error);
                 }
                 return Error(HttpStatusCode.BadGateway, error);
@@ -177,6 +228,33 @@ public static class DashboardEndpoints
     {
         response.Headers.CacheControl = "private, no-store";
         response.Headers.Vary = "X-Admin-Key";
+    }
+
+    private static MergeGate RentMergeGate((string Repo, int PullNumber) key)
+    {
+        lock (MergeGatesLock)
+        {
+            if (!MergeGates.TryGetValue(key, out var gate))
+            {
+                gate = new MergeGate();
+                MergeGates.Add(key, gate);
+            }
+            gate.Users++;
+            return gate;
+        }
+    }
+
+    private static void ReturnMergeGate((string Repo, int PullNumber) key, MergeGate gate)
+    {
+        lock (MergeGatesLock)
+        {
+            gate.Users--;
+            if (gate.Users == 0)
+            {
+                _ = MergeGates.Remove(key);
+                gate.Semaphore.Dispose();
+            }
+        }
     }
 
     private static IResult Error(HttpStatusCode status, string message) =>

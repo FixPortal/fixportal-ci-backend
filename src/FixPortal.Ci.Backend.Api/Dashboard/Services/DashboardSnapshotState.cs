@@ -8,14 +8,12 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 /// writer's file replacement. The file store is used only for cold-start restore
 /// and durability.
 ///
-/// Single-writer by design: only the startup restore and the one
-/// <c>DashboardRefreshWorker</c> background service publish snapshots; many
-/// request threads read them. Both snapshots are published together as one
+/// The startup restore and refresh worker publish snapshots, while merge request
+/// threads may patch a rejected pull request's verdict. Writers synchronize so a
+/// patch cannot replace a newer refresh. Both snapshots are still published as one
 /// immutable <see cref="Snapshots"/> pair behind a single <c>volatile</c>
-/// reference, so a reader can never observe a refreshed <c>Current</c> paired
-/// with a stale <c>Public</c> (the two fields are swapped atomically by one
-/// reference write). A second concurrent writer would require an
-/// <c>Interlocked</c>/lock-based check-then-set instead.
+/// reference, so readers never observe a refreshed <c>Current</c> paired with a
+/// stale <c>Public</c>.
 /// </summary>
 public sealed class DashboardSnapshotState
 {
@@ -23,6 +21,7 @@ public sealed class DashboardSnapshotState
 
     private volatile Snapshots _snapshots = new(null, null);
     private volatile string? _lastAuthError;
+    private readonly Lock _snapshotsLock = new();
 
     public string? LastAuthError => _lastAuthError;
 
@@ -32,8 +31,13 @@ public sealed class DashboardSnapshotState
 
     public DashboardSnapshot? Public => _snapshots.Public;
 
-    public void Update(DashboardSnapshot current, DashboardSnapshot publicSnap) =>
-        _snapshots = new Snapshots(current, publicSnap);
+    public void Update(DashboardSnapshot current, DashboardSnapshot publicSnap)
+    {
+        lock (_snapshotsLock)
+        {
+            _snapshots = new Snapshots(current, publicSnap);
+        }
+    }
 
     // The merge endpoint calls this the instant GitHub itself reports a pull request as not
     // mergeable (a real conflict or a blocked required check) rather than waiting for the next
@@ -42,31 +46,35 @@ public sealed class DashboardSnapshotState
     // it away and leaving the pill "Ready to merge" for up to two minutes reads as a broken
     // button. HeadSha is left untouched: this PR's head has not moved, only its mergeability
     // verdict has, and the next sweep still supersedes this patch with a fresh verdict.
-    public void MarkNotMergeable(string repo, int pullNumber)
+    public void MarkNotMergeable(string repo, int pullNumber, string headSha)
     {
-        var snapshots = _snapshots;
-        if (snapshots.Current is null)
+        lock (_snapshotsLock)
         {
-            return;
-        }
-        _snapshots = new Snapshots(
-            snapshots.Current with
+            var snapshots = _snapshots;
+            if (snapshots.Current is null)
             {
-                Repositories = PatchNotMergeable(snapshots.Current.Repositories, repo, pullNumber),
-            },
-            snapshots.Public is null
-                ? null
-                : snapshots.Public with
+                return;
+            }
+            _snapshots = new Snapshots(
+                snapshots.Current with
                 {
-                    Repositories = PatchNotMergeable(snapshots.Public.Repositories, repo, pullNumber),
-                }
-        );
+                    Repositories = PatchNotMergeable(snapshots.Current.Repositories, repo, pullNumber, headSha),
+                },
+                snapshots.Public is null
+                    ? null
+                    : snapshots.Public with
+                    {
+                        Repositories = PatchNotMergeable(snapshots.Public.Repositories, repo, pullNumber, headSha),
+                    }
+            );
+        }
     }
 
     private static IReadOnlyList<RepositorySnapshot> PatchNotMergeable(
         IReadOnlyList<RepositorySnapshot> repositories,
         string repo,
-        int pullNumber
+        int pullNumber,
+        string headSha
     ) =>
         repositories
             .Select(r =>
@@ -75,7 +83,14 @@ public sealed class DashboardSnapshotState
                     : r with
                     {
                         PullRequests = r
-                            .PullRequests.Select(pr => pr.Number == pullNumber ? pr with { ReadyToMerge = false } : pr)
+                            .PullRequests.Select(pr =>
+                                pr.Number == pullNumber && DashboardRefreshService.SameHead(pr.HeadSha, headSha)
+                                    ? pr with
+                                    {
+                                        ReadyToMerge = false,
+                                    }
+                                    : pr
+                            )
                             .ToList(),
                     }
             )
