@@ -45,17 +45,15 @@ from pathlib import Path
 
 ID = r"[A-Za-z_][A-Za-z0-9_-]*"
 COMMENT_OR_BLANK = re.compile(r"^\s*(?:\#.*)?$")
-# A reference to an upstream job's outcome, in either the `needs.*.result` wildcard
-# form or the per-job `needs.build.result` form. Requiring the literal wildcard would
-# red a workflow that aggregates job by job, which is equally correct. The job id is
-# CAPTURED rather than merely matched, because "some dependency is referenced" is not
-# the assertion that matters: a gate declaring `needs: [build, lint]` whose condition
-# names only `build` reports success while `lint` fails.
-NEEDS_RESULT = re.compile(r"needs\.([A-Za-z0-9_*-]+)\.result")
-
-ID = r"[A-Za-z_][A-Za-z0-9_-]*"
-COMMENT_OR_BLANK = re.compile(r"^\s*(?:\#.*)?$")
 # A complete positive predicate over an upstream job's failure/cancellation outcome.
+# The job id and outcome are CAPTURED rather than merely matched, because "some
+# dependency is referenced" is not the assertion that matters: a gate declaring
+# `needs: [build, lint]` whose condition names only `build` reports success while
+# `lint` fails, and one naming only 'failure' reports success over a CANCELLED job.
+#
+# This replaced a bare `needs\.(\w+)\.result` search, which accepted
+# `false && contains(...)` -- a condition that can never reach the failing step and
+# leaves the required gate green.
 # Conditions are accepted only as `||`-joined instances of this shape below. Merely
 # finding `needs.*.result` inside a condition accepted `false && contains(...)`, which
 # can never reach the failing step and leaves the required gate green.
@@ -1173,8 +1171,16 @@ def gated_run_bodies(lines, jobs, needs, gate_job):
             if not match:
                 index += 1
                 continue
-            value = strip_comment(match.group(2)).strip()
-            if BLOCK_SCALAR.match(match.group(2).strip()):
+            # Both tests read the COMMENT-STRIPPED value. `run: | # build log` is a real
+            # spelling -- other_block_key_pattern documents it -- and BLOCK_SCALAR is
+            # anchored, so testing the raw value made it miss: the else branch then
+            # yielded the bare `|` and advanced one line, skipping the entire payload.
+            # A script invoked from such a body was invisible to gate_script_paths and
+            # escaped the HIGH-tier requirement, which is fail-open on the control this
+            # function exists to feed. strip_inline_comment is the same helper
+            # step_can_fail uses, so the two paths agree. (CodeRabbit, PR #140.)
+            value = strip_inline_comment(match.group(2)).strip()
+            if BLOCK_SCALAR.match(value):
                 body, index = continuation_lines(block, index, len(match.group(1)))
             else:
                 body, index = ([value] if value else []), index + 1
