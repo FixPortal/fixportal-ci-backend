@@ -52,6 +52,17 @@ COMMENT_OR_BLANK = re.compile(r"^\s*(?:\#.*)?$")
 # the assertion that matters: a gate declaring `needs: [build, lint]` whose condition
 # names only `build` reports success while `lint` fails.
 NEEDS_RESULT = re.compile(r"needs\.([A-Za-z0-9_*-]+)\.result")
+
+ID = r"[A-Za-z_][A-Za-z0-9_-]*"
+COMMENT_OR_BLANK = re.compile(r"^\s*(?:\#.*)?$")
+# A complete positive predicate over an upstream job's failure/cancellation outcome.
+# Conditions are accepted only as `||`-joined instances of this shape below. Merely
+# finding `needs.*.result` inside a condition accepted `false && contains(...)`, which
+# can never reach the failing step and leaves the required gate green.
+FAILURE_CONDITION_ATOM = re.compile(
+    rf"(?:contains\(needs\.({ID}|\*)\.result,['\"](failure|cancelled)['\"]\)|"
+    rf"needs\.({ID})\.result(?:==['\"](failure|cancelled)['\"]|!=['\"]success['\"]))"
+)
 BACKSLASH = "\\"
 
 # The gate step's failing command, in the forms this checker will vouch for. Anything
@@ -97,11 +108,11 @@ ACCEPTED_FAILING_FORMS = tuple(
         # change with its own rollout. (CodeRabbit, PR #135.)
         #
         # echo "..." ; exit 1     (message then failure, either separator style)
-        rf"{_ECHO}\s*(?:;|&&)\s*exit\s+{_NONZERO_STATUS}",
+        rf"{_ECHO}\s*(?:;|&&)\s*{_FAIL}",
         # if <test>; then <echo>; exit 1; fi   -- the house one-liner
-        rf"if\s+.+?;\s*then\s+(?:{_ECHO};\s*)?exit\s+{_NONZERO_STATUS};\s*fi",
+        rf"if\s+.+?;\s*then\s+(?:{_ECHO};\s*)?{_FAIL};\s*fi",
         # if <test>; then exit 1; fi   with the echo inside on its own already covered
-        rf"if\s+.+?;\s*then\s+exit\s+{_NONZERO_STATUS};\s*fi",
+        rf"if\s+.+?;\s*then\s+{_FAIL};\s*fi",
         # PowerShell. `shell: pwsh` gate steps are house style in the .NET repos and
         # `throw 'upstream failed'` is how one fails, so rejecting it was a false RED
         # on a correct gate - the direction that gets a working control deleted to make
@@ -267,6 +278,17 @@ def strip_comment(line):
     return line.split("#", 1)[0]
 
 
+def strip_inline_comment(value):
+    """Drop a YAML inline comment from a `run:` value.
+
+    A `#` opens a comment only after whitespace, so the shell parameter length `${#x}`
+    is not one. The naive strip_comment above truncated `if [ ${#x} -eq 0 ]; then exit
+    1; fi` at the brace and reported a correct gate as unfailable -- a false RED, and on
+    the one check whose job is to say whether the gate can fail at all.
+    """
+    return re.sub(r"(?m)(?<!\S)#[^\n]*", "", value)
+
+
 def parse_need_ids(value):
     value = strip_comment(value).strip()
     if value.startswith("[") and value.endswith("]"):
@@ -425,7 +447,13 @@ def normalise_condition(value):
     correctly NOT equal to `always()` -- a gate that runs only sometimes is the defect
     being caught, not a spelling variant of the fix.
     """
-    value = strip_comment(value).strip().strip("'\"").strip()
+    # Strip a WRAPPING quote pair only. `.strip("'\"")` peeled any leading or trailing
+    # quote, so `needs.build.result == 'failure'` lost its closing quote and stopped
+    # matching FAILURE_CONDITION_ATOM -- a correct per-job gate then read as gating
+    # nothing, which is a false RED on the house shape.
+    value = strip_comment(value).strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1].strip()
     if value.startswith("${{") and value.endswith("}}"):
         value = value[3:-2]
     return value.replace(" ", "")
@@ -604,6 +632,37 @@ def static_truth(condition):
     return _UNKNOWN
 
 
+def failure_atoms(normalised):
+    """The failure atoms a normalised step condition aggregates on, else None.
+
+    A conjunct that is statically TRUE cannot change whether the step runs, so it is
+    dropped before matching: `contains(needs.*.result,'failure') && 'VALUE' == 'value'`
+    gates exactly what the `contains` alone gates -- GitHub's `==` is case-insensitive --
+    and refusing it would be a false RED on a condition that does aggregate. A
+    statically FALSE conjunct makes the whole condition false, which the caller's
+    static_truth check already discards.
+
+    What survives must be a single OR-expression of recognised atoms. A residual
+    CONJUNCTION is refused rather than guessed at: `contains(...) && <unknown>` runs only
+    when that unknown also holds, so the outcomes it covers are not the atoms' outcomes,
+    and crediting them would vouch for coverage the gate does not have.
+    """
+    residual = [
+        part
+        for part in split_top_level(normalised, "&&")
+        if static_truth(part) is not True
+    ]
+    if len(residual) != 1:
+        return None
+    atoms = split_top_level(strip_outer_parentheses(residual[0]), "||")
+    matches = [
+        FAILURE_CONDITION_ATOM.fullmatch(strip_outer_parentheses(atom)) for atom in atoms
+    ]
+    if not matches or any(match is None for match in matches):
+        return None
+    return matches
+
+
 def continuation_lines(block, index, indent):
     """The block-scalar body opened on `block[index]`, plus the index after it.
 
@@ -679,7 +738,7 @@ def mask_quoted(line):
     index = 0
     while index < len(line):
         char = line[index]
-        if quote == '"' and char == BACKSLASH and index + 1 < len(line):
+        if quote != "'" and char == BACKSLASH and index + 1 < len(line):
             out.append("  ")
             index += 2
             continue
@@ -721,7 +780,7 @@ def ends_non_zero(body):
     """
     text = mask_quoted(body)
     # Drop comments AFTER masking, so a `#` inside a string is not treated as one.
-    text = re.sub(r"#[^\n]*", "", text)
+    text = re.sub(r"(?m)(?<!\S)#[^\n]*", "", text)
     # Normalise whitespace per logical line, then test each against the accepted forms.
     for logical in text.split("\n"):
         segment = " ".join(logical.split())
@@ -771,11 +830,16 @@ def step_can_fail(block, span, key_indent):
         raw = match.group(2).strip()
         value = decode_yaml_scalar(raw)
         if value == raw:
-            value = decode_yaml_scalar(strip_comment(raw).strip())
+            value = decode_yaml_scalar(strip_inline_comment(raw).strip())
         if value and not BLOCK_SCALAR.match(value):
             body = [value]
         else:
             body, _ = continuation_lines(block, i, key_indent)
+        # A FOLDED body (`run: >`) joins its lines with spaces at run time, so the
+        # command that actually executes is not any line in the file. Reading it
+        # line-by-line would vouch for a command nobody wrote.
+        if value.startswith(">"):
+            return False, "uses a folded `run:` body, whose executed command cannot be verified line-by-line"
         # JOIN first, then fold backslash continuations, so quote state and continued
         # commands are carried across line boundaries. Evaluating each physical line
         # with its own quote state is what let `echo "\n exit 1 \n"` and a
@@ -909,16 +973,24 @@ def assert_gate_semantics(workflow_path, lines, jobs, gate_job, needs):
     # clean fail-closed exit. Found by CodeRabbit on the upstream review.
     step_indent = body_indent + 1
 
-    referenced = set()
+    referenced = {}
     failing = []
     for condition, index in step_conditions(block, step_indent):
+        # A condition that is statically false never enforces anything, however
+        # well-formed its atoms look, so it cannot count toward coverage.
         if static_truth(condition) is False:
             continue
-        ids = NEEDS_RESULT.findall(condition)
-        if not ids:
+        matches = failure_atoms(normalise_condition(condition))
+        if matches is None:
             continue
-        referenced.update(ids)
-        failing.append((condition, index))
+        coverage = []
+        for match in matches:
+            job_id = match.group(1) or match.group(3)
+            outcome = match.group(2) or match.group(4)
+            outcomes = {outcome} if outcome else {"failure", "cancelled"}
+            referenced.setdefault(job_id, set()).update(outcomes)
+            coverage.append((job_id, outcomes))
+        failing.append((condition, index, coverage))
 
     if not referenced:
         sys.exit(
@@ -935,16 +1007,20 @@ def assert_gate_semantics(workflow_path, lines, jobs, gate_job, needs):
     # left the required context green -- the exact fail-OPEN shape the assertion
     # exists to refuse, reached by deleting half a condition rather than all of it.
     # The parser already had the full needs: set and simply was not consulting it.
-    if "*" not in referenced:
-        uncovered = sorted(set(needs) - referenced)
-        if uncovered:
-            sys.exit(
-                f"{workflow_path}: '{gate_job}' step conditions reference "
-                f"{', '.join(sorted(referenced))} but not {', '.join(uncovered)}.\n"
-                "A dependency whose result is never referenced can fail while the gate "
-                "still reports success. Use `needs.*.result`, or reference every job in "
-                f"the '{gate_job}' needs: list."
-            )
+    wildcard = referenced.get("*", set())
+    uncovered = sorted(
+        f"{job_id}:{outcome}"
+        for job_id in needs
+        for outcome in ("failure", "cancelled")
+        if outcome not in wildcard and outcome not in referenced.get(job_id, set())
+    )
+    if uncovered:
+        sys.exit(
+            f"{workflow_path}: '{gate_job}' step conditions do not cover "
+            f"{', '.join(uncovered)}.\n"
+            "Every dependency must make the gate fail for both failure and cancellation. "
+            "Use `needs.<job>.result != 'success'`, or cover both terminal results."
+        )
 
     # A condition proves the step is REACHED, not that reaching it costs anything. See
     # step_can_fail: continue-on-error, or a body with no non-zero exit, keeps the
@@ -956,10 +1032,9 @@ def assert_gate_semantics(workflow_path, lines, jobs, gate_job, needs):
     # coverage assertion above closes, reopened one assertion later.
     reason = "could not be located as a step in the job body"
     reported = failing[0][0]
-    covered = set()
-    wildcard_covered = False
+    covered = {}
     step_if_value = step_key_pattern(step_indent, "if")
-    for condition, index in failing:
+    for condition, index, coverage in failing:
         reported = condition
         match = step_if_value.match(block[index])
         # Guarded rather than assumed. `index` came from a line this very pattern
@@ -974,12 +1049,10 @@ def assert_gate_semantics(workflow_path, lines, jobs, gate_job, needs):
         ok, reason = step_can_fail(block, span, len(match.group(1)))
         if not ok:
             continue
-        ids = set(NEEDS_RESULT.findall(condition))
-        if "*" in ids:
-            wildcard_covered = True
-        covered.update(ids - {"*"})
+        for job_id, outcomes in coverage:
+            covered.setdefault(job_id, set()).update(outcomes)
 
-    if not wildcard_covered and not covered:
+    if not covered:
         sys.exit(
             f"{workflow_path}: '{gate_job}' aggregates on `if: {reported}` but that "
             f"step {reason}.\n"
@@ -989,18 +1062,20 @@ def assert_gate_semantics(workflow_path, lines, jobs, gate_job, needs):
             "continue-on-error."
         )
 
-    if not wildcard_covered:
-        unenforced = sorted(set(needs) - covered)
-        if unenforced:
-            sys.exit(
-                f"{workflow_path}: '{gate_job}' references "
-                f"{', '.join(sorted(covered))} from a step that can fail, but "
-                f"{', '.join(unenforced)} is referenced only by steps that cannot.\n"
-                "A dependency named in a condition whose step carries continue-on-error, "
-                "or whose body cannot exit non-zero, is not gated at all: it can fail "
-                "while the required context stays green."
-            )
-
+    wildcard = covered.get("*", set())
+    unenforced = sorted(
+        f"{job_id}:{outcome}"
+        for job_id in needs
+        for outcome in ("failure", "cancelled")
+        if outcome not in wildcard and outcome not in covered.get(job_id, set())
+    )
+    if unenforced:
+        sys.exit(
+            f"{workflow_path}: '{gate_job}' leaves {', '.join(unenforced)} referenced "
+            "only by steps that cannot fail.\n"
+            "A dependency outcome named in a condition whose step carries "
+            "continue-on-error, or whose body cannot exit non-zero, is not gated at all."
+        )
 
 def parse_jobs(workflow_path):
     """The job-name set for one file, read once so callers can validate exemptions
@@ -1009,6 +1084,177 @@ def parse_jobs(workflow_path):
         lines = handle.readlines()
     jobs, _, _ = read_gate_contract(lines, "")
     return set(jobs)
+
+
+# A repo-local script invoked from a `run:` body. Deliberately a small, closed set of
+# directory roots rather than "any path with a script extension": the point is to catch
+# a checker the repository authored and wired into the merge barrier, and widening this
+# to every path-shaped token would start matching tool arguments and report files.
+#
+# The candidate is only ever a CANDIDATE -- it must also exist on disk before anything
+# is asserted about it (see gate_script_paths). That existence test is what keeps a
+# script name inside an `echo` message, or a path that a later commit deleted, from
+# reddening a repository over a file it does not have.
+GATE_SCRIPT = re.compile(
+    r"""(?<![\w./-])\.?/?((?:\.github/scripts|scripts|build|tools)/[\w./-]*\.(?:ps1|py|sh))\b"""
+)
+# A `run:` key at any depth. Group 1 is everything before the key, so its LENGTH is the
+# key's own column -- which is what continuation_lines needs to find a block scalar's
+# body. Same reasoning as step_key_pattern, and the same dash-form hazard: a `- run: |`
+# opens at the key, two columns right of the dash.
+RUN_KEY = re.compile(r"""^(\s*(?:-\s+)?)(?:'run'|"run"|run)\s*:\s*(.*?)\s*$""")
+
+
+def glob_to_regex(pattern):
+    """A gitignore-style policy glob as an anchored regex.
+
+    A DELIBERATE MIRROR of glob_to_regex in the pr-review-policy hook, which is what
+    actually tiers a pull request:
+
+        **/  -> (.*/)?     **  -> .*     *  -> [^/]*     ?  -> [^/]
+
+    Mirrored rather than approximated because the two must agree exactly. A checker
+    stricter than the hook reports a false RED on a repository the hook already tiers
+    HIGH -- for instance one covering its scripts with `scripts/**` instead of naming
+    each file -- and a false RED on a required check is what gets a working control
+    deleted to make CI green.
+
+    Placeholders keep emitted output out of reach of later substitutions, for the same
+    reason the shell version uses them: rewriting `**/` to `(.*/)?` first and then
+    applying the `*` rule mangles the `*` that rule just emitted.
+    """
+    out = re.escape(pattern)
+    # re.escape escapes the glob metacharacters too, so match them in escaped form.
+    out = out.replace(r"\*\*/", "\x01").replace(r"\*\*", "\x02")
+    out = out.replace(r"\*", "\x03").replace(r"\?", "\x04")
+    out = out.replace("\x01", "(?:.*/)?").replace("\x02", ".*")
+    out = out.replace("\x03", "[^/]*").replace("\x04", "[^/]")
+    return re.compile(rf"^{out}$")
+
+
+def matches_any(path, patterns):
+    """The first pattern that tiers `path`, or None. Case-sensitive, like the hook."""
+    for pattern in patterns:
+        if glob_to_regex(pattern).match(path):
+            return pattern
+    return None
+
+
+def policy_root(workflow_path):
+    """The nearest ancestor directory holding `.claude/review-policy.json`, or None.
+
+    Resolved by walking UP from the workflow file rather than from the process's working
+    directory, so the check behaves the same whether CI runs it from the repository root
+    or a test runs it against a workflow in a temporary directory. None means no policy
+    is in scope and nothing is asserted -- a repository without a review policy tiers
+    everything NORMAL, and review-policy-guard.yml is what owns that absence.
+    """
+    for parent in Path(workflow_path).resolve().parents:
+        if (parent / ".claude" / "review-policy.json").is_file():
+            return parent
+    return None
+
+
+def gated_run_bodies(lines, jobs, needs, gate_job):
+    """Every `run:` body line belonging to a job that can fail the gate, with its job id.
+
+    Scoped to the gate's `needs:` plus the gate job itself, because that is exactly the
+    set whose failure blocks a merge. A script run only by an exempt, non-merge-blocking
+    job cannot neuter the barrier, so requiring it to be HIGH would be a cost with no
+    control behind it.
+    """
+    for job_id in sorted(set(needs) | {gate_job}):
+        if job_id not in jobs:
+            continue
+        block = job_block(lines, jobs, job_id)
+        index = 0
+        while index < len(block):
+            match = RUN_KEY.match(block[index])
+            if not match:
+                index += 1
+                continue
+            value = strip_comment(match.group(2)).strip()
+            if BLOCK_SCALAR.match(match.group(2).strip()):
+                body, index = continuation_lines(block, index, len(match.group(1)))
+            else:
+                body, index = ([value] if value else []), index + 1
+            for body_line in body:
+                yield job_id, body_line
+
+
+def gate_script_paths(lines, jobs, needs, gate_job, root):
+    """Repo-local scripts a merge-blocking job runs from the checkout, path -> job id.
+
+    Only paths that EXIST under `root` are returned. Nothing is asserted about a
+    candidate that does not resolve to a file: the repository does not have it, so it
+    cannot be edited to neuter anything.
+    """
+    found = {}
+    for job_id, body_line in gated_run_bodies(lines, jobs, needs, gate_job):
+        for match in GATE_SCRIPT.finditer(body_line):
+            relative = match.group(1)
+            if (root / relative).is_file():
+                found.setdefault(relative, job_id)
+    return found
+
+
+def assert_gate_scripts(workflow_path, lines, jobs, needs, gate_job):
+    """Every script a merge-blocking job runs must be tiered HIGH by the review policy.
+
+    THE HOLE THIS CLOSES. The gate runs the pull request's OWN checkout, so a script it
+    invokes decides what can merge in exactly the way the workflow does. The named-path
+    list in review-policy-guard.yml protects the control plane that every scaffolded
+    repository shares -- it cannot name a checker a single repository authored later,
+    because a hard-coded path would red every repository that does not have that file.
+    So a repo-authored gate script was protected by nothing: a pull request touching only
+    `scripts/**` tiered NORMAL, and its own edited copy of the script is what ran. Change
+    the failure path to `exit 0` and a neutered gate merges green.
+
+    Derived rather than enumerated, which is what makes it general: the requirement
+    follows from what the workflow actually invokes, so a gate script added to a
+    repository years after it was scaffolded is covered on the day it is wired in.
+
+    Verified in the field, not hypothesised: fixportal-fixatdl added
+    `scripts/assert-coverage-floor.ps1` as a merge gate on 2026-08-24 and it sat outside
+    both the policy and the guard until an adversarial review found it on 2026-09-08 --
+    the third recurrence of this class in that repository, after the same hole had been
+    closed for the two Python checkers three weeks earlier.
+    """
+    root = policy_root(workflow_path)
+    if root is None:
+        return
+    policy_path = root / ".claude" / "review-policy.json"
+    try:
+        policy = json.loads(policy_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        # An unreadable or malformed policy is review-policy-guard.yml's failure to
+        # report, and it already does. Duplicating it here would print the same breach
+        # twice and, worse, make THIS check the one that fails on a repository whose
+        # actual problem is elsewhere.
+        return
+    high = policy.get("high")
+    if not isinstance(high, list):
+        return
+    high = [pattern for pattern in high if isinstance(pattern, str)]
+
+    scripts = gate_script_paths(lines, jobs, needs, gate_job, root)
+    unprotected = sorted(path for path in scripts if matches_any(path, high) is None)
+    if unprotected:
+        detail = "\n".join(
+            f"  {path}  (run by '{scripts[path]}')" for path in unprotected
+        )
+        sys.exit(
+            f"{workflow_path}: script(s) run by a job feeding '{gate_job}' are not tiered "
+            f"HIGH by {policy_path.name}:\n{detail}\n"
+            "Each decides what can merge and runs from the pull request's own checkout, so "
+            "an edit to one must draw the heavier review. Add each path to the policy's "
+            "'high' array (or a glob that covers them), or stop the gate depending on it."
+        )
+    if scripts:
+        print(
+            f"{workflow_path}: {len(scripts)} gate script(s) tiered HIGH: "
+            f"{', '.join(sorted(scripts))}."
+        )
 
 
 def check_file(workflow_path, gate_job, exempt, conditional_exempt, *, on_empty="fail"):
@@ -1054,6 +1300,7 @@ def check_file(workflow_path, gate_job, exempt, conditional_exempt, *, on_empty=
         )
 
     assert_gate_semantics(workflow_path, lines, jobs, gate_job, needs)
+    assert_gate_scripts(workflow_path, lines, jobs, needs, gate_job)
 
     print(
         f"{workflow_path}: all {len(jobs)} job(s) accounted for by '{gate_job}', "
