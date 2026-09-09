@@ -277,14 +277,51 @@ def strip_comment(line):
 
 
 def strip_inline_comment(value):
-    """Drop a YAML inline comment from a `run:` value.
+    """Drop a YAML inline comment from a `run:` value. Two rules, both load-bearing.
 
-    A `#` opens a comment only after whitespace, so the shell parameter length `${#x}`
+    A `#` opens a comment only after WHITESPACE, so the shell parameter length `${#x}`
     is not one. The naive strip_comment above truncated `if [ ${#x} -eq 0 ]; then exit
-    1; fi` at the brace and reported a correct gate as unfailable -- a false RED, and on
-    the one check whose job is to say whether the gate can fail at all.
+    1; fi` at the brace and reported a correct gate as unfailable.
+
+    A `#` inside a QUOTED YAML scalar is data, not a comment, and the quoted form has to
+    be recognised before any stripping happens. Getting this wrong broke in both
+    directions at once, which is why it is fixed here rather than at either caller:
+
+      * fail-OPEN through gate_script_paths. `run: "printf 'tag # audit'; python
+        .github/scripts/probe.py"` executes probe.py, but truncating at the hash hid the
+        path, so the script escaped the HIGH-tier requirement -- on the very control
+        assert_gate_scripts exists to be;
+      * false RED through step_can_fail. `run: 'echo " # progress"; exit 1' # gate`
+        became an unterminated fragment, so a gate that does fail read as one that
+        cannot. (Measured: exit 1 before this change, exit 0 after.)
+
+    A PLAIN (unquoted) scalar is deliberately left to the regex. There YAML itself ends
+    the value at ` #`, so `run: printf 'tag # audit'` really is truncated before the
+    shell ever sees it -- SHELL quotes do not protect a hash from YAML, and pretending
+    they do would vouch for a command the runner never receives.
+
+    (CodeRabbit, fixportal-ci-backend#140 and fixportal-ci-frontend#163.)
     """
-    return re.sub(r"(?m)(?<!\S)#[^\n]*", "", value)
+    quote = value[:1]
+    if quote not in ("'", '"'):
+        return re.sub(r"(?m)(?<!\S)#[^\n]*", "", value)
+
+    index = 1
+    while index < len(value):
+        char = value[index]
+        if quote == '"' and char == BACKSLASH:
+            index += 2
+            continue
+        if char == quote:
+            # `''` inside a single-quoted scalar is an escaped quote, not the end.
+            if quote == "'" and value[index + 1:index + 2] == "'":
+                index += 2
+                continue
+            return value[: index + 1]
+        index += 1
+    # Unterminated. That is broken YAML either way, and returning the value whole errs
+    # toward rejecting the step rather than vouching for a fragment of it.
+    return value
 
 
 def parse_need_ids(value):
