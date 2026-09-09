@@ -61,6 +61,16 @@ FAILURE_CONDITION_ATOM = re.compile(
     rf"(?:contains\(needs\.({ID}|\*)\.result,['\"](failure|cancelled)['\"]\)|"
     rf"needs\.({ID})\.result(?:==['\"](failure|cancelled)['\"]|!=['\"]success['\"]))"
 )
+# A REFINEMENT, not a coverage atom: `needs.<job>.result != 'skipped'` narrows a
+# `!= 'success'` atom about the same job rather than covering an outcome of its own.
+#
+# It exists because the house shape for a CONDITIONAL feeder is
+# `needs.secrets.result != 'success' && needs.secrets.result != 'skipped'` -- a job that
+# legitimately skips must not fail the gate by skipping, which is exactly what
+# GATE_CONDITIONAL_EXEMPT is for. Refusing every residual conjunction rejected that, and
+# fixportal-initiator's correct gate then read as "aggregates nothing". Found by running
+# the reconciled checker over all 26 repositories BEFORE syncing it to any of them.
+CONDITION_REFINEMENT = re.compile(rf"needs\.({ID})\.result!=['\"]skipped['\"]")
 BACKSLASH = "\\"
 
 # The gate step's failing command, in the forms this checker will vouch for. Anything
@@ -678,9 +688,15 @@ def failure_atoms(normalised):
     static_truth check already discards.
 
     What survives must be a single OR-expression of recognised atoms. A residual
-    CONJUNCTION is refused rather than guessed at: `contains(...) && <unknown>` runs only
-    when that unknown also holds, so the outcomes it covers are not the atoms' outcomes,
-    and crediting them would vouch for coverage the gate does not have.
+    CONJUNCTION of UNKNOWNS is refused rather than guessed at: `contains(...) && <unknown>`
+    runs only when that unknown also holds, so the outcomes it covers are not the atoms'
+    outcomes, and crediting them would vouch for coverage the gate does not have.
+
+    One conjunction IS accepted, per OR-branch: a coverage atom narrowed by
+    `!= 'skipped'` guards about the SAME job. That is the house shape for a conditional
+    feeder -- `needs.secrets.result != 'success' && needs.secrets.result != 'skipped'` --
+    and it covers exactly {failure, cancelled} for that job, which is what the atom
+    already claims. Refusing it rejected fixportal-initiator's correct gate outright.
     """
     residual = [
         part
@@ -690,12 +706,54 @@ def failure_atoms(normalised):
     if len(residual) != 1:
         return None
     atoms = split_top_level(strip_outer_parentheses(residual[0]), "||")
-    matches = [
-        FAILURE_CONDITION_ATOM.fullmatch(strip_outer_parentheses(atom)) for atom in atoms
-    ]
-    if not matches or any(match is None for match in matches):
+    matches = []
+    for atom in atoms:
+        match = resolve_atom(strip_outer_parentheses(atom))
+        if match is None:
+            return None
+        matches.append(match)
+    if not matches:
         return None
     return matches
+
+
+def resolve_atom(atom):
+    """One OR-branch as a coverage atom, or None when it covers nothing provable.
+
+    A bare atom resolves to itself. A conjunction resolves only when it holds exactly one
+    coverage atom and every other conjunct is a `!= 'skipped'` refinement naming that SAME
+    job: the refinement narrows the atom's outcome set rather than adding a condition the
+    checker cannot read. A refinement about a DIFFERENT job is refused -- it makes the step
+    depend on that job's state too, so the atom no longer describes when the gate fails.
+    """
+    direct = FAILURE_CONDITION_ATOM.fullmatch(atom)
+    if direct is not None:
+        return direct
+
+    conjuncts = [strip_outer_parentheses(part) for part in split_top_level(atom, "&&")]
+    if len(conjuncts) < 2:
+        return None
+
+    coverage = None
+    refined_jobs = set()
+    for conjunct in conjuncts:
+        match = FAILURE_CONDITION_ATOM.fullmatch(conjunct)
+        if match is not None:
+            if coverage is not None:
+                return None
+            coverage = match
+            continue
+        refinement = CONDITION_REFINEMENT.fullmatch(conjunct)
+        if refinement is None:
+            return None
+        refined_jobs.add(refinement.group(1))
+
+    if coverage is None:
+        return None
+    job_id = coverage.group(1) or coverage.group(3)
+    if refined_jobs - {job_id}:
+        return None
+    return coverage
 
 
 def continuation_lines(block, index, indent):
