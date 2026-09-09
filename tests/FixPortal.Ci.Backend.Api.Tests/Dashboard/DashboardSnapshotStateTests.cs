@@ -1,3 +1,4 @@
+using System.Collections;
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
@@ -26,6 +27,29 @@ public class DashboardSnapshotStateTests
         IReadOnlyList<RepositorySnapshot> repos,
         IReadOnlyList<CiTrendBucket>? trend
     ) => new(T, "FixPortal", repos, [], null, trend);
+
+    private static DashboardSnapshot SnapshotWithPullRequest(string headSha, bool readyToMerge) =>
+        Snapshot(
+            [
+                Repo("repo", false, SignalState.Success) with
+                {
+                    PullRequests =
+                    [
+                        new PullRequest(
+                            42,
+                            "PR",
+                            "alice",
+                            "https://github.com/FixPortal/repo/pull/42",
+                            false,
+                            T,
+                            ReadyToMerge: readyToMerge,
+                            HeadSha: headSha
+                        ),
+                    ],
+                },
+            ],
+            null
+        );
 
     [Fact]
     public void ComputePublicSnapshot_never_surfaces_a_Failing_bucket_on_cold_start()
@@ -102,5 +126,58 @@ public class DashboardSnapshotStateTests
 
         _ = state.Current.Should().BeSameAs(current);
         _ = state.Public.Should().BeSameAs(publicSnap);
+    }
+
+    [Fact]
+    public async Task MarkNotMergeable_does_not_overwrite_a_concurrent_snapshot_update()
+    {
+        var state = new DashboardSnapshotState();
+        var repositories = new BlockingReadOnlyList<RepositorySnapshot>([Repo("old", false, SignalState.Success)]);
+        state.Update(Snapshot(repositories, null), Snapshot([], null));
+
+        var patch = Task.Run(() => state.MarkNotMergeable("old", 42, "head-a"), TestContext.Current.CancellationToken);
+        await repositories.EnumerationStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var fresh = Snapshot([Repo("fresh", false, SignalState.Success)], null);
+        var update = Task.Run(() => state.Update(fresh, Snapshot([], null)), TestContext.Current.CancellationToken);
+        _ = await Task.WhenAny(
+            update,
+            Task.Delay(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken)
+        );
+        repositories.AllowEnumeration.TrySetResult();
+        await Task.WhenAll(patch, update);
+
+        _ = state.Current.Should().BeSameAs(fresh);
+    }
+
+    [Theory]
+    [InlineData("head-a", true)]
+    [InlineData("head-b", false)]
+    public void MarkNotMergeable_only_patches_the_head_that_was_rejected(string rejectedHead, bool expectedReady)
+    {
+        var state = new DashboardSnapshotState();
+        var snapshot = SnapshotWithPullRequest("head-b", readyToMerge: true);
+        state.Update(snapshot, snapshot);
+
+        state.MarkNotMergeable("repo", 42, rejectedHead);
+
+        _ = state.Current!.Repositories.Single().PullRequests.Single().ReadyToMerge.Should().Be(expectedReady);
+    }
+
+    private sealed class BlockingReadOnlyList<T>(IReadOnlyList<T> inner) : IReadOnlyList<T>
+    {
+        public TaskCompletionSource EnumerationStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource AllowEnumeration { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Count => inner.Count;
+        public T this[int index] => inner[index];
+
+        public IEnumerator<T> GetEnumerator()
+        {
+            EnumerationStarted.TrySetResult();
+            AllowEnumeration.Task.GetAwaiter().GetResult();
+            return inner.GetEnumerator();
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 }

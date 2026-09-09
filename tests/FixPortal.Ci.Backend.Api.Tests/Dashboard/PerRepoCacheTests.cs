@@ -1,6 +1,7 @@
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
+using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using NodaTime;
 using NodaTime.Testing;
 using Xunit;
@@ -115,5 +116,56 @@ public class PerRepoCacheTests
         _ = gotUpper.Should().Be(m3);
         _ = cache.TryGet("repo", out var gotLower).Should().BeTrue();
         _ = gotLower.Should().Be(m3);
+    }
+
+    [Fact]
+    public void Update_from_the_current_value_preserves_sibling_entries()
+    {
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>();
+        cache.Update(
+            "repo",
+            new Dictionary<int, PrMergeState>
+            {
+                [1] = new(1, false, "MERGEABLE", "CLEAN", "head-1"),
+                [2] = new(2, false, "MERGEABLE", "CLEAN", "head-2"),
+            }
+        );
+
+        cache.Update(
+            "repo",
+            current =>
+            {
+                var updated = current!.ToDictionary();
+                updated[1] = new(1, false, "CONFLICTING", "DIRTY", "head-1");
+                return updated;
+            }
+        );
+
+        _ = cache.TryGet("repo", out var result).Should().BeTrue();
+        _ = result![1].IsMergeClean.Should().BeFalse();
+        _ = result[2].IsMergeClean.Should().BeTrue();
+    }
+
+    [Fact]
+    public void Update_from_the_current_value_does_not_revive_an_expired_entry()
+    {
+        var clock = new FakeClock(Instant.FromUnixTimeSeconds(1000));
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(clock, Duration.FromMinutes(10));
+        cache.Update("repo", new Dictionary<int, PrMergeState> { [1] = new(1, false, "MERGEABLE", "CLEAN") });
+        clock.AdvanceMinutes(11);
+        var sawExpiredEntry = false;
+
+        cache.Update(
+            "repo",
+            current =>
+            {
+                sawExpiredEntry = current is not null;
+                return new Dictionary<int, PrMergeState> { [2] = new(2, false, "CONFLICTING", "DIRTY") };
+            }
+        );
+
+        _ = sawExpiredEntry.Should().BeFalse();
+        _ = cache.TryGet("repo", out var result).Should().BeTrue();
+        _ = result.Should().ContainKey(2).And.NotContainKey(1);
     }
 }

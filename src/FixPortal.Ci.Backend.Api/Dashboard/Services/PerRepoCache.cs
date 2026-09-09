@@ -4,10 +4,10 @@ using NodaTime;
 namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 
 /// <summary>
-/// Thread-safe per-repo last-known-good holder. Written only by a single
-/// enrichment worker; read by <c>DashboardRefreshService</c> when it composes a
-/// snapshot. Keeps the snapshot single-writer: enrichment values live here, not
-/// in <c>DashboardSnapshotState</c>. Last-known-good is implicit — a failed sweep
+/// Thread-safe per-repo last-known-good holder. Usually written by one enrichment
+/// worker; targeted request-path updates are atomic with those writes. Read by
+/// <c>DashboardRefreshService</c> when it composes a snapshot. Last-known-good is
+/// implicit — a failed sweep
 /// is never written, so the prior value survives. Returns <c>default</c> for an
 /// unknown repo; list-typed consumers coalesce to an empty list at the read site.
 /// When constructed with a <see cref="Duration"/> max-age, entries older than
@@ -35,6 +35,20 @@ public sealed class PerRepoCache<T>
 
     public void Update(string repo, T value) =>
         _byRepo[repo] = new CacheEntry(value, _clock?.GetCurrentInstant() ?? Instant.MinValue);
+
+    public void Update(string repo, Func<T?, T> update)
+    {
+        var writtenAt = _clock?.GetCurrentInstant() ?? Instant.MinValue;
+        _ = _byRepo.AddOrUpdate(
+            repo,
+            _ => new CacheEntry(update(null), writtenAt),
+            (_, current) =>
+                new CacheEntry(
+                    update(_maxAge is { } age && writtenAt - current.WrittenAt > age ? null : current.Value),
+                    writtenAt
+                )
+        );
+    }
 
     public bool TryGet(string repo, out T? value)
     {

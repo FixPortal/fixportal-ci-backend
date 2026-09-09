@@ -726,12 +726,17 @@ public sealed class GitHubOrgClient(
         return filtered;
     }
 
-    public async Task<GitHubMergeResult> MergePullRequestAsync(string repo, int pullNumber, CancellationToken ct)
+    public async Task<GitHubMergeResult> MergePullRequestAsync(
+        string repo,
+        int pullNumber,
+        string headSha,
+        CancellationToken ct
+    )
     {
         var path = $"repos/{_gitHub.Owner}/{repo}/pulls/{pullNumber}/merge";
         using var request = new HttpRequestMessage(HttpMethod.Put, path)
         {
-            Content = JsonContent.Create(new { merge_method = "rebase" }, options: SerializerOptions),
+            Content = JsonContent.Create(new { merge_method = "rebase", sha = headSha }, options: SerializerOptions),
         };
         await AddStandardHeadersAsync(request, ct);
 
