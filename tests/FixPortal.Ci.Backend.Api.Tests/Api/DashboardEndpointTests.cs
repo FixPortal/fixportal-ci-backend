@@ -839,11 +839,14 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                 Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken)
             ) == handler.SecondEntered.Task;
         handler.Release.TrySetResult();
+        await handler.SecondEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         using var firstResponse = await first;
         using var secondResponse = await second;
 
         _ = secondBeforeRelease.Should().BeFalse();
         _ = handler.MaxConcurrency.Should().Be(1);
+        _ = firstResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        _ = secondResponse.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Fact]

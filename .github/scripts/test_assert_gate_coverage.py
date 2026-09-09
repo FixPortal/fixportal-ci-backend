@@ -30,7 +30,7 @@ jobs:
             path = Path(directory) / "ci.yml"
             path.write_text(workflow, encoding="utf-8")
             env = os.environ.copy()
-            for name in ("GATE_EXEMPT", "GATE_CONDITIONAL_EXEMPT", "GATE_FILE_EXEMPT"):
+            for name in ("GATE_EXEMPT", "GATE_CONDITIONAL_EXEMPT", "GATE_FILE_EXEMPT", "GATE_JOB"):
                 env.pop(name, None)
             return subprocess.run(
                 [sys.executable, str(SCRIPT), str(path)],
@@ -50,7 +50,9 @@ jobs:
             "contains(needs.*.result, 'failure') && 1 > 2",
         ):
             with self.subTest(condition=condition):
-                self.assertNotEqual(0, self.run_checker(condition, "exit 1").returncode)
+                result = self.run_checker(condition, "exit 1")
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("has no step whose `if:` references a", result.stderr)
 
     def test_literal_comparisons_follow_github_equality_semantics(self):
         for comparison in ("'VALUE' == 'value'", "'1' == 1", "! false", "2 > 1"):
@@ -74,7 +76,9 @@ jobs:
     def test_exit_status_must_be_in_the_shell_nonzero_range(self):
         condition = "contains(needs.*.result, 'failure')"
         self.assertEqual(0, self.run_checker(condition, "exit 255").returncode)
-        self.assertNotEqual(0, self.run_checker(condition, "exit 256").returncode)
+        result = self.run_checker(condition, "exit 256")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("not a recognised failing form", result.stderr)
 
 
 if __name__ == "__main__":

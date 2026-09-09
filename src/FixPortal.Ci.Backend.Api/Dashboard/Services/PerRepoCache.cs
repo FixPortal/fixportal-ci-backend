@@ -43,10 +43,10 @@ public sealed class PerRepoCache<T>
             repo,
             _ => new CacheEntry(update(null), writtenAt),
             (_, current) =>
-                new CacheEntry(
-                    update(_maxAge is { } age && writtenAt - current.WrittenAt > age ? null : current.Value),
-                    writtenAt
-                )
+            {
+                var updated = update(_maxAge is { } age && writtenAt - current.WrittenAt > age ? null : current.Value);
+                return ReferenceEquals(updated, current.Value) ? current : new CacheEntry(updated, writtenAt);
+            }
         );
     }
 

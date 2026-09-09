@@ -168,4 +168,18 @@ public class PerRepoCacheTests
         _ = cache.TryGet("repo", out var result).Should().BeTrue();
         _ = result.Should().ContainKey(2).And.NotContainKey(1);
     }
+
+    [Fact]
+    public void No_op_update_does_not_extend_the_entry_ttl()
+    {
+        var clock = new FakeClock(Instant.FromUnixTimeSeconds(1000));
+        var cache = new PerRepoCache<RepoMetrics>(clock, Duration.FromMinutes(10));
+        cache.Update("repo", new RepoMetrics(1, 1.0, 1, 0, Instant.FromUnixTimeSeconds(1)));
+        clock.AdvanceMinutes(9);
+
+        cache.Update("repo", current => current!);
+        clock.AdvanceMinutes(2);
+
+        _ = cache.TryGet("repo", out _).Should().BeFalse();
+    }
 }
