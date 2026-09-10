@@ -2,11 +2,13 @@ import os
 import subprocess
 import sys
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 
 
 SCRIPT = Path(__file__).with_name("assert_gate_coverage.py")
+HYGIENE_CHECKER = Path(__file__).with_name("assert_workflow_hygiene.py")
 
 # A gate must fail for BOTH terminal results: a cancelled dependency is not a passing
 # one. Every condition a test expects to be ACCEPTED therefore covers both.
@@ -122,8 +124,25 @@ jobs:
 
     def test_not_success_covers_both_terminal_results(self):
         """The spelling the rejection above recommends has to be accepted."""
-        result = self.run_checker("needs.build.result != 'success'", "exit 1")
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        for condition in (
+            "needs.build.result != 'success'",
+            "needs['build'].result != 'success'",
+            "needs.build.result != 'success' && needs.build.result != 'skipped'",
+            "TRUE && needs.build.result != 'success'",
+        ):
+            with self.subTest(condition=condition):
+                result = self.run_checker(condition, "exit 1")
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_multiline_continue_on_error_cannot_hide_a_non_failing_gate(self):
+        for header in ("", ">-", "|-"):
+            for value, expected in (("true", 1), ("false", 0), ("FALSE", 0)):
+                with self.subTest(header=header, value=value):
+                    result = self.run_checker(
+                        BOTH,
+                        f"exit 1\n        continue-on-error: {header}\n          {value}",
+                    )
+                    self.assertEqual(expected, result.returncode, result.stdout + result.stderr)
 
     def test_a_gate_script_absent_from_the_policy_is_refused(self):
         """A script a gated job runs decides what can merge, so it must be HIGH.
@@ -238,6 +257,65 @@ jobs:
         """
         result = self.run_checker(BOTH, "echo 'tag # audit'; exit 1")
         self.assertNotEqual(0, result.returncode)
+
+
+class WorkflowHygieneTests(unittest.TestCase):
+    def test_local_docker_action_image_must_be_pinned(self):
+        # "Dockerfile" is only exempt when it resolves to an actual file next to
+        # action.yml -- otherwise a registry reference sharing that basename
+        # (e.g. myregistry.example.com/Dockerfile) would wrongly read as a local
+        # build. A registry-lookalike case proves that: same basename as the
+        # exempt case, no local Dockerfile on disk, still must be pin-checked.
+        cases = (
+            ("docker://alpine:latest", 1, False),
+            ("alpine:latest", 1, False),
+            ("myregistry.example.com/Dockerfile", 1, False),
+            ("Dockerfile", 0, True),
+        )
+        for image, expected_code, write_dockerfile in cases:
+            with self.subTest(image=image), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                workflows = root / ".github" / "workflows"
+                action = root / ".github" / "actions" / "local"
+                workflows.mkdir(parents=True)
+                action.mkdir(parents=True)
+                (workflows / "ci.yml").write_text(
+                    textwrap.dedent(
+                        """\
+                        on: push
+                        permissions: {}
+                        jobs:
+                          test:
+                            runs-on: ubuntu-latest
+                            steps:
+                              - uses: ./.github/actions/local
+                        """
+                    ),
+                    encoding="utf-8",
+                )
+                (action / "action.yml").write_text(
+                    textwrap.dedent(
+                        f"""\
+                        name: Local Docker action
+                        runs:
+                          using: docker
+                          image: {image}
+                        """
+                    ),
+                    encoding="utf-8",
+                )
+                if write_dockerfile:
+                    (action / "Dockerfile").write_text("FROM scratch\n", encoding="utf-8")
+                result = subprocess.run(
+                    [sys.executable, str(HYGIENE_CHECKER)],
+                    cwd=root,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, expected_code, result.stdout + result.stderr)
+                if expected_code:
+                    self.assertIn(image, result.stdout)
 
 
 if __name__ == "__main__":
