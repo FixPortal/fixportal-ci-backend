@@ -620,6 +620,8 @@ def decode_yaml_double_quoted(inner):
                     code_point = int(inner[index + 2 : index + 2 + width], 16)
                 except ValueError:
                     code_point = None
+            if code_point is not None and code_point > 0x10FFFF:
+                code_point = None
             if code_point is not None:
                 out.append(chr(code_point))
                 index += 2 + width
