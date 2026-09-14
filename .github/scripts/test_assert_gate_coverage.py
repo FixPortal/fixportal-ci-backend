@@ -75,6 +75,83 @@ jobs:
                 text=True,
             )
 
+    def run_block(self, *lines):
+        """run_checker with a multi-line `run:` body, as a YAML block scalar.
+
+        The whole-body rules below cannot be exercised by a single-line body at all --
+        the defect they close is an accepted form sitting on a LATER line than a
+        command that already decided the step's exit status.
+        """
+        indented = "".join(f"\n          {line}" for line in lines)
+        return self.run_checker(BOTH, f"|{indented}")
+
+    # --- the whole-body verdict (canonical fixportal-agents-skills#176) --------------
+    # ends_non_zero used to accept a body if ANY logical line matched an accepted form,
+    # so the step could exit ZERO on an earlier line while the checker vouched for a
+    # later one. Only message lines (echo/printf) and `set` shell-option lines may now
+    # precede the failing command.
+
+    def test_an_unreachable_exit_behind_exit_zero_is_refused(self):
+        result = self.run_block("exit 0", "exit 1")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("not a recognised failing form", result.stderr)
+
+    def test_message_and_shell_option_prefixes_are_accepted(self):
+        for prefix in (
+            ("echo \"::error::upstream failed\"",),
+            ("printf '%s\\n' \"upstream failed\"",),
+            (">&2 echo \"upstream failed\"",),
+            ("set -euo pipefail", "echo \"upstream failed\""),
+        ):
+            with self.subTest(prefix=prefix):
+                result = self.run_block(*prefix, "exit 1")
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
+    def test_execution_disabling_shell_options_are_refused(self):
+        """`set -n` (noexec) and `set -t` (onecmd) STOP the shell before the final
+        command, so the `exit 1` the checker can see never runs and the step exits
+        ZERO. _SHELL_OPTION is an allowlist for exactly this reason."""
+        for option in ("set -n", "set -o noexec", "set -t", "set -o onecmd"):
+            with self.subTest(option=option):
+                result = self.run_block(option, "exit 1")
+                self.assertNotEqual(0, result.returncode)
+
+    def test_a_non_message_prefix_is_refused(self):
+        result = self.run_block("trap 'exit 0' EXIT", "exit 1")
+        self.assertNotEqual(0, result.returncode)
+
+    def test_a_command_subexpression_is_refused(self):
+        """Under `shell: pwsh` a subexpression exits the step during expansion, and
+        mask_quoted blanks it to a bare `echo` that reads as an ordinary message."""
+        for body in ('echo "$(exit 0)"', "echo $(exit 0)"):
+            with self.subTest(body=body):
+                result = self.run_block(body, "exit 1")
+                self.assertNotEqual(0, result.returncode)
+
+    def test_a_guarded_throw_is_refused(self):
+        """mask_quoted blanks the message, so a `.*` throw tail normalised this to
+        `throw || true` -- and bash `-e` does not fire on a status `||` consumes."""
+        result = self.run_checker(BOTH, "throw \"upstream failed\" || true")
+        self.assertNotEqual(0, result.returncode)
+
+    def test_a_test_guarding_the_exit_is_refused(self):
+        """The `if <test>; then exit 1; fi` spellings exit ZERO when their test fails."""
+        for body in (
+            'if [ -z "$x" ]; then exit 1; fi',
+            'if [ -z "$x" ]; then echo "missing"; exit 1; fi',
+        ):
+            with self.subTest(body=body):
+                self.assertNotEqual(0, self.run_checker(BOTH, body).returncode)
+
+    def test_a_github_expression_in_the_message_is_accepted(self):
+        """`${{ ... }}` is not `$(`. The house gate message interpolates one, so
+        refusing it would red every gate in the estate."""
+        result = self.run_block(
+            'echo "Upstream results: ${{ join(needs.*.result, \', \') }}"',
+            "exit 1",
+        )
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+
     def test_statically_false_conditions_do_not_enforce_a_dependency(self):
         for condition in (
             "false && contains(needs.*.result, 'failure')",
