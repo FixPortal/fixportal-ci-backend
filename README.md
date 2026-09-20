@@ -257,11 +257,11 @@ alerts route takes no ref filter, so one open alert reports on every open pull
 request in that repository.
 
 **Code Quality is the awkward one, and its two halves come from different
-places.** Both observed on `fixportal-ci-backend` PR #85 (2026-08-12). Note that
-the product itself has since been disabled estate-wide — see *GitHub Code Quality
-is disabled here* below — so what follows describes how the reviewer behaved
-while it ran, and explains a configuration entry that currently has no live
-input:
+places.** Both observed on `fixportal-ci-backend` PR #85 (2026-08-12). The
+product was disabled estate-wide later that day, then re-enabled on the seven
+analysable public repositories, this one included, on 2026-08-14 — see *GitHub
+Code Quality runs here* below. What follows describes how the reviewer behaved
+while it ran, which is once again how it behaves today:
 
 - Its **findings are review threads** authored by `github-code-quality` — two on
   that pull request — and are *not* alerts: `code-scanning/alerts` returned `0`
@@ -362,31 +362,43 @@ PRs welcome. Branch from `main`; CI runs actionlint, formatting, build and xUnit
 tests on every PR, and CodeQL runs through GitHub's default setup. Stryker runs
 weekly (Saturdays, 02:45 UTC) and on manual dispatch.
 
-### GitHub Code Quality is disabled here, like the rest of the estate
+### GitHub Code Quality runs here — free on public repos, AI findings off
 
-Current state: `not-configured`, `ai_findings_option: disabled`, as on all eight
-public FixPortal repositories since 2026-08-12.
+Current state: `configured`, `ai_findings_option: disabled`, since 2026-08-14 —
+one of the seven analysable public FixPortal repositories re-enabled that day
+(read back from the repo's `code-quality/setup` API: `state: configured`,
+`languages: [csharp]`, `schedule: weekly`).
 
-This section previously argued the opposite — that this repository was a
-documented exception because Code Quality is free on public repositories, and
-that only the paid private-repository products were switched off org-wide on
-2026-08-04. **That premise was wrong.** Code Quality is a paid product
-regardless of repository visibility, so it had been billing on all eight public
-repositories. The 2026-08-12 GitHub estate audit found it enabled on every one
-of them and it was disabled across the board.
+This section has been wrong twice, in opposite directions. It first argued this
+repository was a documented exception because Code Quality is free on public
+repositories and only the paid private-repository products were switched off
+org-wide on 2026-08-04. A 2026-08-12 correction then declared that premise
+wrong — "Code Quality is a paid product regardless of repository visibility" —
+and the product was disabled on all eight public repositories. **The correction
+was itself wrong**, refuted 2026-08-14 by GitHub's own pricing page: *"$10 USD
+per committer / month plus usage-based billing for AI features and Actions
+minutes. Public repositories: $0 per committer + usage-based billing for
+AI-powered work."* The seven analysable public repositories were re-enabled the
+same day with `ai_findings_option: disabled` — the AI credit meter is the one
+that costs on public, and it is off.
 
 The note is kept rather than deleted because it was the artefact a later audit
-would have read to justify re-enabling it.
+would have read to justify each wrong state in turn.
 
-One real consequence survives the correction, and it is a **known gap, not a
-resolved point**: the board's Code Quality review pill reads this product's
-review threads, so with the product not-configured that pill has no source on
-any public repository. It is intentionally omitted from the active example
-above; `CodeScanningCheckCountsAsParticipation` documents how it behaved while
-enabled and has no live input today.
+`fixportal-workflows` deliberately stays `not-configured`: its `/languages` API
+returns `{}` and Code Quality supports only Java, JS, TS, Python, Ruby, C# and
+Go, so it can never produce a finding — and leaving it `configured` parked
+`ai_findings_option` at `null`, which is UNKNOWN, not disabled. All private
+repositories stay `not-configured`: on private the $10/committer licence meters
+every unique active committer org-wide, so enabling it anywhere private needs an
+explicit decision (one org member = $10/month total, not per repo).
 
-Re-enabling Code Quality anywhere costs money and needs an explicit decision on
-the current charges. Do not re-enable it on free-tier grounds.
+The board's Code Quality review pill reads this product's review threads, so it
+has a live source on the seven configured public repositories again — including
+this one, where 20 open findings resurfaced on re-enable (97 `note` / 11
+`warning` estate-wide, zero security severity; dismissable in the GitHub UI
+only — the API has no dismissal path). `CodeScanningCheckCountsAsParticipation`
+above documents how the pill treats a clean scan.
 
 ```
 dotnet tool restore
