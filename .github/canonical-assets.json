@@ -13,7 +13,7 @@
     },
     {
       "path": ".github/scripts/assert_gate_coverage.py",
-      "sha256": "a764291ef46e5beec8700cd72125b3a0c000a271b2cd33efb76c8110f13492ee",
+      "sha256": "55106f0054d71dc776ed0f03e02ed2094a17c415737ec4c2c6d7c765fb311a11",
       "verbatim": true
     },
     {
