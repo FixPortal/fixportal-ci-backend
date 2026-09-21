@@ -143,14 +143,18 @@ jobs:
             with self.subTest(body=body):
                 self.assertNotEqual(0, self.run_checker(BOTH, body).returncode)
 
-    def test_a_github_expression_in_the_message_is_accepted(self):
-        """`${{ ... }}` is not `$(`. The house gate message interpolates one, so
-        refusing it would red every gate in the estate."""
+    def test_a_github_expression_in_the_message_is_refused(self):
+        """A `${{ ... }}` interpolation inside a gate run: body is refused: GitHub
+        substitutes it textually before the shell parses the line, and it can splice
+        a separator or an early exit into an otherwise inert message. The house gate
+        keeps the expression in `env:`. This test used to pin the pre-hoist spelling
+        as ACCEPTED; the canonical contract reversed (fixportal-agents-skills PR #223),
+        so the fixture had to move with it."""
         result = self.run_block(
             'echo "Upstream results: ${{ join(needs.*.result, \', \') }}"',
             "exit 1",
         )
-        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertNotEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_statically_false_conditions_do_not_enforce_a_dependency(self):
         for condition in (
