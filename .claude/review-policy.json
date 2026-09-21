@@ -45,6 +45,8 @@
   "version": 1,
 
   "high": [
+    ".github/canonical-assets.json",
+    ".github/scripts/assert_canonical_assets.py",
     ".github/scripts/summarize_coverage.py",
     ".claude/review-policy.json",
     ".coderabbit.yaml",
