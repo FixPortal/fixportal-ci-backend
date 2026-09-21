@@ -98,7 +98,7 @@ _REDIR = r"(?:\s*[12]?>>?\s*(?:&[12]|[^\s;|&]+))*"
 # command itself is still required separately by _FAIL.
 _ECHO = rf"(?:{_REDIR}\s*)?(?:echo|printf)\s+[^\n|&;<>]*{_REDIR}"
 _NONZERO_STATUS = r"0*(?:[1-9]|[1-9][0-9]|1[0-9]{2}|2[0-4][0-9]|25[0-5])"
-_FAIL = rf"(?:exit\s+{_NONZERO_STATUS}|false){_REDIR}"
+_FAIL = rf"(?:exit\s+{_NONZERO_STATUS}|false){_REDIR}\s*;?"
 ACCEPTED_FAILING_FORMS = tuple(
     re.compile(pattern)
     for pattern in (
@@ -498,8 +498,8 @@ def conditional_jobs(lines, jobs, job_indent):
     """The ids of jobs carrying a job-level `if:` condition.
 
     Job-level only. A step-level `if:` sits deeper and is out of scope -- a skipped
-    step fails its job's own assertions, it does not make the gate report green over a
-    missing check. Each job's own body indentation is read rather than assumed, so a
+    step does not make the gate report green over a missing check, but it is outside this
+    job-level scan. Each job's own body indentation is read rather than assumed, so a
     valid deeper `if:` cannot disappear and leave the job looking unconditional.
     """
     starts = sorted(jobs.values())
@@ -515,11 +515,74 @@ def conditional_jobs(lines, jobs, job_indent):
     return conditional
 
 
+def tolerant_jobs(lines, jobs, job_indent):
+    """The ids of jobs carrying an effective job-level `continue-on-error`."""
+    starts = sorted(jobs.values())
+    tolerant = set()
+    for job_id, start in jobs.items():
+        end = min((i for i in starts if i > start), default=len(lines))
+        indent = job_body_indent(lines, jobs, job_id, job_indent)
+        if indent is None:
+            continue
+        tolerant_key = key_pattern(indent, "continue-on-error")
+        for i in range(start + 1, end):
+            match = tolerant_key.match(lines[i].rstrip("\r\n"))
+            if not match:
+                continue
+            value = strip_comment(match.group(1)).strip()
+            if not value or is_block_scalar_header(value):
+                body, _ = continuation_lines(lines, i, indent)
+                value = " ".join(strip_comment(line).strip() for line in body)
+            value = normalise_condition(value)
+            # Two shapes the bare membership test misread, both false REDs on a feeder
+            # that tolerates nothing: a block-scalar spelling (`continue-on-error: >`
+            # then `false`) never unfolded past the header, and a compound like
+            # `${{ false && inputs.allow_failure }}` survives normalisation as itself
+            # while static_truth folds it to False (mirror fixportal-claude-skills#110;
+            # unit review 2026-09-21). UNKNOWN stays tolerant -- an expression this
+            # checker cannot fold may still evaluate true at runtime, and that is the
+            # conservative direction.
+            if value not in ("false", "") and static_truth(value) is not False:
+                tolerant.add(job_id)
+                break
+    return tolerant
+
+
 def job_block(lines, jobs, job_id):
     """The lines of one job's body, from its key to the next job key."""
     start = jobs[job_id]
     end = min((i for i in sorted(jobs.values()) if i > start), default=len(lines))
     return [line.rstrip("\r\n") for line in lines[start + 1 : end]]
+
+
+def job_needs(lines, jobs, job_id, job_indent):
+    """The direct `needs:` ids for one job, including block-list form."""
+    start = jobs[job_id]
+    end = min((i for i in sorted(jobs.values()) if i > start), default=len(lines))
+    indent = job_body_indent(lines, jobs, job_id, job_indent)
+    if indent is None:
+        return set()
+    needs_key = key_pattern(indent, "needs")
+    block_need = block_need_pattern(indent)
+    for i in range(start + 1, end):
+        match = needs_key.match(lines[i].rstrip("\r\n"))
+        if not match:
+            continue
+        value = strip_comment(match.group(1)).strip()
+        if value:
+            return set(parse_need_ids(value))
+        result = set()
+        for line in lines[i + 1 : end]:
+            item = block_need.match(line.rstrip("\r\n"))
+            if item:
+                result.add(item.group(1) or item.group(2) or item.group(3))
+                continue
+            if COMMENT_OR_BLANK.match(line):
+                continue
+            if len(line) - len(line.lstrip(" ")) <= indent:
+                break
+        return result
+    return set()
 
 
 def normalise_condition(value):
@@ -1047,9 +1110,17 @@ def ends_non_zero(body):
     # This predates the message-prefix rule: the same body passed the any-line rule on
     # its `throw` alone. What the subexpression does cannot be read from the file, which
     # is the basis on which this function vouches at all, so it is refused rather than
-    # parsed. GitHub's own `${{ ... }}` is untouched -- it is not `$(`.
+    # parsed. GitHub substitutes `${{ ... }}` textually before the shell parses
+    # the body, so an expression can splice a separator or early exit into an
+    # otherwise inert message line. Keep expressions in `env:` instead.
     # (CodeRabbit, PR #176.)
     if "$(" in body:
+        return False
+    if "${{" in body:
+        return False
+    if re.search(r"\bthrow\s+[@(]", body):
+        return False
+    if re.search(r"\bexit\s+[^\s\n;|&<>]*['\"]", body):
         return False
     text = mask_quoted(body)
     # Drop comments AFTER masking, so a `#` inside a string is not treated as one.
@@ -1099,8 +1170,25 @@ def step_can_fail(block, span, key_indent):
         if not value or is_block_scalar_header(value):
             body, _ = continuation_lines(block, i, key_indent)
             value = " ".join(strip_comment(line).strip() for line in body)
-        if normalise_condition(value) not in ("false", ""):
+        value = normalise_condition(value)
+        # The job-level sibling consults static_truth for the same expression: a
+        # compound like `${{ false && inputs.allow_failure }}` normalises to itself but
+        # folds to False, and a step whose continue-on-error cannot evaluate true CAN
+        # still fail the job. Without the consult the two levels disagreed about the
+        # same expression (unit review 2026-09-21). UNKNOWN stays cannot-fail, the
+        # conservative direction.
+        if value not in ("false", "") and static_truth(value) is not False:
             return False, "carries `continue-on-error`, so it cannot fail the job"
+
+    shell = "bash"
+    shell_key = step_key_pattern(key_indent, "shell")
+    for i in range(start, end):
+        match = shell_key.match(block[i])
+        if match and len(match.group(1)) == key_indent:
+            shell = decode_yaml_scalar(strip_inline_comment(match.group(2)).strip()).strip()
+            break
+    if shell not in ("bash", "bash {0}", "pwsh", "pwsh {0}"):
+        return False, f"uses unsupported shell `{shell}`"
 
     run_key = step_key_pattern(key_indent, "run")
     for i in range(start, end):
@@ -1135,6 +1223,10 @@ def step_can_fail(block, span, key_indent):
         # backslash-continued echo read as failable commands.
         joined = "\n".join(body)
         joined = re.sub(r"\\\n\s*", " ", joined)
+        if shell.startswith("pwsh") and not re.fullmatch(
+            r"\s*throw(?:\s+(?:'[^'\n]*'|\"[^\"\n]*\"))?\s*", joined
+        ):
+            return False, "uses pwsh; only an unconditional throw with an optional static message is supported"
         if ends_non_zero(joined):
             return True, ""
         return False, (
@@ -1186,6 +1278,16 @@ def step_conditions(block, indent):
 
         match = step_if_value.match(line)
         if match:
+            key_column = len(match.group(1))
+            for prior in range(index, -1, -1):
+                prefix = block[prior].lstrip()
+                prior_indent = len(block[prior]) - len(prefix)
+                if prefix.startswith("- ") and prior_indent < key_column:
+                    key_column = prior_indent + 2
+                    break
+            if len(match.group(1)) != key_column:
+                index += 1
+                continue
             value = strip_comment(match.group(2)).strip()
             if value and not BLOCK_SCALAR.match(value):
                 yield value, index
@@ -1388,13 +1490,204 @@ def parse_jobs(workflow_path):
 # script name inside an `echo` message, or a path that a later commit deleted, from
 # reddening a repository over a file it does not have.
 GATE_SCRIPT = re.compile(
-    r"""(?<![\w./-])\.?/?((?:\.github/scripts|scripts|build|tools)/[\w./-]*\.(?:ps1|py|sh))\b"""
+    # The extension set is deliberately closed: these are the gate-script languages
+    # supported by the estate checker. Add a new extension here and to the policy
+    # review before wiring it into a merge barrier.
+    r"""(?<![\w.-])\.?/?((?:\.github/scripts|scripts|build|tools)/[\w./-]*\.(?:ps1|py|sh))\b"""
 )
 # A `run:` key at any depth. Group 1 is everything before the key, so its LENGTH is the
 # key's own column -- which is what continuation_lines needs to find a block scalar's
 # body. Same reasoning as step_key_pattern, and the same dash-form hazard: a `- run: |`
 # opens at the key, two columns right of the dash.
 RUN_KEY = re.compile(r"""^(\s*(?:-\s+)?)(?:'run'|"run"|run)\s*:\s*(.*?)\s*$""")
+LOCAL_USES = re.compile(r"""^\s*(?:-\s+)?(?:'uses'|"uses"|uses)\s*:\s*['"]?((?:\./|\$/)[^\s#'"]+)""")
+# The `runs:` key of an action's metadata, anchored at column ZERO like JOBS_KEY: that is
+# where action metadata carries it, and the anchor keeps a `runs:`-shaped line inside a
+# reusable workflow's (always indented) run: body from being read as metadata. The colon
+# in the pattern is what keeps `runs-on:` from matching.
+RUNS_KEY = re.compile(r"""^(?:'runs'|"runs"|runs)\s*:\s*(.*?)\s*$""")
+def parse_flow_mapping(text):
+    """The depth-1 entries of a `{...}` flow mapping as (key, value) pairs, or None.
+
+    A hand parser, because the regex scan it replaces was wrong in both directions. A
+    quoted span is data, not syntax: `{note: "{using: composite}", using: docker}` held
+    the decoy first and a regex returned composite, so the real non-composite entry was
+    never read -- fail-OPEN. And a naive strip_comment cut a quoted '#'
+    (`{main: "x # y", using: ...}`), leaving an unterminated fragment that raised on
+    valid YAML -- a false RED. (CodeRabbit, PR #228.) So quotes are tracked, a '#'
+    opens a comment only outside quotes (after whitespace or at a line start, per the
+    YAML rule), keys may be quoted exactly as key_pattern admits in block style, and a
+    nested flow value is skipped with its own depth walk so its braces never move the
+    outer count.
+
+    None when the text is not a flow mapping or is unterminated -- the caller then
+    raises, because "cannot classify" must never read as "composite".
+    """
+    length = len(text)
+
+    def skip_gap(i):
+        while i < length:
+            if text[i] in " \t\r\n":
+                i += 1
+            elif text[i] == "#":
+                newline = text.find("\n", i)
+                i = length if newline == -1 else newline + 1
+            else:
+                break
+        return i
+
+    def read_quoted(i):
+        quote = text[i]
+        i += 1
+        chars = []
+        while i < length:
+            char = text[i]
+            if quote == '"' and char == BACKSLASH and i + 1 < length:
+                chars.append(text[i + 1])
+                i += 2
+                continue
+            if char == quote:
+                if quote == "'" and i + 1 < length and text[i + 1] == "'":
+                    chars.append("'")
+                    i += 2
+                    continue
+                return "".join(chars), i + 1
+            chars.append(char)
+            i += 1
+        return "".join(chars), i
+
+    def read_bare(i):
+        start = i
+        while i < length and text[i] not in ",{}: \t\r\n":
+            i += 1
+        return text[start:i], i
+
+    index = skip_gap(0)
+    if index >= length or text[index] != "{":
+        return None
+    depth = 1
+    index += 1
+    entries = []
+    while index < length and depth > 0:
+        index = skip_gap(index)
+        if index >= length:
+            break
+        char = text[index]
+        if char == "{":
+            depth += 1
+            index += 1
+            continue
+        if char == "}":
+            depth -= 1
+            index += 1
+            continue
+        if char == ",":
+            index += 1
+            continue
+        if depth != 1:
+            # Inside a nested mapping: quoted spans stay atomic so their content
+            # (braces, commas, colons) never reaches the outer walk.
+            if char in "'\"":
+                _, index = read_quoted(index)
+            else:
+                index += 1
+            continue
+        if char in "'\"":
+            key, index = read_quoted(index)
+        else:
+            key, index = read_bare(index)
+        index = skip_gap(index)
+        if index >= length or text[index] != ":":
+            continue
+        index = skip_gap(index + 1)
+        if index < length and text[index] in "'\"":
+            value, index = read_quoted(index)
+        elif index < length and text[index] == "{":
+            nested_depth = 0
+            while index < length:
+                char = text[index]
+                if char in "'\"":
+                    _, index = read_quoted(index)
+                    continue
+                if char == "{":
+                    nested_depth += 1
+                elif char == "}":
+                    nested_depth -= 1
+                    if nested_depth == 0:
+                        index += 1
+                        break
+                index += 1
+            value = None
+        else:
+            value, index = read_bare(index)
+        if value is not None:
+            entries.append((key, value))
+    if depth != 0:
+        return None
+    return entries
+
+
+def resolve_runs_using(lines, target):
+    """The action's `runs.using` value, or None when the file has no `runs:` key.
+
+    Scoped to the `runs:` mapping. The whole-file regex this replaces matched the first
+    `using:`-shaped line ANYWHERE, which was wrong in both directions:
+
+      * a block scalar (a multi-line description, an embedded script) holding an
+        indented `'using': javascript` line matched BEFORE the real mapping, so a valid
+        composite action raised -- a false RED on a healthy action (CodeRabbit,
+        fixportal-fixatdl#148);
+      * a flow-style `runs: {using: node20, main: index.js}` never matched the
+        line-anchored pattern at all, so `using` stayed unset and the non-composite
+        guard was skipped -- fail-OPEN (issue #227).
+
+    A `runs:` key holding no readable `using` entry RAISES rather than skipping the
+    guard: "cannot classify" must never read as "composite". None (no `runs:` at all)
+    remains the reusable-workflow path, which carries no such guard.
+    """
+    for start, line in enumerate(lines):
+        match = RUNS_KEY.match(line)
+        if match:
+            break
+    else:
+        return None
+    value = strip_comment(match.group(1)).strip()
+    if value.startswith("{"):
+        # A flow mapping is PARSED, not regexed (parse_flow_mapping for the why and the
+        # mechanics). The regex scan this replaces read `using` out of quoted text and
+        # without depth context: `{note: "{using: composite}", using: docker}` returned
+        # composite because the decoy sat first -- fail-OPEN -- and the naive
+        # strip_comment ahead of it cut a quoted '#', turning valid YAML into an
+        # unterminated fragment that raised -- a false RED. (CodeRabbit, PR #228.) The
+        # parser reads the RAW text (so a comment marker inside quotes survives), takes
+        # `using` only from a depth-1 key, and returns None on an unterminated mapping,
+        # which falls to the fail-closed raise below rather than classifying a fragment.
+        entries = parse_flow_mapping("\n".join([match.group(1)] + list(lines[start + 1 :])))
+        if entries is not None:
+            for entry_key, entry_value in entries:
+                if entry_key == "using":
+                    return entry_value
+    elif not value:
+        # Block style: `using` is a child key of the mapping, at the indentation every
+        # key in it shares -- read off the document, never assumed. The mapping ends at
+        # the next line back at column zero.
+        end = len(lines)
+        for i in range(start + 1, len(lines)):
+            candidate = lines[i]
+            if candidate.strip() and not candidate.startswith((" ", "#")):
+                end = i
+                break
+        child = mapping_indent(lines, start + 1, end)
+        if child is not None:
+            using_key = key_pattern(child, "using")
+            for i in range(start + 1, end):
+                entry = using_key.match(lines[i])
+                if entry:
+                    return decode_yaml_scalar(strip_comment(entry.group(1)).strip()).strip()
+    raise ValueError(
+        f"{target}: `runs:` is present but holds no readable `using:` entry, so whether "
+        "the body is composite cannot be verified -- refusing to follow it"
+    )
 
 
 def glob_to_regex(pattern):
@@ -1444,10 +1737,90 @@ def policy_root(workflow_path):
     for parent in Path(workflow_path).resolve().parents:
         if (parent / ".claude" / "review-policy.json").is_file():
             return parent
+        if (parent / ".git").exists():
+            break
     return None
 
 
-def gated_run_bodies(lines, jobs, needs, gate_job):
+def run_payload_indexes(lines):
+    """The line indexes consumed by block-scalar `run:` payloads in `lines`.
+
+    A `run: |` body is SHELL TEXT at workflow indentation, and a LOCAL_USES scan over
+    physical lines cannot tell it from syntax: an indented `uses: ./action` inside the
+    payload -- a heredoc writing an action manifest, say -- matched and read as a local
+    delegation. A missing target was silently ignored, but an EXISTING non-composite one
+    raised the ValueError in delegated_run_bodies and failed gate coverage over a line
+    the workflow never executes as a step. That is a false RED on a correct workflow --
+    the direction that gets a working control deleted to make CI green. (CodeRabbit,
+    fixportal-claude-skills#110.)
+
+    Only BLOCK-SCALAR payloads are indexed. A single-line `run: foo` carries its command
+    on the `run:` line itself, which starts with the key and so cannot match LOCAL_USES.
+    The value test reads the COMMENT-STRIPPED value, exactly as the run-body loops in
+    delegated_run_bodies and gated_run_bodies do -- `run: | # build log` is a real
+    spelling, and BLOCK_SCALAR is anchored.
+    """
+    payloads = set()
+    index = 0
+    while index < len(lines):
+        match = RUN_KEY.match(lines[index])
+        if not match:
+            index += 1
+            continue
+        value = strip_inline_comment(match.group(2)).strip()
+        if BLOCK_SCALAR.match(value):
+            _, following = continuation_lines(lines, index, len(match.group(1)))
+            payloads.update(range(index + 1, following))
+            index = following
+        else:
+            index += 1
+    return payloads
+
+
+def delegated_run_bodies(root, ref, visited):
+    """Yield run-body lines from a local composite action or reusable workflow."""
+    relative = ref[2:]
+    target = root / relative
+    if target.is_dir():
+        target = next((target / name for name in ("action.yml", "action.yaml") if (target / name).is_file()), None)
+    if target is None or not target.is_file():
+        return
+    key = target.resolve().as_posix()
+    if key in visited:
+        return
+    visited.add(key)
+    lines = target.read_text(encoding="utf-8").splitlines()
+    # `using` is resolved INSIDE the `runs:` mapping by resolve_runs_using -- see its
+    # docstring. Quoted keys ('using'/"using"/using) are admitted in both block and
+    # flow style, as they were here. (CodeRabbit, fixportal-claude-skills#110.)
+    using = resolve_runs_using(lines, target)
+    if using is not None and using != "composite":
+        raise ValueError(
+            f"{target}: local action uses runs.using {using}; "
+            "gate coverage only follows composite action bodies"
+        )
+    index = 0
+    while index < len(lines):
+        match = RUN_KEY.match(lines[index])
+        if not match:
+            index += 1
+            continue
+        value = strip_inline_comment(match.group(2)).strip()
+        if BLOCK_SCALAR.match(value):
+            body, index = continuation_lines(lines, index, len(match.group(1)))
+        else:
+            body, index = ([value] if value else []), index + 1
+        yield from body
+    payload_indexes = run_payload_indexes(lines)
+    for index, line in enumerate(lines):
+        if index in payload_indexes:
+            continue
+        match = LOCAL_USES.match(line)
+        if match:
+            yield from delegated_run_bodies(root, match.group(1), visited)
+
+
+def gated_run_bodies(lines, jobs, needs, gate_job, root):
     """Every `run:` body line belonging to a job that can fail the gate, with its job id.
 
     Scoped to the gate's `needs:` plus the gate job itself, because that is exactly the
@@ -1455,7 +1828,14 @@ def gated_run_bodies(lines, jobs, needs, gate_job):
     job cannot neuter the barrier, so requiring it to be HIGH would be a cost with no
     control behind it.
     """
-    for job_id in sorted(set(needs) | {gate_job}):
+    job_indent = len(lines[jobs[gate_job]]) - len(lines[jobs[gate_job]].lstrip(" "))
+    pending = list(set(needs) | {gate_job})
+    seen = set()
+    while pending:
+        job_id = pending.pop()
+        if job_id in seen:
+            continue
+        seen.add(job_id)
         if job_id not in jobs:
             continue
         block = job_block(lines, jobs, job_id)
@@ -1480,6 +1860,15 @@ def gated_run_bodies(lines, jobs, needs, gate_job):
                 body, index = ([value] if value else []), index + 1
             for body_line in body:
                 yield job_id, body_line
+        payload_indexes = run_payload_indexes(block)
+        for index, line in enumerate(block):
+            if index in payload_indexes:
+                continue
+            match = LOCAL_USES.match(line)
+            if match:
+                for body_line in delegated_run_bodies(root, match.group(1), set()):
+                    yield job_id, body_line
+        pending.extend(job_needs(lines, jobs, job_id, job_indent) - seen)
 
 
 def gate_script_paths(lines, jobs, needs, gate_job, root):
@@ -1490,7 +1879,7 @@ def gate_script_paths(lines, jobs, needs, gate_job, root):
     cannot be edited to neuter anything.
     """
     found = {}
-    for job_id, body_line in gated_run_bodies(lines, jobs, needs, gate_job):
+    for job_id, body_line in gated_run_bodies(lines, jobs, needs, gate_job, root):
         for match in GATE_SCRIPT.finditer(body_line):
             relative = match.group(1)
             if (root / relative).is_file():
@@ -1579,6 +1968,9 @@ def check_file(workflow_path, gate_job, exempt, conditional_exempt, *, on_empty=
     if gate_job not in jobs:
         return False
 
+    gate_line = lines[jobs[gate_job]]
+    job_indent = len(gate_line) - len(gate_line.lstrip(" "))
+
     missing = sorted(set(jobs) - set(needs) - exempt - {gate_job})
     if missing:
         sys.exit(
@@ -1597,6 +1989,14 @@ def check_file(workflow_path, gate_job, exempt, conditional_exempt, *, on_empty=
             "A skipped job passes the gate, so a conditional quality job can report "
             "green while checking nothing. Remove the condition, or name the job in "
             "GATE_CONDITIONAL_EXEMPT with a written rationale in the workflow."
+        )
+
+    tolerant = sorted((tolerant_jobs(lines, jobs, job_indent) & (set(needs) | {gate_job})))
+    if tolerant:
+        sys.exit(
+            f"{workflow_path}: job-level 'continue-on-error' on merge-blocking job(s): "
+            f"{', '.join(tolerant)}.\n"
+            "A tolerated job cannot provide a required check or serve as the aggregate gate."
         )
 
     assert_gate_semantics(workflow_path, lines, jobs, gate_job, needs)
@@ -1623,6 +2023,8 @@ def main(argv):
     conditional_exempt = split_env("GATE_CONDITIONAL_EXEMPT")
 
     if not Path(target).is_dir():
+        if not Path(target).is_file():
+            sys.exit(f"{target}: workflow path does not exist or is not a file.")
         unknown = sorted((exempt | conditional_exempt) - parse_jobs(target))
         if unknown:
             sys.exit(
