@@ -176,6 +176,14 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ReviewSignals__Reviewers__0__RequiredLabel'
               value: 'review-high'
             }
+            // An owner's deliberate waiver (e.g. an estate re-sync opened with
+            // `@coderabbitai ignore`): without it the tier keeps CodeRabbit required while
+            // it has been told never to run, so the pill holds Pending and the PR never
+            // reads ready. Only relaxes Pending; open findings still block.
+            {
+              name: 'ReviewSignals__Reviewers__0__WaivedLabel'
+              value: 'review-waived'
+            }
             {
               name: 'ReviewSignals__Reviewers__1__Name'
               value: 'Gitar'

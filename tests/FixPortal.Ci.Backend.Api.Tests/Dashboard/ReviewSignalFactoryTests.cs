@@ -130,6 +130,59 @@ public class ReviewSignalFactoryTests
         _ = signal.State.Should().Be(ReviewSignalState.Clean);
     }
 
+    private static readonly ReviewerOptions WaivableCodeRabbit = new()
+    {
+        Name = "CodeRabbit",
+        BotLogin = "coderabbitai",
+        RequiredLabel = "review-high",
+        WaivedLabel = "review-waived",
+    };
+
+    [Theory]
+    [InlineData(new[] { "review-high" }, ReviewSignalState.Pending)]
+    [InlineData(new[] { "review-high", "review-waived" }, ReviewSignalState.Disabled)]
+    [InlineData(new[] { "review-high", "Review-Waived" }, ReviewSignalState.Disabled)]
+    public void A_waiver_label_turns_a_reviewer_that_never_ran_from_pending_to_disabled(
+        string[] labels,
+        ReviewSignalState expected
+    ) => _ = Only(WaivableCodeRabbit, Facts(labels: labels)).State.Should().Be(expected);
+
+    [Fact]
+    public void A_waiver_never_masks_open_findings()
+    {
+        // Waiving means "we chose not to wait for this reviewer", not "ignore what it said".
+        var facts = Facts(
+            labels: ["review-high", "review-waived"],
+            unresolved: new Dictionary<string, int> { ["coderabbitai"] = 2 }
+        );
+
+        var signal = Only(WaivableCodeRabbit, facts);
+
+        _ = signal.State.Should().Be(ReviewSignalState.Outstanding);
+        _ = signal.Count.Should().Be(2);
+    }
+
+    [Fact]
+    public void A_waiver_does_not_relax_pending_from_a_truncated_thread_list()
+    {
+        // Truncated, Pending means "a finding may sit past the page cap" — waiving it
+        // would hide exactly what the waiver promises never to hide.
+        var facts = Facts(
+            labels: ["review-high", "review-waived"],
+            truncated: [GitHubOrgClient.ReviewThreadsConnectionName]
+        );
+
+        _ = Only(WaivableCodeRabbit, facts).State.Should().Be(ReviewSignalState.Pending);
+    }
+
+    [Fact]
+    public void A_waiver_leaves_a_reviewer_that_did_run_clean()
+    {
+        var facts = Facts(labels: ["review-high", "review-waived"], headParticipating: ["coderabbitai"]);
+
+        _ = Only(WaivableCodeRabbit, facts).State.Should().Be(ReviewSignalState.Clean);
+    }
+
     [Fact]
     public void Outstanding_with_a_count_when_the_bot_has_unresolved_threads()
     {
