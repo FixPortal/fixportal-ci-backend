@@ -69,13 +69,17 @@ public static class ReviewSignalFactory
 
         // Applied after the source decides, never before: a waiver relaxes only Pending
         // ("no evidence it ran"), so it can never hide an Outstanding finding the way an
-        // up-front Disabled would. A truncated thread list is excluded for the same reason:
-        // there Pending means "findings may sit past the page cap", not "never ran".
+        // up-front Disabled would. Scoped to ReviewThreads, the only source where Pending
+        // means "never ran": the scanning sources return Pending for an unreadable endpoint
+        // (missing scope, scanning off), which must stay visible. A truncated thread list is
+        // excluded for the same reason: there Pending means "findings may sit past the page
+        // cap".
         var waived = reviewer.WaivedLabel?.Trim();
         var threadsTruncated =
             facts.TruncatedConnections?.Contains(GitHubOrgClient.ReviewThreadsConnectionName) == true;
         return
             signal.State == ReviewSignalState.Pending
+            && reviewer.Source == ReviewerSource.ReviewThreads
             && !threadsTruncated
             && !string.IsNullOrEmpty(waived)
             && facts.Labels.Contains(waived)

@@ -175,6 +175,23 @@ public class ReviewSignalFactoryTests
         _ = Only(WaivableCodeRabbit, facts).State.Should().Be(ReviewSignalState.Pending);
     }
 
+    [Theory]
+    [InlineData(ReviewerSource.CodeScanning)]
+    [InlineData(ReviewerSource.SecretScanning)]
+    public void A_waiver_does_not_relax_pending_from_an_unreadable_scanning_endpoint(ReviewerSource source)
+    {
+        // Null alerts = endpoint unreadable (missing scope, scanning off): unknown, not
+        // "never ran", so a waiver must leave it visible.
+        var scanner = new ReviewerOptions
+        {
+            Name = "Scanner",
+            Source = source,
+            WaivedLabel = "review-waived",
+        };
+
+        _ = Only(scanner, Facts(labels: ["review-waived"])).State.Should().Be(ReviewSignalState.Pending);
+    }
+
     [Fact]
     public void A_waiver_leaves_a_reviewer_that_did_run_clean()
     {

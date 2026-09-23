@@ -38,7 +38,9 @@ public sealed class ReviewerOptions
     /// When set, a pull request carrying this label no longer waits on this reviewer: a
     /// reviewer with no evidence of having run reads Disabled instead of Pending. It only
     /// ever relaxes Pending — open findings still read Outstanding, and a reviewer that
-    /// did run still reads Clean.
+    /// did run still reads Clean. Honoured only for <see cref="ReviewerSource.ReviewThreads"/>:
+    /// the scanning sources report Pending for an unreadable endpoint, which is not
+    /// "never ran" and must stay visible.
     /// </summary>
     /// <remarks>
     /// For an owner's deliberate waiver, e.g. an estate re-sync opened with
