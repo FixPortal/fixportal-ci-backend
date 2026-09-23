@@ -228,6 +228,7 @@ Each entry in `Reviewers` is:
 | `Name` | Display label on the pill, e.g. `"CodeRabbit"`. |
 | `BotLogin` | The reviewing bot's GitHub login. Required when `Source` is `ReviewThreads`; matched against unresolved review-thread authors and PR participants. |
 | `RequiredLabel` | When set, this reviewer only applies to pull requests carrying that label — how CodeRabbit is scoped to HIGH-tier PRs only. Absent means every pull request. |
+| `WaivedLabel` | When set, a pull request carrying that label stops waiting on this reviewer: `pending` becomes `disabled`. Only `pending` is relaxed — open findings still read `outstanding`. For an owner's deliberate waiver, e.g. a re-sync opened with `@coderabbitai ignore`; a label because applying one needs triage access, so an author cannot waive their own review. |
 | `Source` | `ReviewThreads` (default) reads unresolved review-thread authorship; `CodeScanning` reads open code-scanning alert counts on the PR's head ref instead (used for CodeQL) and ignores `BotLogin`; `SecretScanning` reads the repository's open secret-scanning alert count and likewise ignores `BotLogin`. |
 | `PublicOnly` | When `true`, the reviewer is omitted entirely on private repositories — no pill, and nothing for the ready-to-merge verdict to wait on. For GitHub's scanning products, which are paid on private repos and free on public ones. |
 
@@ -239,7 +240,7 @@ FixPortal's worked example, set via deployment configuration:
   "RefreshSeconds": 150,
   "ExcludedAuthors": [ "dependabot", "dependabot[bot]", "renovate", "renovate[bot]" ],
   "Reviewers": [
-    { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high" },
+    { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high", "WaivedLabel": "review-waived" },
     { "Name": "Gitar", "BotLogin": "gitar-bot", "CommentsCountAsParticipation": true },
     { "Name": "CodeQL", "Source": "CodeScanning", "PublicOnly": true },
     { "Name": "Secret Scanning", "Source": "SecretScanning", "PublicOnly": true }
@@ -291,7 +292,7 @@ Each reviewer resolves to one of **four** pill states, not three:
 | `clean` | The reviewer demonstrably ran against the pull request's **current head commit** and left nothing outstanding. A review of an earlier commit does not keep a PR clean after a later push — participation is re-checked against the head commit on every sweep. |
 | `outstanding` | The reviewer has open items — unresolved review threads or open code-scanning alerts — `count` on the pill says how many. |
 | `pending` | Required here, but there is no evidence it has run yet. **Not a pass** — a paused or rate-limited reviewer lands here, indistinguishable from one that simply has not started. |
-| `disabled` | Not required on this pull request, e.g. `RequiredLabel` is set and the PR lacks that label. |
+| `disabled` | Not required on this pull request, e.g. `RequiredLabel` is set and the PR lacks that label, or `WaivedLabel` is set, the PR carries it, and the reviewer never ran. |
 
 Reviewer sources need read access to what they read. In **App mode** that is
 `security_events` for a `CodeScanning` reviewer and the separate

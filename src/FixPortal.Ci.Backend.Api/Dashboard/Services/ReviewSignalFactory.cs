@@ -60,12 +60,27 @@ public static class ReviewSignalFactory
             return new ReviewSignal(reviewer.Name, ReviewSignalState.Disabled, null, null);
         }
 
-        return reviewer.Source switch
+        var signal = reviewer.Source switch
         {
             ReviewerSource.CodeScanning => BuildCodeScanning(facts, reviewer, openAlerts, prHtmlUrl),
             ReviewerSource.SecretScanning => BuildSecretScanning(reviewer, openSecretAlerts, repoHtmlUrl),
             _ => BuildReviewThreads(facts, reviewer, prHtmlUrl),
         };
+
+        // Applied after the source decides, never before: a waiver relaxes only Pending
+        // ("no evidence it ran"), so it can never hide an Outstanding finding the way an
+        // up-front Disabled would. A truncated thread list is excluded for the same reason:
+        // there Pending means "findings may sit past the page cap", not "never ran".
+        var waived = reviewer.WaivedLabel?.Trim();
+        var threadsTruncated =
+            facts.TruncatedConnections?.Contains(GitHubOrgClient.ReviewThreadsConnectionName) == true;
+        return
+            signal.State == ReviewSignalState.Pending
+            && !threadsTruncated
+            && !string.IsNullOrEmpty(waived)
+            && facts.Labels.Contains(waived)
+            ? new ReviewSignal(reviewer.Name, ReviewSignalState.Disabled, null, null)
+            : signal;
     }
 
     /// <summary>

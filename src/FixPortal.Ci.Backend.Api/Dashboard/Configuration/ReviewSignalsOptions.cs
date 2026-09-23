@@ -35,6 +35,22 @@ public sealed class ReviewerOptions
     public string? RequiredLabel { get; init; }
 
     /// <summary>
+    /// When set, a pull request carrying this label no longer waits on this reviewer: a
+    /// reviewer with no evidence of having run reads Disabled instead of Pending. It only
+    /// ever relaxes Pending — open findings still read Outstanding, and a reviewer that
+    /// did run still reads Clean.
+    /// </summary>
+    /// <remarks>
+    /// For an owner's deliberate waiver, e.g. an estate re-sync opened with
+    /// <c>@coderabbitai ignore</c>. Without it the tier label keeps the reviewer required
+    /// while the reviewer has been told never to run, so the pill holds Pending forever and
+    /// the pull request can never read ready. A label rather than PR-body text on purpose:
+    /// applying a label needs triage access, so an author cannot waive their own review,
+    /// and the waiver stays on the pull request as a record.
+    /// </remarks>
+    public string? WaivedLabel { get; init; }
+
+    /// <summary>
     /// When set, an issue comment from <see cref="BotLogin"/> dated after the head commit
     /// also counts as participation. For reviewers that report findings as review threads
     /// but announce a clean result as a plain comment: without this they hold Pending
