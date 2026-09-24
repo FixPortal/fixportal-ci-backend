@@ -152,6 +152,10 @@ public sealed class GitHubOrgClient(
               nodes {
                 number
                 author { login }
+                # body + authorAssociation: an org member's review-ignore directive
+                # (ReviewerOptions.WaivedBodyDirective). Scalars, so no connection cost.
+                body
+                authorAssociation
                 labels(first: 20) { nodes { name } }
                 reviews(first: 50) { nodes { author { login } commit { oid } } }
                 reviewThreads(first: 100) {
@@ -206,6 +210,8 @@ public sealed class GitHubOrgClient(
         fragment PrFacts on PullRequest {
           number
           author { login }
+          body
+          authorAssociation
           labels(first: 50) { nodes { name } pageInfo { hasNextPage } }
           reviews(first: 100) { nodes { author { login } commit { oid } } pageInfo { hasNextPage } }
           reviewThreads(first: 100) {
@@ -1107,9 +1113,16 @@ public sealed class GitHubOrgClient(
             headComments,
             checkApps,
             headOid,
-            truncated
+            truncated,
+            IsOrgOwnerOrMember(pull.AuthorAssociation) ? pull.Body : null
         );
     }
+
+    // COLLABORATOR is deliberately excluded: an outside collaborator can open a pull
+    // request but has no standing to waive the review policy on it.
+    private static bool IsOrgOwnerOrMember(string? association) =>
+        string.Equals(association, "OWNER", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(association, "MEMBER", StringComparison.OrdinalIgnoreCase);
 
     private static HashSet<string> CollectLabels(NodeList<GraphQlLabel>? labels)
     {

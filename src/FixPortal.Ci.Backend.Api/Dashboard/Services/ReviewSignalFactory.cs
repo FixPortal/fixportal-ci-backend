@@ -74,17 +74,26 @@ public static class ReviewSignalFactory
         // (missing scope, scanning off), which must stay visible. A truncated thread list is
         // excluded for the same reason: there Pending means "findings may sit past the page
         // cap".
-        var waived = reviewer.WaivedLabel?.Trim();
         var threadsTruncated =
             facts.TruncatedConnections?.Contains(GitHubOrgClient.ReviewThreadsConnectionName) == true;
         return
             signal.State == ReviewSignalState.Pending
             && reviewer.Source == ReviewerSource.ReviewThreads
             && !threadsTruncated
-            && !string.IsNullOrEmpty(waived)
-            && facts.Labels.Contains(waived)
+            && IsWaived(facts, reviewer)
             ? new ReviewSignal(reviewer.Name, ReviewSignalState.Disabled, null, null)
             : signal;
+    }
+
+    // Either the waiver label, or the reviewer's own ignore directive in a description an
+    // org owner or member wrote (TrustedAuthorBody is null for anyone else).
+    private static bool IsWaived(PrReviewFacts facts, ReviewerOptions reviewer)
+    {
+        var label = reviewer.WaivedLabel?.Trim();
+        var directive = reviewer.WaivedBodyDirective?.Trim();
+        return !string.IsNullOrEmpty(label) && facts.Labels.Contains(label)
+            || !string.IsNullOrEmpty(directive)
+                && facts.TrustedAuthorBody?.Contains(directive, StringComparison.OrdinalIgnoreCase) == true;
     }
 
     /// <summary>

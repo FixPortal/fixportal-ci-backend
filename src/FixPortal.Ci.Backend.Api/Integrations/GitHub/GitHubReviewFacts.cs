@@ -77,7 +77,9 @@ public sealed record ReviewFactsPull(
     NodeList<GraphQlReview>? Reviews,
     NodeList<GraphQlThread>? ReviewThreads,
     NodeList<GraphQlCommitNode>? Commits,
-    NodeList<GraphQlIssueComment>? Comments = null
+    NodeList<GraphQlIssueComment>? Comments = null,
+    string? Body = null,
+    string? AuthorAssociation = null
 );
 
 // hasNextPage for connections fetched with `first:`; hasPreviousPage for the comments
@@ -176,6 +178,12 @@ public sealed record ReviewFactsBatch(
 /// sets below may be incomplete; consumers must not let affected signals read Clean.
 /// Null or empty means every connection answered in full.
 /// </param>
+/// <param name="TrustedAuthorBody">
+/// The pull request description, carried ONLY when its author is an owner or member of
+/// the organisation, and null otherwise. It can waive a required review (see
+/// ReviewerOptions.WaivedBodyDirective), so an outside author's text must never reach
+/// the factory: they could otherwise waive their own review with one line.
+/// </param>
 public sealed record PrReviewFacts(
     int Number,
     string AuthorLogin,
@@ -185,5 +193,6 @@ public sealed record PrReviewFacts(
     IReadOnlySet<string> HeadCommentAuthors,
     IReadOnlySet<string> SuccessfulCheckAppSlugs,
     string? HeadSha = null,
-    IReadOnlySet<string>? TruncatedConnections = null
+    IReadOnlySet<string>? TruncatedConnections = null,
+    string? TrustedAuthorBody = null
 );

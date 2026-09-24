@@ -46,11 +46,25 @@ public sealed class ReviewerOptions
     /// For an owner's deliberate waiver, e.g. an estate re-sync opened with
     /// <c>@coderabbitai ignore</c>. Without it the tier label keeps the reviewer required
     /// while the reviewer has been told never to run, so the pill holds Pending forever and
-    /// the pull request can never read ready. A label rather than PR-body text on purpose:
-    /// applying a label needs triage access, so an author cannot waive their own review,
-    /// and the waiver stays on the pull request as a record.
+    /// the pull request can never read ready. Applying a label needs triage access, so an
+    /// author cannot waive their own review with it. See also
+    /// <see cref="WaivedBodyDirective"/>, which honours the directive itself.
     /// </remarks>
     public string? WaivedLabel { get; init; }
+
+    /// <summary>
+    /// When set, a pull request whose description contains this text (case-insensitive),
+    /// written by an owner or member of the organisation, waives this reviewer exactly as
+    /// <see cref="WaivedLabel"/> does: only Pending relaxes, to Disabled.
+    /// </summary>
+    /// <remarks>
+    /// For the reviewer's own opt-out directive, e.g. <c>@coderabbitai ignore</c>. The
+    /// directive already tells the reviewer never to run, so it is the owner's explicit
+    /// decision; requiring a separate label as well left every such pull request stuck on
+    /// Pending, never ready to merge. Restricted to owners and members
+    /// (PrReviewFacts.TrustedAuthorBody) so an outside author cannot waive their own review.
+    /// </remarks>
+    public string? WaivedBodyDirective { get; init; }
 
     /// <summary>
     /// When set, an issue comment from <see cref="BotLogin"/> dated after the head commit
