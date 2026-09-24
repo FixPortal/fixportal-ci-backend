@@ -21,7 +21,7 @@ public static class ProcessRunner
     // reads the trailing summary table.
     private const int MaxCaptureChars = 1_000_000;
 
-    private static void AppendBounded(StringBuilder sb, string line)
+    internal static void AppendBounded(StringBuilder sb, string line)
     {
         if (line.Length >= MaxCaptureChars)
         {
@@ -32,11 +32,17 @@ public static class ProcessRunner
         }
 
         _ = sb.AppendLine(line);
-        if (sb.Length > MaxCaptureChars)
+        // Trim only once the buffer reaches twice the cap, back down to the cap, so the
+        // O(n) Remove shift is amortized to O(1) per line rather than firing on every
+        // append once capped. Captured() applies the exact cap once, at the end.
+        if (sb.Length > MaxCaptureChars * 2)
         {
             _ = sb.Remove(0, sb.Length - MaxCaptureChars);
         }
     }
+
+    internal static string Captured(StringBuilder sb) =>
+        sb.Length > MaxCaptureChars ? sb.ToString(sb.Length - MaxCaptureChars, MaxCaptureChars) : sb.ToString();
 
     public static async Task<ProcessResult> RunAsync(
         string fileName,
@@ -132,7 +138,7 @@ public static class ProcessRunner
             TryKill(process);
             throw;
         }
-        return new ProcessResult(process.ExitCode, stdout.ToString(), stderr.ToString());
+        return new ProcessResult(process.ExitCode, Captured(stdout), Captured(stderr));
     }
 
     internal static async Task WaitForExitAndDrainAsync(

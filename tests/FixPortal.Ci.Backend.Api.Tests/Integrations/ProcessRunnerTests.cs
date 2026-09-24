@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using System.Text;
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Integrations.Lizard;
 using Xunit;
@@ -57,6 +58,27 @@ public class ProcessRunnerTests
         _ = result.ExitCode.Should().Be(0);
         _ = result.StdOut.Length.Should().BeLessThanOrEqualTo(1_000_002);
         _ = result.StdOut.TrimEnd().Should().EndWith("TAIL_MARKER");
+    }
+
+    /// <summary>Proves many short lines past the cap keep the buffer bounded and the result exactly capped with its tail.</summary>
+    [Fact]
+    public void AppendBounded_should_bound_many_lines_past_the_cap_and_keep_the_tail()
+    {
+        var sb = new StringBuilder();
+        var line = new string('x', 100);
+        var maxSeen = 0;
+        for (var i = 0; i < 30_000; i++)
+        {
+            ProcessRunner.AppendBounded(sb, line);
+            maxSeen = Math.Max(maxSeen, sb.Length);
+        }
+        ProcessRunner.AppendBounded(sb, "TAIL_MARKER");
+
+        var captured = ProcessRunner.Captured(sb);
+
+        _ = maxSeen.Should().BeLessThanOrEqualTo(2_000_000 + line.Length + Environment.NewLine.Length);
+        _ = captured.Length.Should().Be(1_000_000);
+        _ = captured.TrimEnd().Should().EndWith("TAIL_MARKER");
     }
 
     [Fact]
