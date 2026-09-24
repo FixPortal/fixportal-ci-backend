@@ -11,6 +11,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # Cancel redundant in-progress runs on branches/PRs, but NEVER on main: a second
 # push to main while a prior run's deploy is mid-flight must not cancel that run
 # (workflow-level cancellation overrides the deploy job's own group). main runs
@@ -59,10 +62,9 @@ jobs:
       # coverlet.collector 10.0.1 emits invalid IL on .NET 10 (InvalidProgramException),
       # which is why this route is deliberate rather than incidental.
       #
-      # Coverage reporting left this repo in the OSS cut with no replacement and no stated
-      # rationale, so a contributor to a PUBLIC repository cannot see what a change drops.
-      # REPORTED, NOT GATED: no threshold is enforced, so this cannot red a PR by itself.
-      # Add a floor only with a measured baseline behind it.
+      # Report coverage so contributors can inspect changes to covered behavior.
+      # REPORTED, NOT GATED: coverage percentages do not establish test adequacy.
+      # Add a floor only with a measured baseline and an agreed policy behind it.
       - name: Test
         run: >
           dotnet dotnet-coverage collect
