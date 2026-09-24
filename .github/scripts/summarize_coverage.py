@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """Render a Cobertura report as a short GitHub step summary.
 
-Reported, never gated. Coverage left this repository in the OSS cut with no
-replacement, so a contributor could not see what a change dropped; this restores
-the signal without adding a threshold that could red a PR before anyone has
-measured a baseline.
+Reported, never gated. Coverage percentages are useful change signals but do not
+establish behavioral test adequacy. No threshold is enforced; adding one needs a
+measured baseline and an agreed policy.
 
 Reads the report path given as argv[1] and writes Markdown to stdout. A missing
 or unparseable report is reported as such and still exits 0 -- the coverage
@@ -32,9 +31,17 @@ def main():
         print(f"### Coverage\n\nCoverage report at `{report}` is not parseable: {error}")
         return 0
 
+    package = next(
+        (item for item in root.findall("./packages/package") if item.get("name") == "FixPortal.Ci.Backend.Api"),
+        None,
+    )
+    if package is None:
+        print(f"### Coverage\n\nNo `FixPortal.Ci.Backend.Api` application package in `{report}`.")
+        return 0
+
     def rate(attribute):
         try:
-            return float(root.get(attribute, "0")) * 100
+            return float(package.get(attribute, "0")) * 100
         except ValueError:
             return 0.0
 

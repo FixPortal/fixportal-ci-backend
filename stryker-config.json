@@ -8,13 +8,13 @@
     ],
     "report-file-name": "mutation-report",
     "mutation-level": "Standard",
-    "coverage-analysis": "off",
+    "coverage-analysis": "perTest",
     "test-runner": "mtp",
     "concurrency": 4,
     "thresholds": {
       "high": 80,
       "low": 70,
-      "break": 0
+      "break": 65
     },
     // Whole source tree, not a single file: a narrowed list silently stops
     // mutation-testing everything else. Excludes stay at Stryker's defaults.
