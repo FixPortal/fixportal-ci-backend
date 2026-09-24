@@ -52,7 +52,10 @@ public class DashboardRefreshServiceTests
     public void MergeWithPrevious_uses_fresh_when_no_previous()
     {
         var fresh = new[] { (Repo("a"), false), (Repo("b"), false) };
-        _ = DashboardRefreshService.MergeWithPrevious(fresh, null).Should().HaveCount(2);
+
+        var merged = DashboardRefreshService.MergeWithPrevious(fresh, null);
+
+        _ = merged.Select(repo => repo.Name).Should().BeEquivalentTo("a", "b");
     }
 
     [Fact]
@@ -68,6 +71,26 @@ public class DashboardRefreshServiceTests
         var fresh = new[] { (Repo("a"), true) };
         var merged = DashboardRefreshService.MergeWithPrevious(fresh, prior);
         _ = merged[0].Workflows[0].State.Should().Be(SignalState.Success);
+    }
+
+    [Fact]
+    public void MergeWithPrevious_uses_current_visibility_when_a_repo_fetch_fails()
+    {
+        var prior = new DashboardSnapshot(
+            Instant.MinValue,
+            "FixPortal",
+            [Repo("a", (SignalState.Success, "success")) with { Private = false }],
+            [],
+            null
+        );
+
+        var merged = DashboardRefreshService.MergeWithPrevious([(Repo("a") with { Private = true }, true)], prior);
+
+        _ = merged[0].Private.Should().BeTrue();
+        _ = DashboardSnapshotState
+            .ComputePublicSnapshot(new DashboardSnapshot(Instant.MinValue, "FixPortal", merged, [], null))
+            .Repositories.Should()
+            .BeEmpty();
     }
 
     [Fact]
@@ -402,6 +425,20 @@ public class DashboardRefreshServiceTests
     }
 
     [Fact]
+    public void MergeTrends_does_not_carry_a_backfilled_bucket_into_a_second_degraded_refresh()
+    {
+        var hour = Instant.FromUtc(2026, 5, 30, 6, 0);
+        var prior = new[] { new CiTrendBucket(hour, CiTrendState.Failing) };
+        var noData = new[] { new CiTrendBucket(hour, CiTrendState.NoData) };
+
+        var firstDegraded = DashboardRefreshService.MergeTrends(prior, noData);
+        var secondDegraded = DashboardRefreshService.MergeTrends(firstDegraded, noData);
+
+        _ = firstDegraded[0].Should().Be(new CiTrendBucket(hour, CiTrendState.Failing) { IsBackfilled = true });
+        _ = secondDegraded[0].Should().Be(new CiTrendBucket(hour, CiTrendState.NoData));
+    }
+
+    [Fact]
     public void BuildCiTrendForRefresh_preserves_previous_when_refresh_is_degraded_and_no_new_runs_exist()
     {
         var now = Instant.FromUtc(2026, 5, 30, 12, 0);
@@ -456,6 +493,27 @@ public class DashboardRefreshServiceTests
             CancellationToken.None
         );
 
+        _ = state.Current.Should().BeSameAs(snapshot);
+    }
+
+    [Fact]
+    public async Task PersistAndPublishAsync_publishes_but_does_not_save_when_persistence_is_suppressed()
+    {
+        var store = Substitute.For<IDashboardSnapshotStore>();
+        var state = new DashboardSnapshotState();
+        var snapshot = new DashboardSnapshot(Instant.MinValue, "FixPortal", [], [], null);
+
+        await DashboardRefreshService.PersistAndPublishAsync(
+            store,
+            state,
+            snapshot,
+            snapshot,
+            persist: false,
+            NullLogger<DashboardRefreshService>.Instance,
+            TestContext.Current.CancellationToken
+        );
+
+        await store.DidNotReceive().SaveAsync(Arg.Any<DashboardSnapshot>(), Arg.Any<CancellationToken>());
         _ = state.Current.Should().BeSameAs(snapshot);
     }
 

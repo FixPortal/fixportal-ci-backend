@@ -190,7 +190,7 @@ builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
         : Path.Combine(environment.ContentRootPath, dashboardOptions.SnapshotPath);
     return new FileDashboardSnapshotStore(
         path,
-        dashboardOptions.FilterFingerprint(),
+        dashboardOptions.SnapshotFingerprint(sp.GetRequiredService<IOptions<GitHubOptions>>().Value.Owner),
         sp.GetRequiredService<ILogger<FileDashboardSnapshotStore>>()
     );
 });

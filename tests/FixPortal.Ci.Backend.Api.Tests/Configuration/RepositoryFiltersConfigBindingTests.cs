@@ -47,6 +47,20 @@ public class RepositoryFiltersConfigBindingTests(WebApplicationFactory<Program> 
         _ = act.Should().Throw<Exception>().WithMessage($"*Dashboard:{listName}*");
     }
 
+    [Theory]
+    [InlineData("IncludeRepositories")]
+    [InlineData("ExcludeRepositories")]
+    [InlineData("IncludeTopics")]
+    [InlineData("ExcludeTopics")]
+    public void Padded_repository_filter_patterns_are_rejected_at_startup(string listName)
+    {
+        using var f = ConfigureFactory(new Dictionary<string, string> { [$"Dashboard:{listName}:0"] = " api-* " });
+
+        var act = () => f.CreateClient();
+
+        _ = act.Should().Throw<Exception>().WithMessage("*leading or trailing whitespace*");
+    }
+
     private WebApplicationFactory<Program> ConfigureFactory(IReadOnlyDictionary<string, string> settings) =>
         factory.WithWebHostBuilder(builder =>
         {

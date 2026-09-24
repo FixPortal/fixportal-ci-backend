@@ -393,6 +393,15 @@ public class FileDashboardSnapshotStoreTests
         _ = changed.FilterFingerprint().Should().NotBe(baseline.FilterFingerprint());
     }
 
+    [Fact]
+    public void SnapshotFingerprint_should_track_owner_case_insensitively()
+    {
+        var options = new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 };
+
+        _ = options.SnapshotFingerprint("FixPortal").Should().Be(options.SnapshotFingerprint("fixportal"));
+        _ = options.SnapshotFingerprint("OtherOrg").Should().NotBe(options.SnapshotFingerprint("FixPortal"));
+    }
+
     [Theory]
     // A delimiter-joined encoding collides whenever a pattern can contain the delimiter:
     // one pattern holding the separator encodes identically to two patterns split on it.

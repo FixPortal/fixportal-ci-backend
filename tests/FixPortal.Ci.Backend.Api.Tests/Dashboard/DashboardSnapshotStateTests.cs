@@ -93,6 +93,33 @@ public class DashboardSnapshotStateTests
     }
 
     [Fact]
+    public void ComputePublicSnapshot_recomputes_aggregates_without_private_activity()
+    {
+        var privateRepo = Repo("priv", isPrivate: true, SignalState.Failure) with
+        {
+            LastMergedPr = new MergedPullRequest(
+                42,
+                "Private PR",
+                "alice",
+                "priv",
+                "https://github.com/FixPortal/priv/pull/42",
+                T
+            ),
+        };
+        var full = Snapshot([privateRepo, Repo("pub", isPrivate: false, SignalState.Success)], null) with
+        {
+            LastMergedPr = privateRepo.LastMergedPr,
+        };
+
+        var publicSnapshot = DashboardSnapshotState.ComputePublicSnapshot(full);
+
+        _ = publicSnapshot.Summary.Single(count => count.Key == "repos").Count.Should().Be(1);
+        _ = publicSnapshot.Summary.Single(count => count.Key == "failing").Count.Should().Be(0);
+        _ = full.LastMergedPr.Should().Be(privateRepo.LastMergedPr);
+        _ = publicSnapshot.LastMergedPr.Should().BeNull();
+    }
+
+    [Fact]
     public void ComputePublicSnapshot_uses_the_persisted_public_trend_verbatim()
     {
         // B5-full: when a persisted public-only trend is supplied (cold-start restore
@@ -135,18 +162,44 @@ public class DashboardSnapshotStateTests
         var repositories = new BlockingReadOnlyList<RepositorySnapshot>([Repo("old", false, SignalState.Success)]);
         state.Update(Snapshot(repositories, null), Snapshot([], null));
 
-        var patch = Task.Run(() => state.MarkNotMergeable("old", 42, "head-a"), TestContext.Current.CancellationToken);
-        await repositories.EnumerationStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
         var fresh = Snapshot([Repo("fresh", false, SignalState.Success)], null);
-        var update = Task.Run(() => state.Update(fresh, Snapshot([], null)), TestContext.Current.CancellationToken);
-        _ = await Task.WhenAny(
-            update,
-            Task.Delay(TimeSpan.FromMilliseconds(100), TestContext.Current.CancellationToken)
-        );
-        repositories.AllowEnumeration.TrySetResult();
-        await Task.WhenAll(patch, update);
+        var updateStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var updateThread = new Thread(() =>
+        {
+            updateStarted.TrySetResult();
+            state.Update(fresh, Snapshot([], null));
+        });
+        var patch = Task.Run(() => state.MarkNotMergeable("old", 42, "head-a"), TestContext.Current.CancellationToken);
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        var updateThreadStarted = false;
+        try
+        {
+            await repositories.EnumerationStarted.Task.WaitAsync(ceiling.Token);
+            updateThread.Start();
+            updateThreadStarted = true;
+            await updateStarted.Task.WaitAsync(ceiling.Token);
+            var reachedContendedLock = SpinWait.SpinUntil(
+                () => (updateThread.ThreadState & ThreadState.WaitSleepJoin) != 0,
+                TimeSpan.FromSeconds(30)
+            );
+            repositories.AllowEnumeration.TrySetResult();
+            await patch.WaitAsync(ceiling.Token);
+            _ = updateThread.Join(TimeSpan.FromSeconds(30)).Should().BeTrue("the competing update should complete");
 
-        _ = state.Current.Should().BeSameAs(fresh);
+            _ = reachedContendedLock
+                .Should()
+                .BeTrue("the competing update must reach the snapshot lock while the patch holds it");
+            _ = state.Current.Should().BeSameAs(fresh);
+        }
+        finally
+        {
+            repositories.AllowEnumeration.TrySetResult();
+            if (updateThreadStarted)
+            {
+                _ = updateThread.Join(TimeSpan.FromSeconds(30));
+            }
+        }
     }
 
     [Theory]

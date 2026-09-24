@@ -294,6 +294,36 @@ public class DashboardRefreshServiceRefreshAsyncTests
         }
     }
 
+    private sealed class PartialFailureHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/repos", StringComparison.Ordinal))
+            {
+                return Task.FromResult(
+                    JsonOk(
+                        """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"},{"name":"repo-b","html_url":"https://github.com/FixPortal/repo-b","private":false,"archived":false,"default_branch":"main"}]"""
+                    )
+                );
+            }
+            if (
+                path.Contains("/repo-b/", StringComparison.Ordinal)
+                && path.EndsWith("/actions/workflows", StringComparison.Ordinal)
+            )
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
+            }
+            return Task.FromResult(JsonOk("[]"));
+        }
+
+        private static HttpResponseMessage JsonOk(string json) =>
+            new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+    }
+
     [Fact]
     public async Task RefreshAsync_should_attach_cached_review_signals_to_the_published_snapshot()
     {
@@ -336,7 +366,9 @@ public class DashboardRefreshServiceRefreshAsyncTests
             NullLogger<DashboardRefreshService>.Instance
         );
 
-        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        await sut.RefreshAsync(ceiling.Token);
 
         _ = state.Current.Should().NotBeNull();
         var pr = state
@@ -347,6 +379,110 @@ public class DashboardRefreshServiceRefreshAsyncTests
             .Subject;
         _ = pr.Number.Should().Be(181);
         _ = pr.ReviewSignals.Should().BeEquivalentTo(signals);
+    }
+
+    /// <summary>Proves RefreshAsync skips persisting an all-failed cold start but persists degraded recovery over prior state.</summary>
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, true)]
+    public async Task RefreshAsync_should_apply_the_degraded_persistence_policy_at_the_store_boundary(
+        bool hasPreviousSnapshot,
+        bool shouldPersist
+    )
+    {
+        var state = new DashboardSnapshotState();
+        if (hasPreviousSnapshot)
+        {
+            var previous = new DashboardSnapshot(Instant.MinValue, "FixPortal", [], [], null);
+            state.Update(previous, previous);
+        }
+        using var handler = new PartialFailureHandler();
+        using var http = new HttpClient(handler, disposeHandler: false)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
+        var store = Substitute.For<IDashboardSnapshotStore>();
+        var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var sut = new DashboardRefreshService(
+            client,
+            new GitHubInventoryCache(client, clock, dashboardOptions),
+            store,
+            state,
+            new PerRepoCache<RepoMetrics>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<MergedPullRequest>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
+            new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(),
+            Options.Create(new ReviewSignalsOptions()),
+            gitHubOptions,
+            clock,
+            NullLogger<DashboardRefreshService>.Instance
+        );
+
+        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+
+        _ = state.Current.Should().NotBeNull();
+        if (shouldPersist)
+        {
+            await store.Received(1).SaveAsync(Arg.Any<DashboardSnapshot>(), Arg.Any<CancellationToken>());
+        }
+        else
+        {
+            await store.DidNotReceive().SaveAsync(Arg.Any<DashboardSnapshot>(), Arg.Any<CancellationToken>());
+        }
+    }
+
+    [Fact]
+    public async Task RefreshAsync_should_apply_cached_merge_state_to_the_published_snapshot()
+    {
+        var state = new DashboardSnapshotState();
+        using var handler = new OnePullRequestHandler();
+        using var http = new HttpClient(handler, disposeHandler: false)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var mergeStates = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>();
+        mergeStates.Update(
+            "repo-a",
+            new Dictionary<int, PrMergeState>
+            {
+                [181] = new(181, false, "MERGEABLE", "CLEAN", "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3"),
+            }
+        );
+        var sut = new DashboardRefreshService(
+            client,
+            new GitHubInventoryCache(client, clock, dashboardOptions),
+            Substitute.For<IDashboardSnapshotStore>(),
+            state,
+            new PerRepoCache<RepoMetrics>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<MergedPullRequest>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
+            mergeStates,
+            Options.Create(new ReviewSignalsOptions()),
+            gitHubOptions,
+            clock,
+            NullLogger<DashboardRefreshService>.Instance
+        );
+
+        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+
+        _ = state
+            .Current!.Repositories.Should()
+            .ContainSingle()
+            .Which.PullRequests.Should()
+            .ContainSingle()
+            .Which.ReadyToMerge.Should()
+            .BeTrue();
     }
 
     [Fact]
@@ -427,7 +563,9 @@ public class DashboardRefreshServiceRefreshAsyncTests
             NullLogger<DashboardRefreshService>.Instance
         );
 
-        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        await sut.RefreshAsync(ceiling.Token);
 
         // Cap held: MaxParallelRepos is 6, and with 8 repos in flight this must be
         // observed exactly at 6 to prove real concurrency was exercised, not merely
@@ -477,7 +615,9 @@ public class DashboardRefreshServiceRefreshAsyncTests
             NullLogger<DashboardRefreshService>.Instance
         );
 
-        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        await sut.RefreshAsync(ceiling.Token);
 
         _ = state.Current.Should().NotBeNull();
         var repos = state.Current!.Repositories.ToDictionary(r => r.Name);

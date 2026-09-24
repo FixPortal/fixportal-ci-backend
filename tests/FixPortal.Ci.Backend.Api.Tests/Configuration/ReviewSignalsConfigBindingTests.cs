@@ -30,6 +30,7 @@ public class ReviewSignalsConfigBindingTests(WebApplicationFactory<Program> fact
 
         var options = f.Services.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value;
 
+        _ = options.Enabled.Should().BeTrue();
         _ = options.Reviewers.Should().BeEmpty();
         // Both spellings of each dependency bot: GraphQL reports a Bot node's login
         // without the "[bot]" suffix, which is a REST-ism, so a suffix-only list would
@@ -92,6 +93,7 @@ public class ReviewSignalsOptionsValidationTests
 
         var options = provider.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value;
 
+        _ = options.Enabled.Should().BeTrue();
         _ = options.RefreshSeconds.Should().Be(150);
         // The backstop must survive on the default path. A zero here would silently
         // restore drain-to-empty, which is the failure this whole change exists to end.
@@ -108,6 +110,28 @@ public class ReviewSignalsOptionsValidationTests
             .Should()
             .Throw<OptionsValidationException>()
             .WithMessage("*ReviewSignals:RefreshSeconds*");
+    }
+
+    [Fact]
+    public void A_negative_reserve_budget_is_rejected_at_startup()
+    {
+        using var provider = Provider(new Dictionary<string, string> { ["ReviewSignals:ReserveBudgetPoints"] = "-1" });
+
+        _ = provider
+            .Invoking(p => p.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value)
+            .Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*ReserveBudgetPoints*");
+    }
+
+    [Fact]
+    public void A_zero_reserve_budget_is_valid_and_disables_the_reserve()
+    {
+        using var provider = Provider(new Dictionary<string, string> { ["ReviewSignals:ReserveBudgetPoints"] = "0" });
+
+        var options = provider.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value;
+
+        _ = options.ReserveBudgetPoints.Should().Be(0);
     }
 
     [Fact]
@@ -134,6 +158,18 @@ public class ReviewSignalsOptionsValidationTests
             .Should()
             .Throw<OptionsValidationException>()
             .WithMessage("*BotLogin*");
+    }
+
+    [Fact]
+    public void A_padded_bot_login_is_rejected_at_startup()
+    {
+        using var provider = Provider(Reviewer(name: "Gitar", botLogin: " gitar-app "));
+
+        _ = provider
+            .Invoking(p => p.GetRequiredService<IOptions<ReviewSignalsOptions>>().Value)
+            .Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*unpadded*");
     }
 
     [Fact]

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.IO.Compression;
 using System.Net;
 using System.Text;
@@ -274,6 +275,90 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
         (await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken))
             .Should()
             .Be("{\"error\":\"Diagnosis provider timed out.\"}");
+    }
+
+    [Fact]
+    public async Task Diagnosis_read_gate_caps_concurrency_and_recovers_after_active_cancellation()
+    {
+        var handler = SuccessfulProvider("hello");
+        handler.BlockResponses = true;
+        using var client = CreateClient(Snapshot(), handler);
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        using var queuedCancellation = CancellationTokenSource.CreateLinkedTokenSource(ceiling.Token);
+        var activeCancellations = Enumerable
+            .Range(0, 3)
+            .Select(_ => CancellationTokenSource.CreateLinkedTokenSource(ceiling.Token))
+            .ToArray();
+        var activeRequests = Enumerable
+            .Range(0, 3)
+            .Select(index => client.SendAsync(Request(Route), activeCancellations[index].Token))
+            .ToArray();
+
+        try
+        {
+            await handler.ThreeRequestsEntered.Task.WaitAsync(ceiling.Token);
+            var queuedRequest = client.SendAsync(Request(Route), queuedCancellation.Token);
+            var queuedDeadline = Stopwatch.StartNew();
+            while (
+                IdeEndpoints.PendingDiagnosisReadWaiters == 0
+                && !handler.FourRequestsEntered.Task.IsCompleted
+                && queuedDeadline.Elapsed < TimeSpan.FromSeconds(30)
+            )
+            {
+                await Task.Delay(10, ceiling.Token);
+            }
+            _ = IdeEndpoints
+                .PendingDiagnosisReadWaiters.Should()
+                .Be(1, "the fourth request should queue at the three-read gate");
+            _ = handler.MaxConcurrent.Should().Be(3);
+
+            await queuedCancellation.CancelAsync();
+            var queuedCanceled = async () => await queuedRequest;
+            _ = await queuedCanceled.Should().ThrowAsync<OperationCanceledException>();
+            _ = IdeEndpoints.PendingDiagnosisReadWaiters.Should().Be(0);
+
+            await activeCancellations[0].CancelAsync();
+            var activeCanceled = async () => await activeRequests[0];
+            _ = await activeCanceled.Should().ThrowAsync<OperationCanceledException>();
+            var recoveredRequest = client.SendAsync(Request(Route), ceiling.Token);
+            await handler.FourRequestsEntered.Task.WaitAsync(ceiling.Token);
+            _ = handler.MaxConcurrent.Should().Be(3);
+
+            handler.ReleaseResponses.TrySetResult();
+            foreach (var request in activeRequests.Skip(1))
+            {
+                using var response = await request.WaitAsync(ceiling.Token);
+                _ = response.StatusCode.Should().Be(HttpStatusCode.OK);
+            }
+
+            using var recovered = await recoveredRequest.WaitAsync(ceiling.Token);
+            _ = recovered.StatusCode.Should().Be(HttpStatusCode.OK);
+            _ = handler.MaxConcurrent.Should().Be(3);
+        }
+        finally
+        {
+            handler.ReleaseResponses.TrySetResult();
+            await queuedCancellation.CancelAsync();
+            foreach (var cancellation in activeCancellations)
+            {
+                await cancellation.CancelAsync();
+                cancellation.Dispose();
+            }
+            foreach (var request in activeRequests)
+            {
+                try
+                {
+                    (
+                        await request.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken)
+                    ).Dispose();
+                }
+                catch (OperationCanceledException)
+                {
+                    // Caller cancellation already explains an incomplete request.
+                }
+            }
+        }
     }
 
     [Fact]
@@ -577,22 +662,61 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
     private sealed class ProviderHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
     {
         public List<RecordedRequest> Requests { get; } = [];
+        public bool BlockResponses { get; set; }
+        public TaskCompletionSource ThreeRequestsEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource FourRequestsEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseResponses { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int MaxConcurrent { get; private set; }
+        private int _active;
+        private int _entered;
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken
         )
         {
-            Requests.Add(
-                new RecordedRequest(
-                    request.RequestUri!,
-                    request.Headers.Authorization?.ToString(),
-                    request.Headers.Accept.Select(value => value.MediaType!).ToArray(),
-                    request.Headers.IfNoneMatch.Select(value => value.ToString()).ToArray(),
-                    request.Headers.TryGetValues("X-GitHub-Api-Version", out var versions) ? versions.Single() : null
-                )
-            );
-            return Task.FromResult(respond(request));
+            lock (Requests)
+            {
+                Requests.Add(
+                    new RecordedRequest(
+                        request.RequestUri!,
+                        request.Headers.Authorization?.ToString(),
+                        request.Headers.Accept.Select(value => value.MediaType!).ToArray(),
+                        request.Headers.IfNoneMatch.Select(value => value.ToString()).ToArray(),
+                        request.Headers.TryGetValues("X-GitHub-Api-Version", out var versions)
+                            ? versions.Single()
+                            : null
+                    )
+                );
+            }
+            if (BlockResponses)
+            {
+                var active = Interlocked.Increment(ref _active);
+                lock (Requests)
+                {
+                    MaxConcurrent = Math.Max(MaxConcurrent, active);
+                }
+                var entered = Interlocked.Increment(ref _entered);
+                if (entered == 3)
+                {
+                    ThreeRequestsEntered.TrySetResult();
+                }
+                if (entered == 4)
+                {
+                    FourRequestsEntered.TrySetResult();
+                }
+                try
+                {
+                    await ReleaseResponses.Task.WaitAsync(cancellationToken);
+                }
+                finally
+                {
+                    _ = Interlocked.Decrement(ref _active);
+                }
+            }
+            return respond(request);
         }
     }
 

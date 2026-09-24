@@ -602,6 +602,70 @@ public class GitHubReviewFactsTransportTests
     }
 
     [Fact]
+    public async Task Review_fact_chunks_stop_when_the_previous_response_reaches_the_reserve()
+    {
+        const string firstChunk = """
+            {"data":{"rateLimit":{"cost":9,"remaining":11,"resetAt":"2026-08-02T21:00:00Z"},"repository":{}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(firstChunk)]));
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var observed = new List<GraphQlRateLimit?>();
+
+        var batch = await CreateClient(http)
+            .GetPullRequestReviewFactsAsync(
+                "repo",
+                Enumerable.Range(181, 21).ToArray(),
+                CancellationToken.None,
+                reserveBreached: budget =>
+                {
+                    observed.Add(budget);
+                    return budget?.Remaining <= 11;
+                }
+            );
+
+        _ = batch.Failed.Should().Equal(201);
+        _ = batch.QueriesIssued.Should().Be(1);
+        _ = handler.Requests.Should().ContainSingle();
+        _ = observed.Select(budget => budget?.Remaining).Should().Equal(null, 11);
+    }
+
+    [Fact]
+    public async Task Individual_review_retries_stop_when_a_retry_response_reaches_the_reserve()
+    {
+        const string refused = """
+            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            """;
+        const string recovered = """
+            {"data":{"rateLimit":{"cost":3,"remaining":10,"resetAt":"2026-08-02T21:00:00Z"},
+              "repository":{"pr181":{"number":181,"author":{"login":"chris"},"labels":{"nodes":[]},
+              "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"commits":{"nodes":[]}}}}
+            }
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(refused), Json(recovered)]));
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var observed = new List<GraphQlRateLimit?>();
+
+        var batch = await CreateClient(http)
+            .GetPullRequestReviewFactsAsync(
+                "repo",
+                [181, 182],
+                CancellationToken.None,
+                reserveBreached: budget =>
+                {
+                    observed.Add(budget);
+                    return budget?.Remaining <= 10;
+                }
+            );
+
+        _ = batch.Facts.Keys.Should().Equal(181);
+        _ = batch.Failed.Should().Equal(182);
+        _ = batch.QueriesIssued.Should().Be(2);
+        _ = batch.PointsSpent.Should().Be(3);
+        _ = handler.Requests.Should().HaveCount(2);
+        _ = observed.Select(budget => budget?.Remaining).Should().Equal(null, null, 10);
+    }
+
+    [Fact]
     public async Task A_missing_head_first_seen_entry_keeps_the_comment_channel_silent()
     {
         // The anchor dictionary lacking the pull request must read as "anchor unknown"

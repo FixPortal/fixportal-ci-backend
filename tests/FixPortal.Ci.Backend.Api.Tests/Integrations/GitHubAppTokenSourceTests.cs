@@ -190,7 +190,42 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
         }
     }
 
-    private GitHubAppTokenSource CreateMinting(MintHandler handler, FakeClock clock)
+    private sealed class ConcurrentMintHandler : HttpMessageHandler
+    {
+        private int _mints;
+
+        public int Mints => Volatile.Read(ref _mints);
+        public TaskCompletionSource MintEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseMint { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            if (request.Method == HttpMethod.Get)
+            {
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("""{"id":4242}""", Encoding.UTF8, "application/json"),
+                };
+            }
+
+            _ = Interlocked.Increment(ref _mints);
+            MintEntered.TrySetResult();
+            await ReleaseMint.Task.WaitAsync(cancellationToken);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    """{"token":"ghs_shared","expires_at":"2026-08-02T20:30:00Z"}""",
+                    Encoding.UTF8,
+                    "application/json"
+                ),
+            };
+        }
+    }
+
+    private GitHubAppTokenSource CreateMinting(HttpMessageHandler handler, FakeClock clock)
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         _httpClients.Add(http);
@@ -249,6 +284,30 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
         _ = await act.Should().ThrowAsync<GitHubAuthException>();
 
         _ = handler.Mints.Should().Be(1, "the second caller must fail fast inside the backoff, not re-POST");
+    }
+
+    [Fact]
+    public async Task Concurrent_successful_callers_share_one_installation_token_mint()
+    {
+        var handler = new ConcurrentMintHandler();
+        var source = CreateMinting(handler, new FakeClock(Now));
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        var callers = Enumerable.Range(0, 8).Select(_ => source.GetTokenAsync(ceiling.Token)).ToArray();
+        IReadOnlyList<string> tokens;
+        try
+        {
+            await handler.MintEntered.Task.WaitAsync(ceiling.Token);
+            handler.ReleaseMint.TrySetResult();
+            tokens = await Task.WhenAll(callers).WaitAsync(ceiling.Token);
+        }
+        finally
+        {
+            handler.ReleaseMint.TrySetResult();
+        }
+
+        _ = tokens.Should().OnlyContain(token => token == "ghs_shared");
+        _ = handler.Mints.Should().Be(1);
     }
 
     [Fact]

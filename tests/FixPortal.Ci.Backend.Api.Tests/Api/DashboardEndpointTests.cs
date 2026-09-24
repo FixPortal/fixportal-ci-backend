@@ -1,9 +1,11 @@
+using System.Diagnostics;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
+using FixPortal.Ci.Backend.Api.Dashboard.Endpoints;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
@@ -32,7 +34,10 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         DashboardSnapshot? seed,
         string? adminKey,
         HttpMessageHandler? githubHandler,
-        PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>? mergeStates = null
+        PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>? mergeStates = null,
+        bool exposePrivateToGuests = false,
+        bool allowAutoRedirect = true,
+        string? environment = null
     ) =>
         factory
             .WithWebHostBuilder(builder =>
@@ -42,6 +47,14 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                 if (adminKey is not null)
                 {
                     _ = builder.UseSetting("Admin:AdminKey", adminKey);
+                }
+                if (environment is not null)
+                {
+                    _ = builder.UseSetting("environment", environment);
+                }
+                if (exposePrivateToGuests)
+                {
+                    _ = builder.UseSetting("Admin:ExposePrivateToGuests", "true");
                 }
                 _ = builder.ConfigureServices(services =>
                 {
@@ -79,7 +92,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                     }
                 });
             })
-            .CreateClient();
+            .CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = allowAutoRedirect });
 
     private sealed class MergeHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
     {
@@ -147,12 +160,11 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         private readonly Lock _concurrencyLock = new();
         private int _active;
         private int _requestCount;
-        private int _maxConcurrency;
 
         public TaskCompletionSource FirstEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource SecondEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public int MaxConcurrency => _maxConcurrency;
+        public int MaxConcurrency { get; private set; }
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -162,7 +174,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             var active = Interlocked.Increment(ref _active);
             lock (_concurrencyLock)
             {
-                _maxConcurrency = Math.Max(_maxConcurrency, active);
+                MaxConcurrency = Math.Max(MaxConcurrency, active);
             }
             if (Interlocked.Increment(ref _requestCount) == 1)
             {
@@ -180,6 +192,20 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                 Content = new StringContent("""{"merged":true,"sha":"abc123"}""", Encoding.UTF8, "application/json"),
             };
         }
+    }
+
+    private static async Task WaitForQueuedMergeGateWaitersAsync(int expectedWaiters, CancellationToken ct)
+    {
+        var timer = Stopwatch.StartNew();
+        while (timer.Elapsed < TimeSpan.FromSeconds(10))
+        {
+            if (DashboardEndpoints.PendingMergeGateWaiters("public-repo", 42) == expectedWaiters)
+            {
+                return;
+            }
+            await Task.Delay(10, ct);
+        }
+        throw new TimeoutException($"Expected {expectedWaiters} requests queued at the merge semaphore.");
     }
 
     [Fact]
@@ -242,6 +268,52 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         var repo0 = doc.RootElement.GetProperty("repositories")[0];
         _ = repo0.GetProperty("name").GetString().Should().Be("repo");
         _ = repo0.GetProperty("workflows")[0].GetProperty("state").GetString().Should().Be("success");
+    }
+
+    [Fact]
+    public async Task Unknown_routes_should_redirect_to_the_public_CI_page()
+    {
+        using var client = CreateClient(seed: null, adminKey: null, githubHandler: null, allowAutoRedirect: false);
+
+        using var response = await client.GetAsync("/unknown-route", TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.MovedPermanently);
+        _ = response.Headers.Location.Should().Be(new Uri("https://www.fixportal.org/ci"));
+    }
+
+    [Theory]
+    [InlineData("/openapi/v1.json", "application/json")]
+    [InlineData("/scalar/v1", "text/html")]
+    public async Task Api_documentation_routes_are_available_in_development(string path, string mediaType)
+    {
+        using var client = CreateClient(seed: null);
+
+        using var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.OK);
+        _ = response.Content.Headers.ContentType!.MediaType.Should().Be(mediaType);
+    }
+
+    [Theory]
+    [InlineData("/openapi/v1.json", HttpStatusCode.NotFound)]
+    [InlineData("/scalar/v1", HttpStatusCode.MovedPermanently)]
+    public async Task Api_documentation_routes_are_not_exposed_in_production(string path, HttpStatusCode status)
+    {
+        using var client = CreateClient(
+            seed: null,
+            adminKey: null,
+            githubHandler: null,
+            allowAutoRedirect: false,
+            environment: "Production"
+        );
+
+        using var response = await client.GetAsync(path, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(status);
+        if (status == HttpStatusCode.MovedPermanently)
+        {
+            _ = response.Headers.Location.Should().Be(new Uri("https://www.fixportal.org/ci"));
+        }
     }
 
     // CB-H7: the HTTP wire contract must serialize enums as camelCase strings (not
@@ -382,6 +454,31 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         var repos = doc.RootElement.GetProperty("repositories");
         _ = repos.GetArrayLength().Should().Be(1);
         _ = repos[0].GetProperty("name").GetString().Should().Be("public-repo");
+    }
+
+    [Fact]
+    public async Task Get_snapshot_can_expose_private_repositories_when_explicitly_configured()
+    {
+        using var client = CreateClient(
+            SnapshotWithPrivateRepo(),
+            adminKey: null,
+            githubHandler: null,
+            exposePrivateToGuests: true
+        );
+
+        using var response = await client.GetAsync("/api/dashboard/snapshot", TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var document = JsonDocument.Parse(
+            await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        var repositories = document.RootElement.GetProperty("repositories");
+        _ = repositories.GetArrayLength().Should().Be(2);
+        _ = repositories
+            .EnumerateArray()
+            .Select(repo => repo.GetProperty("name").GetString())
+            .Should()
+            .Contain("private-repo");
     }
 
     [Fact]
@@ -575,6 +672,21 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         _ = cacheControl!.Private.Should().BeTrue();
         _ = cacheControl.NoStore.Should().BeTrue();
         _ = response.Headers.Vary.Should().ContainSingle().Which.Should().Be("X-Admin-Key");
+    }
+
+    [Fact]
+    public async Task Authorized_admin_snapshot_remains_private_and_uncacheable()
+    {
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey);
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/dashboard/snapshot/admin");
+        request.Headers.Add("X-Admin-Key", AdminKey);
+
+        using var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.OK);
+        _ = response.Headers.CacheControl!.Private.Should().BeTrue();
+        _ = response.Headers.CacheControl.NoStore.Should().BeTrue();
+        _ = response.Headers.Vary.Should().Contain("X-Admin-Key");
     }
 
     [Fact]
@@ -827,26 +939,36 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     {
         var handler = new BlockingMergeHandler();
         var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
         using var firstRequest = CreateMergeRequest("public-repo", 42);
         using var secondRequest = CreateMergeRequest("public-repo", 42);
 
-        var first = client.SendAsync(firstRequest, TestContext.Current.CancellationToken);
-        await handler.FirstEntered.Task.WaitAsync(TestContext.Current.CancellationToken);
-        var second = client.SendAsync(secondRequest, TestContext.Current.CancellationToken);
-        var secondBeforeRelease =
-            await Task.WhenAny(
-                handler.SecondEntered.Task,
-                Task.Delay(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken)
-            ) == handler.SecondEntered.Task;
-        handler.Release.TrySetResult();
-        await handler.SecondEntered.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        using var firstResponse = await first;
-        using var secondResponse = await second;
+        HttpResponseMessage? firstResponse = null;
+        HttpResponseMessage? secondResponse = null;
+        try
+        {
+            var first = client.SendAsync(firstRequest, ceiling.Token);
+            await handler.FirstEntered.Task.WaitAsync(ceiling.Token);
+            var second = client.SendAsync(secondRequest, ceiling.Token);
+            await WaitForQueuedMergeGateWaitersAsync(1, ceiling.Token);
+            _ = handler
+                .SecondEntered.Task.IsCompleted.Should()
+                .BeFalse("the second request is queued and must wait behind the first");
+            handler.Release.TrySetResult();
+            firstResponse = await first.WaitAsync(ceiling.Token);
+            secondResponse = await second.WaitAsync(ceiling.Token);
+        }
+        finally
+        {
+            handler.Release.TrySetResult();
+            firstResponse?.Dispose();
+            secondResponse?.Dispose();
+        }
 
-        _ = secondBeforeRelease.Should().BeFalse();
         _ = handler.MaxConcurrency.Should().Be(1);
-        _ = firstResponse.StatusCode.Should().Be(HttpStatusCode.OK);
-        _ = secondResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        _ = firstResponse!.StatusCode.Should().Be(HttpStatusCode.OK);
+        _ = secondResponse!.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Fact]
