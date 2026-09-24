@@ -161,9 +161,16 @@ public class ProcessRunnerTests
         var timer = Stopwatch.StartNew();
         while (timer.Elapsed < timeout)
         {
-            if (File.Exists(marker) && int.TryParse(await File.ReadAllTextAsync(marker, ct), out var pid))
+            try
             {
-                return pid;
+                if (File.Exists(marker) && int.TryParse(await File.ReadAllTextAsync(marker, ct), out var pid))
+                {
+                    return pid;
+                }
+            }
+            catch (IOException)
+            {
+                // The child still holds the marker open for its write (Windows sharing violation).
             }
             await Task.Delay(20, ct);
         }
