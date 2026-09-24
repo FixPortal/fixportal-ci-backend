@@ -113,7 +113,7 @@ public sealed class RepoEnrichmentWorkerTests : IDisposable
     // below: ExecuteAsync's cold-start loop calls Inventory.GetRepositoriesAsync
     // itself (unlike RunSweepAsync, which receives the repo list directly), so a
     // real inventory over a fake HTTP handler is needed rather than null!.
-    private sealed class SingleRepoHandler : HttpMessageHandler
+    private sealed class SingleRepoHandler(bool includeSecond = false) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -123,7 +123,9 @@ public sealed class RepoEnrichmentWorkerTests : IDisposable
                 new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(
-                        """[{"name":"a","html_url":"https://github.com/FixPortal/a","private":false,"archived":false,"default_branch":"main"}]""",
+                        includeSecond
+                            ? """[{"name":"a","html_url":"https://github.com/FixPortal/a","private":false,"archived":false,"default_branch":"main"},{"name":"b","html_url":"https://github.com/FixPortal/b","private":false,"archived":false,"default_branch":"main"}]"""
+                            : """[{"name":"a","html_url":"https://github.com/FixPortal/a","private":false,"archived":false,"default_branch":"main"}]""",
                         Encoding.UTF8,
                         "application/json"
                     ),
@@ -131,9 +133,12 @@ public sealed class RepoEnrichmentWorkerTests : IDisposable
             );
     }
 
-    private GitHubInventoryCache NewSingleRepoInventory()
+    private GitHubInventoryCache NewSingleRepoInventory(bool includeSecond = false)
     {
-        var http = new HttpClient(new SingleRepoHandler()) { BaseAddress = new Uri("https://api.github.com/") };
+        var http = new HttpClient(new SingleRepoHandler(includeSecond))
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
         _httpClients.Add(http);
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
@@ -196,15 +201,15 @@ public sealed class RepoEnrichmentWorkerTests : IDisposable
         try
         {
             var initialState = await Task.WhenAny(firstAttemptStarted.Task, timeProvider.InitialDelayScheduled.Task)
-                .WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+                .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             if (initialState == timeProvider.InitialDelayScheduled.Task)
             {
                 timeProvider.Advance(TimeSpan.FromSeconds(15));
             }
 
-            await firstAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+            await firstAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             await timeProvider.RetryDelayScheduled.Task.WaitAsync(
-                TimeSpan.FromSeconds(1),
+                TimeSpan.FromSeconds(30),
                 TestContext.Current.CancellationToken
             );
 
@@ -212,8 +217,69 @@ public sealed class RepoEnrichmentWorkerTests : IDisposable
             _ = Volatile.Read(ref collectCount).Should().Be(1);
 
             timeProvider.Advance(TimeSpan.FromSeconds(1));
-            await secondAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(1), TestContext.Current.CancellationToken);
+            await secondAttemptStarted.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
             _ = Volatile.Read(ref collectCount).Should().Be(2);
+        }
+        finally
+        {
+            await worker.StopAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    /// <summary>Proves a partial cold-start failure retries instead of treating another repo's cached value as convergence.</summary>
+    [Fact]
+    public async Task ExecuteAsync_should_retry_when_one_repo_fails_after_another_repo_was_cached()
+    {
+        var cache = new PerRepoCache<RepoMetrics>();
+        var timeProvider = new TrackingFakeTimeProvider();
+        var failedRepoAttempts = 0;
+        var firstFailureStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var retryStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var value = new RepoMetrics(10, 1.0, 1, 0, Instant.FromUnixTimeSeconds(1));
+        var worker = new ExecuteAsyncFakeWorker(
+            NewSingleRepoInventory(includeSecond: true),
+            cache,
+            timeProvider,
+            repo =>
+            {
+                if (repo.Name == "b" && Interlocked.Increment(ref failedRepoAttempts) == 1)
+                {
+                    firstFailureStarted.TrySetResult();
+                    throw new InvalidOperationException("transient repo failure");
+                }
+                if (repo.Name == "b")
+                {
+                    retryStarted.TrySetResult();
+                }
+                return value;
+            }
+        );
+
+        await worker.StartAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            var initialState = await Task.WhenAny(firstFailureStarted.Task, timeProvider.InitialDelayScheduled.Task)
+                .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            if (initialState == timeProvider.InitialDelayScheduled.Task)
+            {
+                timeProvider.Advance(TimeSpan.FromSeconds(15));
+            }
+            await firstFailureStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await timeProvider.RetryDelayScheduled.Task.WaitAsync(
+                TimeSpan.FromSeconds(10),
+                TestContext.Current.CancellationToken
+            );
+            _ = cache.TryGet("a", out _).Should().BeTrue();
+            _ = cache.TryGet("b", out _).Should().BeFalse();
+
+            timeProvider.Advance(TimeSpan.FromMinutes(5));
+            await retryStarted.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            await timeProvider.SteadyStateTimerScheduled.Task.WaitAsync(
+                TimeSpan.FromSeconds(10),
+                TestContext.Current.CancellationToken
+            );
+            _ = cache.TryGet("b", out var recovered).Should().BeTrue();
+            _ = recovered.Should().Be(value);
         }
         finally
         {

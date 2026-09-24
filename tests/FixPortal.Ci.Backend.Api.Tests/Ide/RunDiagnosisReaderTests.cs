@@ -100,15 +100,32 @@ public class RunDiagnosisReaderTests
     }
 
     [Fact]
+    public async Task Directory_records_are_bounded_before_the_archive_is_materialized()
+    {
+        var entries = Enumerable
+            .Range(0, 257)
+            .Select(index => ($"logs/{index}/", Array.Empty<byte>()))
+            .Append(("job.txt", "hello"u8.ToArray()))
+            .ToArray();
+        using var content = Content(Zip(entries));
+
+        var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
+        var act = async () => await read;
+
+        _ = await act.Should().ThrowAsync<InvalidDataException>();
+    }
+
+    [Fact]
     public async Task Body_limit_is_enforced_from_reads_without_content_length()
     {
-        using var content = new UnknownLengthContent(new byte[16 * 1024 * 1024 + 1]);
+        using var content = new UnknownLengthContent(new byte[32 * 1024 * 1024]);
         content.Headers.ContentLength.Should().BeNull();
 
         var read = RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
         var act = async () => await read;
 
         _ = await act.Should().ThrowAsync<InvalidDataException>();
+        content.BytesRead.Should().BeLessThanOrEqualTo(16 * 1024 * 1024 + 64 * 1024);
     }
 
     [Fact]
@@ -300,13 +317,37 @@ public class RunDiagnosisReaderTests
 
     private sealed class UnknownLengthContent(byte[] bytes) : HttpContent
     {
+        private readonly CountingReadStream _stream = new(bytes);
+        public long BytesRead => _stream.BytesRead;
+
         protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
             stream.WriteAsync(bytes).AsTask();
+
+        protected override Task<Stream> CreateContentReadStreamAsync() => Task.FromResult<Stream>(_stream);
+
+        protected override Task<Stream> CreateContentReadStreamAsync(CancellationToken cancellationToken) =>
+            Task.FromResult<Stream>(_stream);
 
         protected override bool TryComputeLength(out long length)
         {
             length = 0;
             return false;
+        }
+    }
+
+    private sealed class CountingReadStream(byte[] bytes) : MemoryStream(bytes, writable: false)
+    {
+        private long _bytesRead;
+        public long BytesRead => Interlocked.Read(ref _bytesRead);
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default
+        )
+        {
+            var read = await base.ReadAsync(buffer, cancellationToken);
+            _ = Interlocked.Add(ref _bytesRead, read);
+            return read;
         }
     }
 }

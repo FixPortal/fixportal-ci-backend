@@ -15,12 +15,43 @@ public static class DashboardEndpoints
 {
     private sealed class MergeGate
     {
+        private int _pendingWaiters;
+
         public SemaphoreSlim Semaphore { get; } = new(1, 1);
+        public int PendingWaiters => Volatile.Read(ref _pendingWaiters);
         public int Users { get; set; }
+
+        public async Task WaitAsync(CancellationToken ct)
+        {
+            var wait = Semaphore.WaitAsync(ct);
+            if (wait.IsCompleted)
+            {
+                await wait;
+                return;
+            }
+
+            _ = Interlocked.Increment(ref _pendingWaiters);
+            try
+            {
+                await wait;
+            }
+            finally
+            {
+                _ = Interlocked.Decrement(ref _pendingWaiters);
+            }
+        }
     }
 
     private static readonly Lock MergeGatesLock = new();
     private static readonly Dictionary<(string Repo, int PullNumber), MergeGate> MergeGates = [];
+
+    internal static int PendingMergeGateWaiters(string repo, int pullNumber)
+    {
+        lock (MergeGatesLock)
+        {
+            return MergeGates.TryGetValue((repo, pullNumber), out var gate) ? gate.PendingWaiters : 0;
+        }
+    }
 
     // Fluent endpoint-map return values are part of the conventional extension API even when this host does not chain it.
     // ReSharper disable once UnusedMethodReturnValue.Global
@@ -68,129 +99,7 @@ public static class DashboardEndpoints
             }
         );
 
-        _ = endpoints.MapPost(
-            "/api/dashboard/merge",
-            async (
-                HttpRequest request,
-                HttpResponse response,
-                DashboardSnapshotState state,
-                GitHubOrgClient gitHub,
-                PerRepoCache<IReadOnlyDictionary<int, PrMergeState>> mergeStates,
-                IOptions<AdminOptions> admin,
-                CancellationToken ct
-            ) =>
-            {
-                PreventSensitiveCaching(response);
-                if (!IsAdmin(request, admin.Value.AdminKey))
-                {
-                    return Error(HttpStatusCode.Unauthorized, "Unauthorized.");
-                }
-
-                MergePullRequestRequest? merge;
-                try
-                {
-                    merge = await request.ReadFromJsonAsync<MergePullRequestRequest>(ct);
-                }
-                catch (Exception ex) when (ex is JsonException or InvalidOperationException)
-                {
-                    return Error(HttpStatusCode.BadRequest, "Invalid request body.");
-                }
-                if (merge is null)
-                {
-                    return Error(HttpStatusCode.BadRequest, "Invalid request body.");
-                }
-                if (merge.PullNumber <= 0)
-                {
-                    return Error(HttpStatusCode.BadRequest, "Pull number must be greater than zero.");
-                }
-                if (string.IsNullOrWhiteSpace(merge.HeadSha))
-                {
-                    return Error(HttpStatusCode.BadRequest, "Head SHA is required.");
-                }
-
-                if (state.Current is null)
-                {
-                    return Error(HttpStatusCode.ServiceUnavailable, "No dashboard snapshot available yet.");
-                }
-
-                var repository = state.Current.Repositories.FirstOrDefault(candidate =>
-                    string.Equals(candidate.Name, merge.Repo, StringComparison.OrdinalIgnoreCase)
-                );
-                if (repository is null)
-                {
-                    return Error(HttpStatusCode.NotFound, "Repository not found.");
-                }
-
-                var mergeKey = (repository.Name, merge.PullNumber);
-                var gate = RentMergeGate(mergeKey);
-                var entered = false;
-                GitHubMergeResult result;
-                try
-                {
-                    await gate.Semaphore.WaitAsync(ct);
-                    entered = true;
-                    result = await gitHub.MergePullRequestAsync(repository.Name, merge.PullNumber, merge.HeadSha, ct);
-                }
-                catch (Exception ex)
-                    when (ex is GitHubAuthException or GitHubRateLimitException or HttpRequestException or JsonException
-                        || ex is OperationCanceledException && !ct.IsCancellationRequested
-                    )
-                {
-                    return Error(HttpStatusCode.BadGateway, "GitHub merge request failed.");
-                }
-                finally
-                {
-                    if (entered)
-                    {
-                        _ = gate.Semaphore.Release();
-                    }
-                    ReturnMergeGate(mergeKey, gate);
-                }
-
-                if (result.StatusCode == HttpStatusCode.OK && result.Merged && !string.IsNullOrWhiteSpace(result.Sha))
-                {
-                    return Results.Ok(new { merged = true, sha = result.Sha });
-                }
-
-                var error = string.IsNullOrWhiteSpace(result.Message) ? "GitHub merge request failed." : result.Message;
-                if (result.StatusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.Conflict)
-                {
-                    // GitHub itself just said no — a real conflict or a blocked required check,
-                    // not a transport hiccup. Replace the cached verdict so refreshes keep it,
-                    // then patch the served snapshot so the pill reflects it immediately.
-                    mergeStates.Update(
-                        repository.Name,
-                        current =>
-                        {
-                            PrMergeState? existing = null;
-                            _ = current?.TryGetValue(merge.PullNumber, out existing);
-                            if (
-                                existing is not null
-                                && !string.IsNullOrEmpty(existing.HeadSha)
-                                && !DashboardRefreshService.SameHead(existing.HeadSha, merge.HeadSha)
-                            )
-                            {
-                                return current!;
-                            }
-                            var updated =
-                                current?.ToDictionary(pair => pair.Key, pair => pair.Value)
-                                ?? new Dictionary<int, PrMergeState>();
-                            updated[merge.PullNumber] = new PrMergeState(
-                                merge.PullNumber,
-                                existing?.IsDraft ?? false,
-                                "CONFLICTING",
-                                "DIRTY",
-                                merge.HeadSha
-                            );
-                            return updated;
-                        }
-                    );
-                    state.MarkNotMergeable(repository.Name, merge.PullNumber, merge.HeadSha);
-                    return Error(HttpStatusCode.Conflict, error);
-                }
-                return Error(HttpStatusCode.BadGateway, error);
-            }
-        );
+        _ = endpoints.MapPost("/api/dashboard/merge", HandleMergeAsync);
 
         // Health-check endpoint surfacing GitHub credential status (M8). Unauthenticated,
         // so it must NOT echo the raw auth-error string: that string embeds the failing
@@ -224,6 +133,151 @@ public static class DashboardEndpoints
                 Encoding.UTF8.GetBytes(provided),
                 Encoding.UTF8.GetBytes(configured)
             );
+    }
+
+    private static async Task<IResult> HandleMergeAsync(
+        HttpRequest request,
+        HttpResponse response,
+        DashboardSnapshotState state,
+        GitHubOrgClient gitHub,
+        PerRepoCache<IReadOnlyDictionary<int, PrMergeState>> mergeStates,
+        IOptions<AdminOptions> admin,
+        CancellationToken ct
+    )
+    {
+        PreventSensitiveCaching(response);
+        if (!IsAdmin(request, admin.Value.AdminKey))
+        {
+            return Error(HttpStatusCode.Unauthorized, "Unauthorized.");
+        }
+
+        var (requestMerge, requestError) = await ReadAndValidateMergeRequestAsync(request, ct);
+        if (requestError is not null)
+        {
+            return requestError;
+        }
+        var merge = requestMerge!;
+
+        if (state.Current is null)
+        {
+            return Error(HttpStatusCode.ServiceUnavailable, "No dashboard snapshot available yet.");
+        }
+
+        var repository = state.Current.Repositories.FirstOrDefault(candidate =>
+            string.Equals(candidate.Name, merge.Repo, StringComparison.OrdinalIgnoreCase)
+        );
+        if (repository is null)
+        {
+            return Error(HttpStatusCode.NotFound, "Repository not found.");
+        }
+
+        var mergeKey = (repository.Name, merge.PullNumber);
+        var gate = RentMergeGate(mergeKey);
+        var entered = false;
+        GitHubMergeResult result;
+        try
+        {
+            await gate.WaitAsync(ct);
+            entered = true;
+            result = await gitHub.MergePullRequestAsync(repository.Name, merge.PullNumber, merge.HeadSha, ct);
+        }
+        catch (Exception ex)
+            when (ex is GitHubAuthException or GitHubRateLimitException or HttpRequestException or JsonException
+                || ex is OperationCanceledException && !ct.IsCancellationRequested
+            )
+        {
+            return Error(HttpStatusCode.BadGateway, "GitHub merge request failed.");
+        }
+        finally
+        {
+            if (entered)
+            {
+                _ = gate.Semaphore.Release();
+            }
+            ReturnMergeGate(mergeKey, gate);
+        }
+
+        if (result.StatusCode == HttpStatusCode.OK && result.Merged && !string.IsNullOrWhiteSpace(result.Sha))
+        {
+            return Results.Ok(new { merged = true, sha = result.Sha });
+        }
+
+        var error = string.IsNullOrWhiteSpace(result.Message) ? "GitHub merge request failed." : result.Message;
+        if (result.StatusCode is HttpStatusCode.MethodNotAllowed or HttpStatusCode.Conflict)
+        {
+            return RecordMergeConflict(repository.Name, merge, error, state, mergeStates);
+        }
+        return Error(HttpStatusCode.BadGateway, error);
+    }
+
+    private static async Task<(MergePullRequestRequest? Request, IResult? Error)> ReadAndValidateMergeRequestAsync(
+        HttpRequest request,
+        CancellationToken ct
+    )
+    {
+        MergePullRequestRequest? merge;
+        try
+        {
+            merge = await request.ReadFromJsonAsync<MergePullRequestRequest>(ct);
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
+        {
+            return (null, Error(HttpStatusCode.BadRequest, "Invalid request body."));
+        }
+        if (merge is null)
+        {
+            return (null, Error(HttpStatusCode.BadRequest, "Invalid request body."));
+        }
+        if (merge.PullNumber <= 0)
+        {
+            return (null, Error(HttpStatusCode.BadRequest, "Pull number must be greater than zero."));
+        }
+        if (string.IsNullOrWhiteSpace(merge.HeadSha))
+        {
+            return (null, Error(HttpStatusCode.BadRequest, "Head SHA is required."));
+        }
+        return (merge, null);
+    }
+
+    private static IResult RecordMergeConflict(
+        string repository,
+        MergePullRequestRequest merge,
+        string error,
+        DashboardSnapshotState state,
+        PerRepoCache<IReadOnlyDictionary<int, PrMergeState>> mergeStates
+    )
+    {
+        // GitHub itself just said no — a real conflict or a blocked required check,
+        // not a transport hiccup. Replace the cached verdict so refreshes keep it,
+        // then patch the served snapshot so the pill reflects it immediately.
+        mergeStates.Update(
+            repository,
+            current =>
+            {
+                PrMergeState? existing = null;
+                _ = current?.TryGetValue(merge.PullNumber, out existing);
+                if (
+                    existing is not null
+                    && !string.IsNullOrEmpty(existing.HeadSha)
+                    && !DashboardRefreshService.SameHead(existing.HeadSha, merge.HeadSha)
+                )
+                {
+                    return current!;
+                }
+                var updated =
+                    current?.ToDictionary(pair => pair.Key, pair => pair.Value) ?? new Dictionary<int, PrMergeState>();
+                updated[merge.PullNumber] = new PrMergeState(
+                    merge.PullNumber,
+                    existing?.IsDraft ?? false,
+                    "CONFLICTING",
+                    "DIRTY",
+                    merge.HeadSha
+                );
+                return updated;
+            }
+        );
+        state.MarkNotMergeable(repository, merge.PullNumber, merge.HeadSha);
+        return Error(HttpStatusCode.Conflict, error);
     }
 
     private static void PreventSensitiveCaching(HttpResponse response)

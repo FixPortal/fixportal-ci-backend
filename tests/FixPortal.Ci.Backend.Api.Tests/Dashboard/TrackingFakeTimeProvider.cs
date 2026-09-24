@@ -16,6 +16,8 @@ namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 /// </summary>
 internal sealed class TrackingFakeTimeProvider : FakeTimeProvider
 {
+    private int _initialDelayObserved;
+
     public TaskCompletionSource InitialDelayScheduled { get; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -31,7 +33,7 @@ internal sealed class TrackingFakeTimeProvider : FakeTimeProvider
     public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
     {
         var timer = base.CreateTimer(callback, state, dueTime, period);
-        if (dueTime < TimeSpan.FromSeconds(15))
+        if (dueTime < TimeSpan.FromSeconds(15) && Interlocked.Exchange(ref _initialDelayObserved, 1) == 0)
         {
             InitialDelayScheduled.TrySetResult();
         }

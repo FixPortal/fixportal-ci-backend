@@ -180,13 +180,20 @@ public sealed class GitHubInventoryCacheTests : IDisposable
     public async Task Concurrent_callers_collapse_into_a_single_fetch()
     {
         var (cache, handler, _) = Build(blockRepoFetch: true);
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
 
-        var callers = Enumerable.Range(0, 20).Select(_ => cache.GetRepositoriesAsync(CancellationToken.None)).ToArray();
-
-        await handler.RepoFetchStarted.WaitAsync(TestContext.Current.CancellationToken);
-        handler.AllowRepoFetch();
-
-        _ = await Task.WhenAll(callers);
+        var callers = Enumerable.Range(0, 20).Select(_ => cache.GetRepositoriesAsync(ceiling.Token)).ToArray();
+        try
+        {
+            await handler.RepoFetchStarted.WaitAsync(ceiling.Token);
+            handler.AllowRepoFetch();
+            _ = await Task.WhenAll(callers).WaitAsync(ceiling.Token);
+        }
+        finally
+        {
+            handler.AllowRepoFetch();
+        }
 
         _ = handler.RepoCalls.Should().Be(1); // single-flight: 20 concurrent callers, one GitHub call
     }

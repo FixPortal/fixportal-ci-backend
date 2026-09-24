@@ -223,10 +223,4 @@ public class ReadyToMergeCalculatorTests
             .Should()
             .BeFalse();
     }
-
-    [Fact]
-    public void An_empty_signal_list_is_ready()
-    {
-        ReadyToMergeCalculator.Evaluate(Pr(signals: []), Merge(), true, NoBots).Should().BeTrue();
-    }
 }

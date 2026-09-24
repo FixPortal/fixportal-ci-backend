@@ -364,7 +364,13 @@ public sealed class DashboardRefreshService(
         return results
             .Select(r =>
                 r.FetchFailed && prior.TryGetValue(r.Snapshot.Name, out var p)
-                    ? WithoutHeadScopedReviewState(p)
+                    ? WithoutHeadScopedReviewState(p) with
+                    {
+                        // Inventory visibility is current even when signal collection failed.
+                        // Retaining the prior flag can republish a newly-private repo publicly.
+                        Private = r.Snapshot.Private,
+                        HtmlUrl = r.Snapshot.HtmlUrl,
+                    }
                     : r.Snapshot
             )
             .ToList();

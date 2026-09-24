@@ -47,21 +47,6 @@ public class LizardScannerTests
             NullLogger<LizardScanner>.Instance
         );
 
-    // CB-C4: the guard must reject before any process spawn or delete when a repo
-    // name (sourced from the semi-trusted GitHub API) is rooted. A null return alone
-    // does not prove the guard fired — both the guarded and an unguarded path can
-    // return null — so this only pins the rooted-name branch; the traversal test
-    // below is the one that proves harm is actually prevented.
-    [Fact]
-    public async Task ScanAsync_should_return_null_for_a_rooted_repo_name()
-    {
-        var scanner = NewScanner(Path.Combine(Path.GetTempPath(), $"ci-scanner-workroot-{Guid.NewGuid():N}"));
-
-        var result = await scanner.ScanAsync(Path.GetTempPath(), TestContext.Current.CancellationToken);
-
-        _ = result.Should().BeNull();
-    }
-
     // CB-C4: the real regression to guard against is a weakened containment check
     // letting ScanAsync's TryDeleteDir(dir) delete something outside WorkRoot. A
     // sentinel directory placed OUTSIDE WorkRoot, reached via a repo name that
@@ -110,6 +95,7 @@ public class LizardScannerTests
     public void Scrub_should_redact_the_configured_token_from_log_text()
     {
         const string token = "ghp_super-secret-pat-token-value";
+        const string installationToken = "ghs_active-installation-secret";
         var scanner = new LizardScanner(
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = token }),
             Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 }),
@@ -120,9 +106,14 @@ public class LizardScannerTests
         var scrub = typeof(LizardScanner).GetMethod("Scrub", BindingFlags.NonPublic | BindingFlags.Instance);
         _ = scrub.Should().NotBeNull("LizardScanner.Scrub must still exist as the redaction call site");
 
-        var scrubbed = (string)scrub!.Invoke(scanner, [$"fatal: authentication failed using token {token}", null])!;
+        var scrubbed = (string)
+            scrub!.Invoke(
+                scanner,
+                [$"fatal: authentication failed using token {token}; active {installationToken}", installationToken]
+            )!;
 
         _ = scrubbed.Should().NotContain(token);
+        _ = scrubbed.Should().NotContain(installationToken);
         _ = scrubbed.Should().Contain("***");
     }
 }

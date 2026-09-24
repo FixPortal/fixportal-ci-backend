@@ -77,6 +77,12 @@ public sealed class DashboardOptions
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical.ToString())));
     }
 
+    public string SnapshotFingerprint(string owner)
+    {
+        var canonicalOwner = owner.ToUpperInvariant();
+        return $"{canonicalOwner.Length}:{canonicalOwner}:{FilterFingerprint()}";
+    }
+
     // Compiled fallback lanes, used when no Dashboard:JobLanes are configured. These
     // are deliberately NOT the default of the bound JobLanes property below: the
     // configuration binder APPENDS bound collection items to a pre-populated list

@@ -887,10 +887,10 @@ public sealed class GitHubOrgClient(
         new(
             dto.Number,
             string.IsNullOrWhiteSpace(dto.Title) ? $"#{dto.Number}" : dto.Title,
-            string.IsNullOrWhiteSpace(dto.User?.Login) ? "unknown" : dto.User!.Login!,
+            string.IsNullOrWhiteSpace(dto.User?.Login) ? "unknown" : dto.User.Login,
             string.IsNullOrWhiteSpace(dto.HtmlUrl)
                 ? $"https://github.com/{owner}/{repo}/pull/{dto.Number}"
-                : dto.HtmlUrl!,
+                : dto.HtmlUrl,
             dto.Draft,
             dto.CreatedAt,
             // ReviewSignals/ReadyToMerge stay null here: they are stamped later from the
@@ -1333,11 +1333,11 @@ public sealed class GitHubOrgClient(
         return new MergedPullRequest(
             bestItem.Number,
             string.IsNullOrWhiteSpace(bestItem.Title) ? $"#{bestItem.Number}" : bestItem.Title,
-            string.IsNullOrWhiteSpace(bestItem.User?.Login) ? "unknown" : bestItem.User!.Login!,
+            string.IsNullOrWhiteSpace(bestItem.User?.Login) ? "unknown" : bestItem.User.Login,
             repo,
             string.IsNullOrWhiteSpace(bestItem.HtmlUrl)
                 ? $"https://github.com/{_gitHub.Owner}/{repo}/pull/{bestItem.Number}"
-                : bestItem.HtmlUrl!,
+                : bestItem.HtmlUrl,
             maxMergedAt!.Value
         );
     }
@@ -1439,9 +1439,7 @@ public sealed class GitHubOrgClient(
 
         foreach (var rwj in runsNewestFirst)
         {
-            foreach (
-                var job in rwj.Jobs.Where(j => !string.IsNullOrWhiteSpace(j.Name) && IsJobMatch(j.Name!, patterns))
-            )
+            foreach (var job in rwj.Jobs.Where(j => !string.IsNullOrWhiteSpace(j.Name) && IsJobMatch(j.Name, patterns)))
             {
                 RecordJob(job, rwj.Run, workflowName, repoFallbackUrl, order, seen, signals);
             }
@@ -1489,10 +1487,10 @@ public sealed class GitHubOrgClient(
     {
         if (!string.IsNullOrWhiteSpace(job.HtmlUrl))
         {
-            return job.HtmlUrl!;
+            return job.HtmlUrl;
         }
 
-        return string.IsNullOrWhiteSpace(run.HtmlUrl) ? repoFallbackUrl : run.HtmlUrl!;
+        return string.IsNullOrWhiteSpace(run.HtmlUrl) ? repoFallbackUrl : run.HtmlUrl;
     }
 
     // The caller can stop fetching older runs once every target it has seen carries a

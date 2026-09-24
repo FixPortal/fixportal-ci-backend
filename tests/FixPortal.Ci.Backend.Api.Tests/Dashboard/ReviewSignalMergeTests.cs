@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Net;
+using System.Reflection;
 using System.Text;
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
@@ -327,10 +328,12 @@ public class ReviewSignalEnrichmentWorkerCollectTests
     {
         private int _graphQlCalls;
         private int _alertsCalls;
+        public HttpStatusCode AlertsStatus { get; set; } = alertsStatus;
 
         // Every path the scanning products live behind, so a test can assert the
         // visibility filter stopped the request rather than merely dropped the pill.
         public bool ScanningEndpointCalled { get; private set; }
+        public string PullsJson { get; set; } = OpenPullsJson;
 
         public int GraphQlCalls => _graphQlCalls;
 
@@ -380,12 +383,12 @@ public class ReviewSignalEnrichmentWorkerCollectTests
                     $$"""[{"name":"{{RepoName}}","html_url":"https://github.com/FixPortal/{{RepoName}}","private":{{(repoPrivate ? "true" : "false")}},"archived":false,"default_branch":"main"}]"""
                 ),
                 "/graphql" => (HttpStatusCode.OK, GraphQlBody ?? factsJson),
-                _ when isAlertsRequest => (alertsStatus, alertsJson),
+                _ when isAlertsRequest => (AlertsStatus, alertsJson),
                 // The open-PR listing is now the FIRST call of every collect: it carries
                 // the watermark, and a pull request absent from it is never fetched. An
                 // empty list here would mean "nothing dirty", which spends nothing and
                 // reaches neither GraphQL nor the alerts endpoint.
-                _ when path.EndsWith("/pulls", StringComparison.Ordinal) => (HttpStatusCode.OK, OpenPullsJson),
+                _ when path.EndsWith("/pulls", StringComparison.Ordinal) => (HttpStatusCode.OK, PullsJson),
                 _ => (HttpStatusCode.OK, "[]"),
             };
             if (isAlertsRequest)
@@ -499,6 +502,63 @@ public class ReviewSignalEnrichmentWorkerCollectTests
             .Should()
             .BeTrue("the cold-start sweep should have written to the cache within 30s of the alerts response");
         return result!;
+    }
+
+    [Fact]
+    public async Task A_transient_alert_failure_keeps_the_pr_watermark_dirty_for_retry()
+    {
+        var handler = new RoutingHandler(FactsJson("chris", true), HttpStatusCode.OK, "[]");
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>();
+        var worker = new ReviewSignalEnrichmentWorker(
+            client,
+            new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions),
+            cache,
+            Options.Create(
+                new ReviewSignalsOptions
+                {
+                    Reviewers = [new ReviewerOptions { Name = "CodeQL", Source = ReviewerSource.CodeScanning }],
+                }
+            ),
+            gitHubOptions,
+            new FakeTimeProvider(),
+            new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
+            NullLogger<ReviewSignalEnrichmentWorker>.Instance
+        );
+        var repo = new GitHubRepoDto(RepoName, $"https://github.com/FixPortal/{RepoName}", false, false, "main");
+        var collect = typeof(ReviewSignalEnrichmentWorker).GetMethod(
+            "CollectAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        );
+        collect.Should().NotBeNull();
+
+        var first =
+            (Task<IReadOnlyDictionary<int, CachedReviewSignals>?>)
+                collect!.Invoke(worker, [repo, TestContext.Current.CancellationToken])!;
+        var firstResult = await first;
+        _ = firstResult.Should().ContainKey(181);
+        cache.Update(RepoName, firstResult!);
+        _ = handler.GraphQlCalls.Should().Be(1);
+
+        handler.PullsJson = OpenPullsJson.Replace("2026-01-02", "2026-01-03", StringComparison.Ordinal);
+        handler.AlertsStatus = HttpStatusCode.InternalServerError;
+        var failed =
+            (Task<IReadOnlyDictionary<int, CachedReviewSignals>?>)
+                collect.Invoke(worker, [repo, TestContext.Current.CancellationToken])!;
+        _ = (await failed).Should().BeNull();
+        _ = handler.GraphQlCalls.Should().Be(2);
+
+        handler.AlertsStatus = HttpStatusCode.OK;
+        var retry =
+            (Task<IReadOnlyDictionary<int, CachedReviewSignals>?>)
+                collect.Invoke(worker, [repo, TestContext.Current.CancellationToken])!;
+        var result = await retry;
+
+        _ = handler.GraphQlCalls.Should().Be(3, "a failed scan-alert fetch must leave the changed PR watermark dirty");
+        _ = result.Should().ContainKey(181);
     }
 
     private static async Task WaitForCacheAsync(PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>> cache)

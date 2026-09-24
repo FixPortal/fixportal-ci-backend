@@ -31,6 +31,7 @@ public sealed class JobLaneEnrichmentWorkerTests : IDisposable
     {
         public int JobsCallCount;
         public string? FailWorkflowsForRepo;
+        public bool MatchDeployJob;
 
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -76,6 +77,14 @@ public sealed class JobLaneEnrichmentWorkerTests : IDisposable
             if (path.Contains("/jobs", StringComparison.Ordinal))
             {
                 _ = Interlocked.Increment(ref JobsCallCount);
+                if (MatchDeployJob)
+                {
+                    return Task.FromResult(
+                        JsonOk(
+                            """{"jobs":[{"id":9,"name":"Deploy production","status":"completed","conclusion":"success","html_url":"https://x/job/9"}]}"""
+                        )
+                    );
+                }
                 // No jobs at all -> IsScanComplete never reports complete, so scanning
                 // continues until the maxRuns bound in CollectWorkflowJobsAsync stops it.
                 return Task.FromResult(JsonOk("""{"jobs":[]}"""));
@@ -165,5 +174,17 @@ public sealed class JobLaneEnrichmentWorkerTests : IDisposable
         // the sweep for every other repo (RepoEnrichmentWorker<T>.RunSweepAsync).
         _ = result.Should().BeNull();
         _ = handler.JobsCallCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task CollectAsync_should_compose_matching_signals_from_workflow_jobs()
+    {
+        var handler = new LaneScanHandler { MatchDeployJob = true };
+        var worker = NewWorker(handler, maxRunsToScan: 30);
+        var repo = new GitHubRepoDto("repo-a", "https://github.com/FixPortal/repo-a", false, false, "main");
+
+        var result = await InvokeCollectAsync(worker, repo, TestContext.Current.CancellationToken);
+
+        _ = result.Should().ContainSingle().Which.Name.Should().Be("Deploy production");
     }
 }

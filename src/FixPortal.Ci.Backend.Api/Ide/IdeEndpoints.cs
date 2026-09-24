@@ -18,6 +18,29 @@ public static class IdeEndpoints
 
     // Caps concurrent diagnosis reads; see the WaitAsync site in HandleDiagnosisAsync.
     private static readonly SemaphoreSlim DiagnosisReadGate = new(3);
+    private static int _pendingDiagnosisReadWaiters;
+
+    internal static int PendingDiagnosisReadWaiters => Volatile.Read(ref _pendingDiagnosisReadWaiters);
+
+    private static async Task WaitForDiagnosisReadAsync(CancellationToken ct)
+    {
+        var wait = DiagnosisReadGate.WaitAsync(ct);
+        if (wait.IsCompleted)
+        {
+            await wait;
+            return;
+        }
+
+        _ = Interlocked.Increment(ref _pendingDiagnosisReadWaiters);
+        try
+        {
+            await wait;
+        }
+        finally
+        {
+            _ = Interlocked.Decrement(ref _pendingDiagnosisReadWaiters);
+        }
+    }
 
     // void rather than a fluent return: Program.cs calls this once and never chains, so a
     // returned builder is a value nothing reads.
@@ -100,7 +123,7 @@ public static class IdeEndpoints
         // Bounded concurrency: each read buffers up to 16 MB of body and 32 MB expanded
         // on a single-replica process, so an unbounded fan-in of diagnosis requests is a
         // memory amplifier even though every caller holds the IDE key.
-        await DiagnosisReadGate.WaitAsync(context.RequestAborted);
+        await WaitForDiagnosisReadAsync(context.RequestAborted);
         RunDiagnosisReadResult result;
         try
         {
@@ -127,8 +150,8 @@ public static class IdeEndpoints
                     match.Value.Run.RunAttempt!.Value,
                     match.Value.Run.HeadSha!,
                     result.Content!.TextSha256,
-                    result.Content.Truncated,
-                    result.Content.Excerpt
+                    result.Content!.Truncated,
+                    result.Content!.Excerpt
                 )
             ),
             RunDiagnosisReadStatus.Unavailable => DiagnosisError(
