@@ -316,6 +316,13 @@ public sealed class IdeDiagnosisEndpointTests(WebApplicationFactory<Program> fac
             await queuedCancellation.CancelAsync();
             var queuedCanceled = async () => await queuedRequest;
             _ = await queuedCanceled.Should().ThrowAsync<OperationCanceledException>();
+            // The client observes cancellation before the server-side wait's finally has
+            // necessarily decremented the count, so drain to zero under a deadline.
+            var drainDeadline = Stopwatch.StartNew();
+            while (IdeEndpoints.PendingDiagnosisReadWaiters != 0 && drainDeadline.Elapsed < TimeSpan.FromSeconds(10))
+            {
+                await Task.Delay(10, ceiling.Token);
+            }
             _ = IdeEndpoints.PendingDiagnosisReadWaiters.Should().Be(0);
 
             await activeCancellations[0].CancelAsync();

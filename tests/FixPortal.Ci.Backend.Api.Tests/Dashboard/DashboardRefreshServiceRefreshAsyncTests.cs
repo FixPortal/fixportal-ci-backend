@@ -310,12 +310,13 @@ public class DashboardRefreshServiceRefreshAsyncTests
                     )
                 );
             }
-            if (
-                path.Contains("/repo-b/", StringComparison.Ordinal)
-                && path.EndsWith("/actions/workflows", StringComparison.Ordinal)
-            )
+            if (path.EndsWith("/actions/workflows", StringComparison.Ordinal))
             {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
+                return Task.FromResult(
+                    path.Contains("/repo-b/", StringComparison.Ordinal)
+                        ? new HttpResponseMessage(HttpStatusCode.Unauthorized)
+                        : JsonOk("""{"workflows":[]}""")
+                );
             }
             return Task.FromResult(JsonOk("[]"));
         }
@@ -381,7 +382,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
         _ = pr.ReviewSignals.Should().BeEquivalentTo(signals);
     }
 
-    /// <summary>Proves RefreshAsync skips persisting an all-failed cold start but persists degraded recovery over prior state.</summary>
+    /// <summary>Proves RefreshAsync skips persisting a cold start when any repository fails but persists degraded recovery over prior state.</summary>
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, true)]

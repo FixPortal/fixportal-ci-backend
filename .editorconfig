@@ -314,10 +314,6 @@ dotnet_diagnostic.IDE0005.severity = suggestion  # Remove unnecessary usings (ID
 #   CA1707                                   — underscores; scoped to tests below
 
 #### Test project overrides ####
-# FIX protocol identifiers and legacy FIXatdl type names intentionally use underscores.
-[**/*.cs]
-dotnet_diagnostic.CA1707.severity = none
-
 # Test method names commonly use Method_Should_DoX style.
 [*Tests.cs]
 dotnet_diagnostic.CA1707.severity = none
