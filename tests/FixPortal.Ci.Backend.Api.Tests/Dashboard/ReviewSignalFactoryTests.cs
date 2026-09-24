@@ -147,6 +147,51 @@ public class ReviewSignalFactoryTests
         ReviewSignalState expected
     ) => _ = Only(WaivableCodeRabbit, Facts(labels: labels)).State.Should().Be(expected);
 
+    private static readonly ReviewerOptions DirectiveWaivableCodeRabbit = new()
+    {
+        Name = "CodeRabbit",
+        BotLogin = "coderabbitai",
+        RequiredLabel = "review-high",
+        WaivedBodyDirective = "@coderabbitai ignore",
+    };
+
+    [Theory]
+    [InlineData("@coderabbitai ignore\n\n## Summary", ReviewSignalState.Disabled)]
+    [InlineData("## Summary\n\n@CodeRabbitAI Ignore", ReviewSignalState.Disabled)]
+    [InlineData("## Summary\n\nplain description", ReviewSignalState.Pending)]
+    [InlineData(null, ReviewSignalState.Pending)]
+    public void An_ignore_directive_from_a_trusted_author_turns_a_reviewer_that_never_ran_from_pending_to_disabled(
+        string? trustedBody,
+        ReviewSignalState expected
+    )
+    {
+        var facts = Facts(labels: ["review-high"]) with { TrustedAuthorBody = trustedBody };
+
+        _ = Only(DirectiveWaivableCodeRabbit, facts).State.Should().Be(expected);
+    }
+
+    [Fact]
+    public void An_ignore_directive_is_not_honoured_for_a_reviewer_configured_without_one()
+    {
+        var facts = Facts(labels: ["review-high"]) with { TrustedAuthorBody = "@coderabbitai ignore" };
+
+        _ = Only(CodeRabbit, facts).State.Should().Be(ReviewSignalState.Pending);
+    }
+
+    [Fact]
+    public void An_ignore_directive_never_masks_open_findings()
+    {
+        var facts = Facts(
+            labels: ["review-high"],
+            unresolved: new Dictionary<string, int> { ["coderabbitai"] = 2 }
+        ) with
+        {
+            TrustedAuthorBody = "@coderabbitai ignore",
+        };
+
+        _ = Only(DirectiveWaivableCodeRabbit, facts).State.Should().Be(ReviewSignalState.Outstanding);
+    }
+
     [Fact]
     public void A_waiver_never_masks_open_findings()
     {

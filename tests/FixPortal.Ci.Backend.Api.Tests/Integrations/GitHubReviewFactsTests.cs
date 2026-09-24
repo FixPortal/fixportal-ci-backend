@@ -169,6 +169,33 @@ public class GitHubReviewFactsTests
         _ = facts.SuccessfulCheckAppSlugs.Should().NotContain("some-app");
     }
 
+    [Theory]
+    [InlineData("OWNER", true)]
+    [InlineData("MEMBER", true)]
+    [InlineData("owner", true)]
+    [InlineData("COLLABORATOR", false)]
+    [InlineData("CONTRIBUTOR", false)]
+    [InlineData("NONE", false)]
+    [InlineData(null, false)]
+    public void Carries_the_body_only_when_an_org_owner_or_member_wrote_the_pull_request(
+        string? association,
+        bool carried
+    )
+    {
+        // The body can waive a required review, so it is only evidence when someone with
+        // standing in the org wrote it — an outside author must not be able to waive their
+        // own review by typing one line.
+        var pull = Pull() with
+        {
+            Body = "@coderabbitai ignore",
+            AuthorAssociation = association,
+        };
+
+        var facts = GitHubOrgClient.ToReviewFacts(pull);
+
+        _ = facts.TrustedAuthorBody.Should().Be(carried ? "@coderabbitai ignore" : null);
+    }
+
     [Fact]
     public void Survives_a_payload_with_null_collections_and_a_null_author()
     {

@@ -184,6 +184,12 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
               name: 'ReviewSignals__Reviewers__0__WaivedLabel'
               value: 'review-waived'
             }
+            // The same waiver, read from CodeRabbit's own directive in the description.
+            // Honoured only when an org owner or member wrote the PR.
+            {
+              name: 'ReviewSignals__Reviewers__0__WaivedBodyDirective'
+              value: '@coderabbitai ignore'
+            }
             {
               name: 'ReviewSignals__Reviewers__1__Name'
               value: 'Gitar'
