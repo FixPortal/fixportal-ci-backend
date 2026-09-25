@@ -13,7 +13,16 @@ BICEP_PATH = Path(__file__).resolve().parents[2] / "deploy" / "bicep" / "main.bi
 class BicepSingleReplicaTests(unittest.TestCase):
     def test_container_app_scale_bounds_are_pinned_to_one(self):
         text = BICEP_PATH.read_text(encoding="utf-8")
-        match = re.search(r"scale:\s*\{\s*minReplicas:\s*(\d+)\s*maxReplicas:\s*(\d+)\s*\}", text)
+
+        # Scope to the `resource app` block first so a future resource with its own
+        # (unrelated) 1/1-bounded scale block earlier in the file can't produce a
+        # false pass here via re.search's first-match behaviour.
+        app_match = re.search(r"resource\s+app\s+'Microsoft\.App/containerApps@[^']+'\s*=\s*\{", text)
+        self.assertIsNotNone(app_match, f"Could not find the 'resource app' Container App declaration in {BICEP_PATH}")
+
+        match = re.search(
+            r"scale:\s*\{\s*minReplicas:\s*(\d+)\s*maxReplicas:\s*(\d+)\s*\}", text[app_match.end() :]
+        )
         self.assertIsNotNone(
             match, f"Could not find a Container App scale block with minReplicas/maxReplicas in {BICEP_PATH}"
         )
