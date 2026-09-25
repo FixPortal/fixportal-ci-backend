@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Configuration;
@@ -34,6 +35,26 @@ public class GitHubTokenSourceRegistrationTests(WebApplicationFactory<Program> f
         _ = source.Should().BeOfType<StaticGitHubTokenSource>();
         var token = await source.GetTokenAsync(TestContext.Current.CancellationToken);
         _ = token.Should().Be("test-pat");
+    }
+
+    [Fact]
+    public void A_configured_private_key_without_a_PEM_marker_fails_startup()
+    {
+        using var app = factory.WithWebHostBuilder(builder =>
+        {
+            _ = builder.UseSetting("GitHub:Owner", "FixPortal");
+            _ = builder.UseSetting("GitHub:Token", "test-pat");
+            _ = builder.UseSetting("GitHubApp:AppId", "123456");
+            // Complete credentials, but the value is not PEM-shaped: no "PRIVATE KEY" marker.
+            _ = builder.UseSetting("GitHubApp:PrivateKeyPem", "not-a-pem-key");
+            _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
+        });
+
+        var act = () => app.Services.GetRequiredService<IOptions<GitHubAppOptions>>().Value;
+
+        _ = act.Should()
+            .Throw<OptionsValidationException>()
+            .WithMessage("*PrivateKeyPem does not look like a PEM key*");
     }
 
     [Fact]
