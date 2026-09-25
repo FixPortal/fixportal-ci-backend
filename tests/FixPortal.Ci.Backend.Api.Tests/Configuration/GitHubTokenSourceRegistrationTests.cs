@@ -50,7 +50,10 @@ public class GitHubTokenSourceRegistrationTests(WebApplicationFactory<Program> f
             _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
         });
 
-        var act = () => app.Services.GetRequiredService<IOptions<GitHubAppOptions>>().Value;
+        // Trigger host startup itself (ValidateOnStart), not IOptions<T>.Value access: the
+        // latter validates eagerly regardless of ValidateOnStart, so asserting on it alone
+        // would keep passing even if ValidateOnStart were removed from the registration.
+        var act = () => _ = app.Services;
 
         _ = act.Should()
             .Throw<OptionsValidationException>()
