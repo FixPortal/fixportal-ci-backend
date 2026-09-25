@@ -60,7 +60,8 @@
     "Directory.Build.props",
     ".github/workflows/ci.yml",
     ".github/scripts/assert_gate_coverage.py",
-    ".github/scripts/test_assert_gate_coverage.py"
+    ".github/scripts/test_assert_gate_coverage.py",
+    ".github/scripts/test_bicep_single_replica.py"
   ],
 
   "low": [

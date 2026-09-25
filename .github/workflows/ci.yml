@@ -475,6 +475,9 @@ jobs:
       - name: Assert canonical asset copies match the committed manifest
         run: python3 .github/scripts/assert_canonical_assets.py
 
+      - name: Assert the Container App single-replica invariant
+        run: python3 .github/scripts/test_bicep_single_replica.py
+
   # Required status check. Deliberately a pure aggregator of needs.*.result: it decides
   # what can merge, so it has no checkout, no parser and no network of its own.
   #
