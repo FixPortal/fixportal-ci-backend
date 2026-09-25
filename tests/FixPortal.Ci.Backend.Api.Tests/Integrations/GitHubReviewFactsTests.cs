@@ -553,6 +553,26 @@ public class GitHubReviewFactsTransportTests
     }
 
     [Fact]
+    public async Task A_rate_limited_batch_aborts_instead_of_falling_back_to_per_PR_retries()
+    {
+        // A 429 must abort the whole sweep, not be treated as "this one alias is
+        // unreadable" like the refused-PR case above. GuardResponse maps it to
+        // GitHubRateLimitException, which the chunk loop's HttpRequestException catch
+        // does not observe, so it propagates instead of entering FetchIndividuallyAsync.
+        var handler = new ScriptedHandler(
+            new Queue<HttpResponseMessage>([new HttpResponseMessage(HttpStatusCode.TooManyRequests)])
+        );
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var act = () => CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None);
+
+        _ = await act.Should().ThrowAsync<GitHubRateLimitException>();
+        // Exactly the initial batched request: no single-PR fallback was issued.
+        _ = handler.Requests.Should().ContainSingle();
+    }
+
+    [Fact]
     public async Task Cost_is_summed_across_every_query_including_retries()
     {
         // Reading cost off the LAST rate-limit observation discarded everything the retry

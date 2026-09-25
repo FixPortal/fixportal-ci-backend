@@ -208,12 +208,18 @@ public class DashboardSnapshotStateTests
     public void MarkNotMergeable_only_patches_the_head_that_was_rejected(string rejectedHead, bool expectedReady)
     {
         var state = new DashboardSnapshotState();
-        var snapshot = SnapshotWithPullRequest("head-b", readyToMerge: true);
-        state.Update(snapshot, snapshot);
+        // Distinct instances for current/public: MarkNotMergeable projects each independently,
+        // so reusing one object would let a skipped public patch hide behind the unchanged
+        // shared reference instead of surfacing as a stale public snapshot.
+        state.Update(
+            SnapshotWithPullRequest("head-b", readyToMerge: true),
+            SnapshotWithPullRequest("head-b", readyToMerge: true)
+        );
 
         state.MarkNotMergeable("repo", 42, rejectedHead);
 
         _ = state.Current!.Repositories.Single().PullRequests.Single().ReadyToMerge.Should().Be(expectedReady);
+        _ = state.Public!.Repositories.Single().PullRequests.Single().ReadyToMerge.Should().Be(expectedReady);
     }
 
     private sealed class BlockingReadOnlyList<T>(IReadOnlyList<T> inner) : IReadOnlyList<T>
