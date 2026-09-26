@@ -61,7 +61,8 @@
     ".github/workflows/ci.yml",
     ".github/scripts/assert_gate_coverage.py",
     ".github/scripts/test_assert_gate_coverage.py",
-    ".github/scripts/test_bicep_single_replica.py"
+    ".github/scripts/test_bicep_single_replica.py",
+    ".github/workflows/review-tier.yml"
   ],
 
   "low": [
