@@ -56,6 +56,34 @@ public class DashboardRefreshServiceRefreshAsyncTests
             new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
     }
 
+    // Newest run (30) is a green workflow_dispatch run on a side branch; the older run
+    // (20) is red, on olderBranch. Pins the masking bug observed 2026-09-27 on
+    // fixportal-simulator-backend, and the fallback for workflows that never run on main.
+    private sealed class NonDefaultBranchNewestRunHandler(string olderBranch) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            var body = path switch
+            {
+                _ when path.EndsWith("/repos", StringComparison.Ordinal) =>
+                    """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"}]""",
+                _ when path.EndsWith("/actions/workflows", StringComparison.Ordinal) =>
+                    """{"workflows":[{"id":1,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}""",
+                _ when path.EndsWith("/runs", StringComparison.Ordinal) =>
+                    $$"""{"workflow_runs":[{"id":30,"status":"completed","conclusion":"success","html_url":"https://github.com/FixPortal/repo-a/actions/runs/30","display_title":"newest, side branch","run_number":30,"head_branch":"ci/sql-memory-probe","event":"workflow_dispatch","updated_at":"2026-01-03T00:00:00Z"},{"id":20,"status":"completed","conclusion":"failure","html_url":"https://github.com/FixPortal/repo-a/actions/runs/20","display_title":"older","run_number":20,"head_branch":"{{olderBranch}}","event":"push","updated_at":"2026-01-02T00:00:00Z"}]}""",
+                _ => "[]",
+            };
+            return Task.FromResult(JsonOk(body));
+        }
+
+        private static HttpResponseMessage JsonOk(string json) =>
+            new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
+    }
+
     // Tracks the maximum number of repos concurrently past the semaphore gate (i.e.
     // mid per-repo HTTP call) at any point during the refresh.
     private sealed class ConcurrencyProbeHandler : HttpMessageHandler
@@ -532,6 +560,57 @@ public class DashboardRefreshServiceRefreshAsyncTests
         _ = workflow.LastRun!.RunNumber.Should().Be(30);
         _ = handler.RequestedConfiguredHistoryBound.Should().BeTrue();
         _ = workflow.RecentRuns.Should().HaveCount(2);
+        _ = workflow.RecentRuns!.Select(run => run.RunNumber).Should().Equal(30, 20);
+    }
+
+    [Theory]
+    // A green side-branch run must not mask the red run on main.
+    [InlineData("main", SignalState.Failure, 20)]
+    // No main run in the page (a pull_request-only workflow such as review-tier.yml):
+    // fall back to the newest run rather than a permanent Unknown pill.
+    [InlineData("feature/x", SignalState.Success, 30)]
+    public async Task RefreshAsync_should_colour_the_pill_from_the_default_branch_run_when_there_is_one(
+        string olderBranch,
+        SignalState expectedState,
+        int expectedRunNumber
+    )
+    {
+        var state = new DashboardSnapshotState();
+        using var handler = new NonDefaultBranchNewestRunHandler(olderBranch);
+        using var http = new HttpClient(handler, disposeHandler: false);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var sut = new DashboardRefreshService(
+            client,
+            new GitHubInventoryCache(client, clock, dashboardOptions),
+            Substitute.For<IDashboardSnapshotStore>(),
+            state,
+            new PerRepoCache<RepoMetrics>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<MergedPullRequest>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
+            new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(),
+            Options.Create(new ReviewSignalsOptions()),
+            gitHubOptions,
+            clock,
+            NullLogger<DashboardRefreshService>.Instance
+        );
+
+        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+
+        var workflow = state
+            .Current!.Repositories.Should()
+            .ContainSingle()
+            .Which.Workflows.Should()
+            .ContainSingle()
+            .Subject;
+        _ = workflow.State.Should().Be(expectedState);
+        _ = workflow.LastRun!.RunNumber.Should().Be(expectedRunNumber);
+        // History stays unfiltered — both runs remain visible for IDE diagnosis.
         _ = workflow.RecentRuns!.Select(run => run.RunNumber).Should().Equal(30, 20);
     }
 
