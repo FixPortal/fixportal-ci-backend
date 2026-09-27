@@ -707,7 +707,7 @@ public class GitHubReviewFactsTransportTests
                 "repo",
                 [181],
                 CancellationToken.None,
-                new Dictionary<int, Instant> { [182] = Instant.FromUtc(2026, 8, 3, 10, 1, 0) }
+                new Dictionary<int, HeadAnchor> { [182] = new(Instant.FromUtc(2026, 8, 3, 10, 1, 0)) }
             );
 
         _ = batch.Facts[181].HeadCommentAuthors.Should().BeEmpty();

@@ -1,3 +1,5 @@
+using NodaTime;
+
 namespace FixPortal.Ci.Backend.Api.Integrations.GitHub;
 
 // GraphQL wire shapes. Deserialized with a CAMEL-CASE serializer, unlike every REST
@@ -53,7 +55,9 @@ public sealed record GraphQlThread(bool IsResolved, NodeList<GraphQlComment>? Co
 
 public sealed record GraphQlApp(string? Slug);
 
-public sealed record GraphQlCheckSuite(GraphQlApp? App);
+// CreatedAt is populated only under the head commit's checkSuites connection, where it
+// witnesses the push (see CollectHeadCommentAuthors); the rollup's checkSuite reads App only.
+public sealed record GraphQlCheckSuite(GraphQlApp? App, string? CreatedAt = null);
 
 // Only the conclusion and the publishing app matter: the check-run NAME is never read
 // (a reviewer is matched by app slug, not by check title), so it is neither queried
@@ -66,7 +70,25 @@ public sealed record GraphQlRollup(NodeList<GraphQlContext>? Contexts);
 // commit under commits(last: 1)); StatusCheckRollup is only populated on the latter.
 // CommittedDate is populated only on the head commit under commits(last: 1); the
 // review/comment commit refs do not request it and leave it null.
-public sealed record GraphQlCommit(string? Oid, GraphQlRollup? StatusCheckRollup, string? CommittedDate = null);
+public sealed record GraphQlCommit(
+    string? Oid,
+    GraphQlRollup? StatusCheckRollup,
+    string? CommittedDate = null,
+    NodeList<GraphQlCheckSuite>? CheckSuites = null
+);
+
+/// <summary>
+/// What the enrichment worker observed about a pull request's current head, scoping the
+/// issue-comment channel (see GitHubOrgClient.CollectHeadCommentAuthors).
+/// </summary>
+/// <param name="FirstSeenAt">
+/// When the current head SHA was first observed: an upper bound on the push instant.
+/// </param>
+/// <param name="MovedAfter">
+/// When the PREVIOUS head was last observed, so the push happened after it. Null when no
+/// predecessor was observed.
+/// </param>
+public readonly record struct HeadAnchor(Instant FirstSeenAt, Instant? MovedAfter = null);
 
 public sealed record GraphQlCommitNode(GraphQlCommit? Commit);
 
