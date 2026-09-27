@@ -561,6 +561,100 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         _ = result.Should().ContainKey(181);
     }
 
+    // The 2026-09-26 live defect (fixportal-fixatdl-react #46): the head moved at ~00:01,
+    // Gitar's verdict comment landed at 00:01:30, and the next sweep did not observe the
+    // new head until 00:02:30. Stamping the moved head at observation time discarded the
+    // verdict for the life of the head. The push is witnessed sooner by the check suites
+    // GitHub creates for the new head commit, but only a suite created AFTER the old head
+    // was last seen can vouch for the push; an older one, or a comment older than the
+    // suite, must still be refused.
+    [Theory]
+    [InlineData("2026-01-01T00:01:30Z", "2026-01-01T00:01:05Z", ReviewSignalState.Clean)]
+    [InlineData("2026-01-01T00:00:40Z", "2026-01-01T00:01:05Z", ReviewSignalState.Pending)]
+    [InlineData("2026-01-01T00:01:30Z", "2025-12-31T23:59:00Z", ReviewSignalState.Pending)]
+    [InlineData("2026-01-01T00:01:30Z", null, ReviewSignalState.Pending)]
+    public async Task A_comment_between_a_push_and_the_sweep_that_observes_it_counts_only_after_the_push_evidence(
+        string commentAt,
+        string? suiteCreatedAt,
+        ReviewSignalState expected
+    )
+    {
+        const string oldHeadFacts = """
+            {"data":{"repository":{
+              "pr181":{"number":181,"author":{"login":"chris"},
+               "labels":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},"comments":{"nodes":[]},
+               "commits":{"nodes":[{"commit":{"oid":"sha","committedDate":"2025-12-31T23:00:00Z","statusCheckRollup":{"contexts":{"nodes":[]}}}}]}}
+            }}}
+            """;
+        // Placeholder substitution, not interpolation: see FactsJson (CS9007).
+        var suites = suiteCreatedAt is null ? "[]" : $$"""[{"createdAt":"{{suiteCreatedAt}}"}]""";
+        var newHeadFacts = """
+            {"data":{"repository":{
+              "pr181":{"number":181,"author":{"login":"chris"},
+               "labels":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},
+               "comments":{"nodes":[{"author":{"login":"gitar-bot"},"createdAt":"__COMMENT_AT__"}]},
+               "commits":{"nodes":[{"commit":{"oid":"sha2","committedDate":"2026-01-01T00:00:10Z",
+                 "checkSuites":{"nodes":__SUITES__},"statusCheckRollup":{"contexts":{"nodes":[]}}}}]}}
+            }}}
+            """.Replace("__COMMENT_AT__", commentAt, StringComparison.Ordinal).Replace(
+            "__SUITES__",
+            suites,
+            StringComparison.Ordinal
+        );
+        var handler = new RoutingHandler(oldHeadFacts, HttpStatusCode.OK, "[]");
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>();
+        var workerClock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var worker = new ReviewSignalEnrichmentWorker(
+            client,
+            new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions),
+            cache,
+            Options.Create(
+                new ReviewSignalsOptions
+                {
+                    Reviewers =
+                    [
+                        new ReviewerOptions
+                        {
+                            Name = "Gitar",
+                            BotLogin = "gitar-bot",
+                            CommentsCountAsParticipation = true,
+                        },
+                    ],
+                }
+            ),
+            gitHubOptions,
+            new FakeTimeProvider(),
+            workerClock,
+            NullLogger<ReviewSignalEnrichmentWorker>.Instance
+        );
+        var repo = new GitHubRepoDto(RepoName, $"https://github.com/FixPortal/{RepoName}", false, false, "main");
+        var collect = typeof(ReviewSignalEnrichmentWorker).GetMethod(
+            "CollectAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        )!;
+
+        // Sweep 1 at 00:00 sees the old head.
+        var first = await (Task<IReadOnlyDictionary<int, CachedReviewSignals>?>)
+            collect.Invoke(worker, [repo, TestContext.Current.CancellationToken])!;
+        cache.Update(RepoName, first!);
+
+        // The push and the comment happen between sweeps; sweep 2 observes the new head at 00:02:30.
+        handler.PullsJson = OpenPullsJson
+            .Replace("2026-01-02", "2026-01-03", StringComparison.Ordinal)
+            .Replace("\"sha\":\"sha\"", "\"sha\":\"sha2\"", StringComparison.Ordinal);
+        handler.GraphQlBody = newHeadFacts;
+        workerClock.Advance(Duration.FromSeconds(150));
+        var second = await (Task<IReadOnlyDictionary<int, CachedReviewSignals>?>)
+            collect.Invoke(worker, [repo, TestContext.Current.CancellationToken])!;
+
+        _ = second![181].HeadSha.Should().Be("sha2");
+        _ = second[181].Signals.Single(s => s.Name == "Gitar").State.Should().Be(expected);
+    }
+
     private static async Task WaitForCacheAsync(PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>> cache)
     {
         var settleTimer = Stopwatch.StartNew();

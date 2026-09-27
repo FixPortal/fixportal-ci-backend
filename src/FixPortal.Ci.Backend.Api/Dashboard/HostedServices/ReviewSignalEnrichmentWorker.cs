@@ -103,9 +103,13 @@ public sealed class ReviewSignalEnrichmentWorker(
     // request on this path, which is deliberate: the alternative loses each bot's verdict
     // until its author happens to push again.
     private static readonly Instant HeadSeenBeforeObservation = Instant.MinValue;
-    private readonly Dictionary<string, Dictionary<int, (string HeadSha, Instant Since)>> _headFirstSeenAt = new(
-        StringComparer.OrdinalIgnoreCase
-    );
+
+    // LastSeen is the latest listing that showed HeadSha; when the head moves it becomes
+    // the new head's MovedAfter (see HeadAnchor).
+    private readonly Dictionary<
+        string,
+        Dictionary<int, (string HeadSha, Instant Since, Instant? MovedAfter, Instant LastSeen)>
+    > _headFirstSeenAt = new(StringComparer.OrdinalIgnoreCase);
 
     protected override void OnSweepCompleted()
     {
@@ -373,7 +377,7 @@ public sealed class ReviewSignalEnrichmentWorker(
     /// so a comment predating the observation cannot certify the new head; a head seen
     /// for a while keeps its original stamp, so later comments still count.
     /// </summary>
-    private Dictionary<int, Instant> TrackHeadTransitions(
+    private Dictionary<int, HeadAnchor> TrackHeadTransitions(
         string repo,
         IReadOnlyDictionary<int, PrWatermark> previous,
         IReadOnlyDictionary<int, PrWatermark> current
@@ -401,12 +405,17 @@ public sealed class ReviewSignalEnrichmentWorker(
             }
 
             var known = previous.TryGetValue(number, out var before);
+            var hadEntry = seen.TryGetValue(number, out var existing);
             var unchanged =
                 known
                 && string.Equals(before.HeadSha, watermark.HeadSha, StringComparison.Ordinal)
-                && seen.TryGetValue(number, out var existing)
+                && hadEntry
                 && string.Equals(existing.HeadSha, watermark.HeadSha, StringComparison.Ordinal);
-            if (!unchanged)
+            if (unchanged)
+            {
+                seen[number] = existing with { LastSeen = now };
+            }
+            else
             {
                 // A head that MOVED is stamped now, so comments about the old head cannot
                 // certify the new one. A pull request seen for the FIRST time gets no
@@ -416,11 +425,18 @@ public sealed class ReviewSignalEnrichmentWorker(
                 // minutes wide and the review bots comment within seconds of a pull
                 // request opening, so every one of their verdicts fell inside it and the
                 // pill sat Pending for the life of the pull request.
-                seen[number] = (watermark.HeadSha, known ? now : HeadSeenBeforeObservation);
+                // MovedAfter is the last listing of whatever head preceded this one; a
+                // listing that already showed the new head only makes it later, which
+                // only narrows the check suites that can vouch for the push.
+                Instant? movedAfter = known && hadEntry ? existing.LastSeen : null;
+                seen[number] = (watermark.HeadSha, known ? now : HeadSeenBeforeObservation, movedAfter, now);
             }
         }
 
-        return seen.ToDictionary(entry => entry.Key, entry => entry.Value.Since);
+        return seen.ToDictionary(
+            entry => entry.Key,
+            entry => new HeadAnchor(entry.Value.Since, entry.Value.MovedAfter)
+        );
     }
 
     /// <summary>

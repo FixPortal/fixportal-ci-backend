@@ -230,6 +230,10 @@ public sealed class GitHubOrgClient(
               commit {
                 oid
                 committedDate
+                # Witnesses the push for the issue-comment channel (CollectHeadCommentAuthors).
+                # Same permission as the rollup's checkSuite below; `last:` keeps the newest,
+                # and a truncated list can only make the anchor later, never earlier.
+                checkSuites(last: 20) { nodes { createdAt } }
                 statusCheckRollup {
                   contexts(first: 100) {
                     nodes { ... on CheckRun { conclusion checkSuite { app { slug } } } }
@@ -348,7 +352,7 @@ public sealed class GitHubOrgClient(
         string repo,
         IReadOnlyCollection<int> numbers,
         CancellationToken ct,
-        IReadOnlyDictionary<int, Instant>? headFirstSeenAt = null,
+        IReadOnlyDictionary<int, HeadAnchor>? headFirstSeenAt = null,
         Func<GraphQlRateLimit?, bool>? reserveBreached = null
     )
     {
@@ -429,7 +433,7 @@ public sealed class GitHubOrgClient(
         Dictionary<int, PrReviewFacts> facts,
         List<int> failed,
         CancellationToken ct,
-        IReadOnlyDictionary<int, Instant>? headFirstSeenAt,
+        IReadOnlyDictionary<int, HeadAnchor>? headFirstSeenAt,
         Func<GraphQlRateLimit?, bool>? reserveBreached
     )
     {
@@ -463,7 +467,7 @@ public sealed class GitHubOrgClient(
         IReadOnlyList<int> chunk,
         Dictionary<int, PrReviewFacts> facts,
         CancellationToken ct,
-        IReadOnlyDictionary<int, Instant>? headFirstSeenAt = null
+        IReadOnlyDictionary<int, HeadAnchor>? headFirstSeenAt = null
     )
     {
         // Aliases are built from int, so there is no injection surface here.
@@ -495,17 +499,17 @@ public sealed class GitHubOrgClient(
             }
 
             var truncated = WarnOnTruncatedConnections(repo, pull);
+            // TryGetValue, not GetValueOrDefault: a missing entry must stay null
+            // ("anchor unknown" — the comment channel yields nothing), whereas the
+            // default(Instant) a missing key would produce is the Unix epoch, which
+            // scopes the channel to every comment the pull request ever received.
+            HeadAnchor? anchor =
+                headFirstSeenAt is not null && headFirstSeenAt.TryGetValue(pull.Number, out var found) ? found : null;
             facts[pull.Number] = ToReviewFacts(
                 pull,
-                // TryGetValue, not GetValueOrDefault: a missing entry must stay null
-                // ("anchor unknown" — the comment channel yields nothing), whereas the
-                // default(Instant) a missing key would produce is the Unix epoch, which
-                // scopes the channel to every comment the pull request ever received.
-                headFirstSeenAt is not null
-                && headFirstSeenAt.TryGetValue(pull.Number, out var headSince)
-                    ? headSince
-                    : null,
-                truncated.Count > 0 ? truncated : null
+                anchor?.FirstSeenAt,
+                truncated.Count > 0 ? truncated : null,
+                anchor?.MovedAfter
             );
         }
 
@@ -1091,17 +1095,22 @@ public sealed class GitHubOrgClient(
     /// WarnOnTruncatedConnections. Carried onto the facts so the signal factory can
     /// refuse Clean on evidence it cannot prove complete.
     /// </param>
+    /// <param name="headMovedAfter">
+    /// When the previous head was last observed (see <see cref="HeadAnchor.MovedAfter"/>).
+    /// Lets a check suite created after it tighten <paramref name="headFirstSeenAt"/>.
+    /// </param>
     public static PrReviewFacts ToReviewFacts(
         ReviewFactsPull pull,
         Instant? headFirstSeenAt = null,
-        IReadOnlySet<string>? truncated = null
+        IReadOnlySet<string>? truncated = null,
+        Instant? headMovedAfter = null
     )
     {
         var labels = CollectLabels(pull.Labels);
         var headOid = GetHeadOid(pull.Commits);
         var headParticipating = CollectReviewers(pull.Reviews, headOid);
         var unresolved = CollectThreadFacts(pull.ReviewThreads, headParticipating, headOid);
-        var headComments = CollectHeadCommentAuthors(pull.Comments, pull.Commits, headFirstSeenAt);
+        var headComments = CollectHeadCommentAuthors(pull.Comments, pull.Commits, headFirstSeenAt, headMovedAfter);
         var checkApps = CollectSuccessfulCheckApps(pull.Commits);
 
         return new PrReviewFacts(
@@ -1157,16 +1166,33 @@ public sealed class GitHubOrgClient(
     // stamped equal to either anchor is ambiguous, and Pending is the safe direction.
     // Anything unreadable -- no head date, no timestamp, an unparseable one -- drops the
     // author, never promotes them.
+    //
+    // headFirstSeenAt alone is only as tight as the sweep cadence: a bot that comments
+    // between the push and the next sweep is discarded for the life of the head (the
+    // 2026-09-26 fixatdl-react #46 Gitar verdict, 90s after the push, ~150s sweeps). The
+    // head commit's check suites tighten it: GitHub creates them in response to a push
+    // of that commit, so one created AFTER the previous head was last observed witnesses
+    // a push that happened after that observation -- the transition -- and a comment
+    // after it follows the push. A suite older than that observation (the SHA existed
+    // before, e.g. a force-push back to it) proves nothing and is ignored, leaving
+    // headFirstSeenAt. Accepted residual: the same SHA pushed to ANOTHER ref inside that
+    // one sweep window, and only later made this head, would let an old-head comment
+    // posted between the two pushes count.
     private static HashSet<string> CollectHeadCommentAuthors(
         NodeList<GraphQlIssueComment>? comments,
         NodeList<GraphQlCommitNode>? commits,
-        Instant? headFirstSeenAt
+        Instant? headFirstSeenAt,
+        Instant? headMovedAfter = null
     )
     {
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (headFirstSeenAt is not { } headSince || GetHeadCommittedAt(commits) is not { } headAt)
         {
             return result;
+        }
+        if (headMovedAfter is { } movedAfter && EarliestCheckSuiteAfter(commits, movedAfter) is { } pushedBy)
+        {
+            headSince = Instant.Min(headSince, pushedBy);
         }
         foreach (
             var login in (comments?.Nodes ?? [])
@@ -1201,6 +1227,15 @@ public sealed class GitHubOrgClient(
 
     private static Instant? GetHeadCommittedAt(NodeList<GraphQlCommitNode>? commits) =>
         commits?.Nodes is { Count: > 0 } nodes ? ParseInstant(nodes[^1].Commit?.CommittedDate) : null;
+
+    // Strict >: a suite stamped at the observation instant cannot prove it came after it.
+    private static Instant? EarliestCheckSuiteAfter(NodeList<GraphQlCommitNode>? commits, Instant after) =>
+        commits?.Nodes is { Count: > 0 } nodes
+            ? (nodes[^1].Commit?.CheckSuites?.Nodes ?? [])
+                .Select(suite => ParseInstant(suite.CreatedAt))
+                .Where(createdAt => createdAt > after)
+                .Min()
+            : null;
 
     // GitHub returns ISO-8601 UTC ("2026-08-03T10:35:48Z"). A malformed value is a fact we
     // cannot read, not an exception: one bad timestamp must not take out a whole sweep.
