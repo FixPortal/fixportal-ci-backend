@@ -3,6 +3,7 @@ using System.Text.Json;
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
+using FixPortal.Ci.Backend.Api.Tests.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -13,8 +14,8 @@ using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Api;
 
-public sealed class IdeSnapshotEndpointTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>,
+public sealed class IdeSnapshotEndpointTests(CiWebApplicationFactory factory)
+    : IClassFixture<CiWebApplicationFactory>,
         IDisposable
 {
     private const string IdeKey = "ide-integration-key-012345678901234";

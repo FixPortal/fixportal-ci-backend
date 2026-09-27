@@ -1,7 +1,8 @@
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
+using FixPortal.Ci.Backend.Api.Tests.Hosting;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
@@ -17,7 +18,7 @@ public class AdminOptionsValidationTests
         string adminKey,
         int? dashboardSettingValue,
         string dashboardSettingName
-    ) : WebApplicationFactory<Program>
+    ) : CiWebApplicationFactory
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
@@ -114,5 +115,52 @@ public class AdminOptionsValidationTests
         var act = () => Start(owner, token);
 
         _ = act.Should().Throw<OptionsValidationException>().WithMessage("*GitHub:*");
+    }
+
+    [Fact]
+    public void A_blank_token_still_fails_validation_when_the_host_disposes_before_start()
+    {
+        // Pins the disposed-provider race. OnHostBuilt returns only after the entry-point
+        // thread has already disposed the host, so Start's first service resolve throws
+        // ObjectDisposedException unless the factory puts the logged validation failure back.
+        var act = () =>
+        {
+            using var factory = new DisposedBeforeStartFactory();
+            using var client = factory.CreateClient();
+        };
+
+        _ = act.Should().Throw<OptionsValidationException>().WithMessage("*GitHub:Token*");
+    }
+
+    private sealed class DisposedBeforeStartFactory : CiWebApplicationFactory
+    {
+        private const int DisposeWaitMilliseconds = 5_000;
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            _ = builder.UseSetting("GitHub:Owner", "FixPortal");
+            _ = builder.UseSetting("GitHub:Token", "");
+            _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
+        }
+
+        protected override void OnHostBuilt(IHost host, StartupFailureCapture capture)
+        {
+            var deadline = Environment.TickCount64 + DisposeWaitMilliseconds;
+            while (Environment.TickCount64 < deadline)
+            {
+                try
+                {
+                    _ = host.Services.GetService(typeof(IHostApplicationLifetime));
+                }
+                catch (ObjectDisposedException)
+                {
+                    return;
+                }
+
+                Thread.Yield();
+            }
+
+            throw new TimeoutException("Startup validation did not dispose the host before Start.");
+        }
     }
 }

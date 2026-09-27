@@ -1,5 +1,6 @@
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
+using FixPortal.Ci.Backend.Api.Tests.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -9,8 +10,8 @@ using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Configuration;
 
-public class RepositoryFiltersConfigBindingTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class RepositoryFiltersConfigBindingTests(CiWebApplicationFactory factory)
+    : IClassFixture<CiWebApplicationFactory>
 {
     [Fact]
     public void Configured_repository_filters_replace_the_empty_defaults()

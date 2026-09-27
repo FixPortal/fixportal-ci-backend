@@ -1,6 +1,7 @@
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Ide;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
+using FixPortal.Ci.Backend.Api.Tests.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -10,8 +11,8 @@ using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Configuration;
 
-public class GitHubTokenSourceRegistrationTests(WebApplicationFactory<Program> factory)
-    : IClassFixture<WebApplicationFactory<Program>>
+public class GitHubTokenSourceRegistrationTests(CiWebApplicationFactory factory)
+    : IClassFixture<CiWebApplicationFactory>
 {
     private WebApplicationFactory<Program> ConfigureFactory(bool appCredentialsConfigured) =>
         factory.WithWebHostBuilder(builder =>
