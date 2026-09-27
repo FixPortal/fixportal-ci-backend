@@ -152,13 +152,22 @@ public sealed class DashboardRefreshService(
         try
         {
             var workflows = await inventory.GetWorkflowsAsync(repo.Name, rateLimitToken);
+            var defaultBranch = string.IsNullOrWhiteSpace(repo.DefaultBranch) ? "main" : repo.DefaultBranch;
             var snaps = new List<WorkflowSnapshot>();
             var runs = new List<WorkflowRun>();
             foreach (var wf in workflows)
             {
                 var wfRuns = await client.GetRecentRunsAsync(repo.Name, wf, rateLimitToken);
                 runs.AddRange(wfRuns);
-                var latest = wfRuns.Count > 0 ? wfRuns[0] : null;
+                // The pill reflects the DEFAULT branch's latest run, not whichever branch
+                // ran most recently: a green workflow_dispatch run on a side branch must not
+                // mask a red run on main (observed 2026-09-27 on fixportal-simulator-backend).
+                // wfRuns is newest-first. A workflow with no default-branch run in the page
+                // (pull_request-only, e.g. review-tier.yml) has no main state to mask, so it
+                // falls back to its newest run rather than a permanent Unknown pill.
+                var latest =
+                    wfRuns.FirstOrDefault(r => string.Equals(r.Branch, defaultBranch, StringComparison.Ordinal))
+                    ?? wfRuns.FirstOrDefault();
                 snaps.Add(
                     new WorkflowSnapshot(
                         wf.Name,
