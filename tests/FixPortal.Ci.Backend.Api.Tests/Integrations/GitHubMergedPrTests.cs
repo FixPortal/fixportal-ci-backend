@@ -47,9 +47,7 @@ public class GitHubMergedPrTests
         var handler = new RecordingHandler(body);
         using var http = new HttpClient(handler);
         http.BaseAddress = new Uri("https://api.github.com/");
-        var gitHub = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
-        var dashboard = Options.Create(new DashboardOptions { SnapshotPath = "snapshot.json", RefreshSeconds = 60 });
-        var client = new GitHubOrgClient(http, gitHub, dashboard, new GitHubETagStore());
+        var client = NewClient(http);
 
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);
 
@@ -78,9 +76,7 @@ public class GitHubMergedPrTests
         var handler = new RecordingHandler(body);
         using var http = new HttpClient(handler);
         http.BaseAddress = new Uri("https://api.github.com/");
-        var gitHub = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
-        var dashboard = Options.Create(new DashboardOptions { SnapshotPath = "snapshot.json", RefreshSeconds = 60 });
-        var client = new GitHubOrgClient(http, gitHub, dashboard, new GitHubETagStore());
+        var client = NewClient(http);
 
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);
 
@@ -96,9 +92,7 @@ public class GitHubMergedPrTests
         var handler = new RecordingHandler("""{"items":[]}""");
         using var http = new HttpClient(handler);
         http.BaseAddress = new Uri("https://api.github.com/");
-        var gitHub = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
-        var dashboard = Options.Create(new DashboardOptions { SnapshotPath = "snapshot.json", RefreshSeconds = 60 });
-        var client = new GitHubOrgClient(http, gitHub, dashboard, new GitHubETagStore());
+        var client = NewClient(http);
 
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);
 
