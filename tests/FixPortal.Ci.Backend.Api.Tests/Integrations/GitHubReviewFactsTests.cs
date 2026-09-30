@@ -345,21 +345,6 @@ public class GitHubReviewFactsTests
         _ = facts.HeadParticipatingAuthors.Should().BeEmpty();
     }
 
-    [Fact]
-    public void The_comments_connection_reports_truncation_on_has_previous_page()
-    {
-        // comments are fetched with `last:` to get the most RECENT ones, so overflow is at
-        // the START of the connection. Asserting hasNextPage here would pass while the real
-        // truncation went undetected -- silently, with a Clean pill on incomplete evidence.
-        var truncated = new NodeList<GraphQlIssueComment>(
-            [],
-            new GraphQlPageInfo(HasNextPage: false, HasPreviousPage: true)
-        );
-
-        _ = truncated.PageInfo!.HasPreviousPage.Should().BeTrue();
-        _ = truncated.PageInfo!.HasNextPage.Should().BeFalse();
-    }
-
     // The shape that pinned five ready pull requests to Pending on 2026-08-18: Gitar
     // posts its dashboard comment seconds after the pull request opens -- saying only
     // that automatic review is paused -- and EDITS the verdict into that same comment
@@ -756,6 +741,26 @@ public class GitHubReviewFactsTransportTests
         var body = handler.Bodies.Should().ContainSingle().Subject;
         _ = body.Should().Contain("nodes { author { login } originalCommit { oid } }");
         _ = body.Should().Contain("rateLimit { cost remaining resetAt }");
+    }
+
+    [Fact]
+    public async Task Carries_comments_truncated_at_the_start_of_the_connection_onto_facts()
+    {
+        // The query uses `last:` to get recent comments, so older comments are signalled by
+        // hasPreviousPage. Exercise the GraphQL response through the production mapper.
+        const string body = """
+            {"data":{"repository":{"pr181":{"number":181,"author":{"login":"chris"},"labels":{"nodes":[]},
+              "reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},
+              "comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"hasPreviousPage":true}},
+              "commits":{"nodes":[]}}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
+
+        _ = batch.Facts[181].TruncatedConnections.Should().Contain("comments");
     }
 
     [Fact]
