@@ -63,8 +63,7 @@ public sealed class FileDashboardSnapshotStore(
             // as well — until a refresh succeeds, which never happens while GitHub is
             // unreachable. Fail closed: a snapshot whose provenance cannot be established
             // is discarded, not served.
-            // Tested through `persisted`, not `snapshot`: a non-null snapshot already implies
-            // a non-null envelope, so `persisted?.` here was a null check that could never fail.
+            // Empty envelopes have no repository set whose filter provenance needs checking.
             if (
                 persisted is { Snapshot: not null }
                 && !string.Equals(persisted.FilterFingerprint, filterFingerprint, StringComparison.Ordinal)
