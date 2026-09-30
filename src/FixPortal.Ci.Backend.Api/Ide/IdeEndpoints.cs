@@ -286,8 +286,7 @@ public static class IdeEndpoints
         && !string.IsNullOrWhiteSpace(run.HtmlUrl)
         && string.Equals(run.Repository, qualifiedRepository, StringComparison.OrdinalIgnoreCase)
         && string.Equals(CanonicalWorkflowFile(run.WorkflowFile), workflowFile, StringComparison.Ordinal)
-        && run.HeadSha is { Length: 40 } sha
-        && sha.All(character => character is >= '0' and <= '9' or >= 'a' and <= 'f');
+        && IsCanonicalSha(run.HeadSha);
 
     private static IEnumerable<(WorkflowSnapshot Workflow, string File)> CanonicalWorkflows(
         IEnumerable<WorkflowSnapshot> workflows
