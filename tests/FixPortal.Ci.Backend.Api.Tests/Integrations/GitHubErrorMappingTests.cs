@@ -101,7 +101,7 @@ public class GitHubErrorMappingTests
         _ = await act.Should().ThrowAsync<GitHubRateLimitException>();
     }
 
-    // B2: the best-effort PR endpoints (open-PR list, merged-PR search) need the
+    // The best-effort PR endpoints (open-PR list, merged-PR search) need the
     // "Pull requests: Read" scope, which the primary workflow/run reads don't. A
     // token missing only that scope 403s here — it must NOT flip the global health
     // signal, or /api/health flaps Degraded then clears on the next primary 200.
