@@ -47,7 +47,7 @@ public class LizardScannerTests
             NullLogger<LizardScanner>.Instance
         );
 
-    // CB-C4: the real regression to guard against is a weakened containment check
+    // The regression to guard against is a weakened containment check
     // letting ScanAsync's TryDeleteDir(dir) delete something outside WorkRoot. A
     // sentinel directory placed OUTSIDE WorkRoot, reached via a repo name that
     // resolves out of it (".." traversal), must survive the call untouched — the
