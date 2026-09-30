@@ -417,8 +417,7 @@ public class GitHubReviewFactsTests
     [InlineData("hasPreviousPage")]
     public void Both_review_fact_queries_request_the_comment_fields(string fragment)
     {
-        // The mapper cannot head-scope a comment it never received. Without this, Task 2's
-        // collectors would sit correct and permanently starved of input.
+        // Head-scoped mapping depends on both queries selecting these fields.
         _ = GitHubOrgClient.ReviewFactsQueryText.Should().Contain(fragment);
         _ = GitHubOrgClient.ExactPrFragmentText.Should().Contain(fragment);
     }
