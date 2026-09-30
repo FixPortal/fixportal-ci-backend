@@ -25,6 +25,7 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
     private const int MaximumEntries = 128;
     private const int MaximumExpandedBytes = 32 * 1024 * 1024;
     private const int MaximumTextBytes = 512 * 1024;
+    private const int BufferSizeBytes = 64 * 1024;
     private static readonly TimeSpan ProviderTimeout = TimeSpan.FromSeconds(15);
 
     public async Task<RunDiagnosisReadResult> ReadAsync(
@@ -108,7 +109,7 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
         long textBytes = 0;
         long expandedBytes = 0;
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var bytes = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        var bytes = ArrayPool<byte>.Shared.Rent(BufferSizeBytes);
         var chars = ArrayPool<char>.Shared.Rent(Encoding.UTF8.GetMaxCharCount(bytes.Length));
 
         try
@@ -220,7 +221,7 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
             throw new InvalidDataException("Diagnosis content exceeds its limit.");
         }
 
-        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        var buffer = ArrayPool<byte>.Shared.Rent(BufferSizeBytes);
         long copied = 0;
         try
         {
@@ -341,7 +342,7 @@ internal sealed class RunDiagnosisReader(HttpClient httpClient, GitHubOrgClient 
 
     private static void AppendUtf8(IncrementalHash hash, string text)
     {
-        var buffer = ArrayPool<byte>.Shared.Rent(64 * 1024);
+        var buffer = ArrayPool<byte>.Shared.Rent(BufferSizeBytes);
         try
         {
             var encoder = Encoding.UTF8.GetEncoder();
