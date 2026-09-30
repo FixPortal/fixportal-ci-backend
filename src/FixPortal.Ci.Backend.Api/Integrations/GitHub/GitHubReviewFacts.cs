@@ -152,8 +152,7 @@ public sealed record ExactReviewFactsData(
 /// <param name="QueriesIssued">
 /// Counts ATTEMPTS, including rejected ones. Counting only successes made a sweep that
 /// was being refused on every single query report "0 GraphQL queries", indistinguishable
-/// from a quiet sweep that legitimately spent nothing. That reading cost real debugging
-/// time on the day it shipped.
+/// from a quiet sweep that legitimately spent nothing.
 /// </param>
 /// <param name="PointsSpent">
 /// Summed across every query in the batch. Reading the cost off the LAST rate-limit
