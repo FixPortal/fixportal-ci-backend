@@ -150,10 +150,7 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
         _ = options.ToString().Should().Contain("123456");
     }
 
-    // Scripted-HTTP coverage for GetTokenAsync. The mint path was previously untested
-    // end to end, which is how expires_at silently never bound (the web naming defaults
-    // do not map snake_case) and auth refusals left as HttpRequestException instead of
-    // GitHubAuthException.
+    // Scripted HTTP covers token response binding, including expires_at, and auth refusals.
     private sealed class MintHandler(
         string mintBody,
         HttpStatusCode mintStatus = HttpStatusCode.OK,
