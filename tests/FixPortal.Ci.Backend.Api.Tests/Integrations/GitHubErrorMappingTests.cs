@@ -89,7 +89,7 @@ public class GitHubErrorMappingTests
         _ = result.Should().BeNull();
     }
 
-    // M4: a 429 is unconditional proof of rate limiting, so it must map to
+    // A 429 is unconditional proof of rate limiting, so it must map to
     // GitHubRateLimitException even without X-RateLimit-Remaining / Retry-After —
     // otherwise it fell through to HttpRequestException and did not abort the batch.
     [Fact]
