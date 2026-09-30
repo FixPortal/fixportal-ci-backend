@@ -122,7 +122,7 @@ public sealed class ReviewSignalsOptions
     public bool Enabled { get; init; } = true;
 
     /// <summary>
-    /// Sweep cadence. Back to 150s, and affordable this time.
+    /// Sweep cadence, in seconds.
     /// </summary>
     /// <remarks>
     /// <para>
