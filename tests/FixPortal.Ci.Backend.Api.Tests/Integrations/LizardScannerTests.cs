@@ -84,7 +84,7 @@ public class LizardScannerTests
         }
     }
 
-    // CB-H2: Scrub is private and reached only from the log sites inside the
+    // Scrub is private and reached only from the log sites inside the
     // untested ScanAsync (git-clone-failure and lizard-unparseable branches).
     // Faking a cross-platform "git"/"lizard" binary via PATH just to exercise those
     // two log call sites would be far more fragile than the thing it proves; Scrub's
