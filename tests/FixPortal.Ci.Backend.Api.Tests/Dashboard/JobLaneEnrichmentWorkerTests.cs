@@ -1,5 +1,4 @@
 using System.Net;
-using System.Reflection;
 using System.Text;
 using System.Text.RegularExpressions;
 using AwesomeAssertions;
@@ -16,11 +15,8 @@ using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Dashboard;
 
-// CB-H8 (JobLaneEnrichmentWorker half): no test file exists for this class at all.
-// Exercises CollectAsync (JobLaneEnrichmentWorker.cs:39-107) directly via reflection
-// — it is protected, reached in production only through the base class's ExecuteAsync
-// loop — so pagination and the soft-fail path can be pinned without paying for the
-// base loop's 0-15s startup jitter.
+// Exercises the worker's cold-start sweep and its observable cache writes through the
+// public BackgroundService lifecycle.
 public sealed class JobLaneEnrichmentWorkerTests : IDisposable
 {
     private readonly List<HttpClient> _httpClients = [];
@@ -39,6 +35,15 @@ public sealed class JobLaneEnrichmentWorkerTests : IDisposable
         )
         {
             var path = request.RequestUri!.AbsolutePath;
+
+            if (path == "/orgs/FixPortal/repos")
+            {
+                return Task.FromResult(
+                    JsonOk(
+                        """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"}]"""
+                    )
+                );
+            }
 
             if (path.EndsWith("/actions/workflows", StringComparison.Ordinal))
             {
@@ -97,7 +102,12 @@ public sealed class JobLaneEnrichmentWorkerTests : IDisposable
             new(HttpStatusCode.OK) { Content = new StringContent(json, Encoding.UTF8, "application/json") };
     }
 
-    private JobLaneEnrichmentWorker NewWorker(LaneScanHandler handler, int maxRunsToScan)
+    private JobLaneEnrichmentWorker NewWorker(
+        LaneScanHandler handler,
+        PerRepoCache<IReadOnlyList<JobSignal>> cache,
+        TrackingFakeTimeProvider timeProvider,
+        int maxRunsToScan
+    )
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         _httpClients.Add(http);
@@ -113,6 +123,7 @@ public sealed class JobLaneEnrichmentWorkerTests : IDisposable
                     {
                         Key = "deploys",
                         Label = "Deploys",
+                        RefreshSeconds = 60,
                         Patterns = ["deploy"],
                         MaxRunsToScan = maxRunsToScan,
                     },
@@ -121,70 +132,96 @@ public sealed class JobLaneEnrichmentWorkerTests : IDisposable
         );
         var client = new GitHubOrgClient(http, gitHubOptions, laneOptions, new GitHubETagStore());
         var inventory = new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), laneOptions);
-        var cache = new PerRepoCache<IReadOnlyList<JobSignal>>();
         return new JobLaneEnrichmentWorker(
             "deploys",
             client,
             inventory,
             cache,
             laneOptions,
-            TimeProvider.System,
+            timeProvider,
             NullLogger<JobLaneEnrichmentWorker>.Instance
         );
     }
 
-    private static Task<IReadOnlyList<JobSignal>?> InvokeCollectAsync(
+    private static async Task RunColdStartSweepAsync(
         JobLaneEnrichmentWorker worker,
-        GitHubRepoDto repo,
-        CancellationToken ct
+        TrackingFakeTimeProvider timeProvider
     )
     {
-        var method = typeof(JobLaneEnrichmentWorker).GetMethod(
-            "CollectAsync",
-            BindingFlags.NonPublic | BindingFlags.Instance
-        );
-        method.Should().NotBeNull("CollectAsync must still exist as JobLaneEnrichmentWorker's collection entry point");
-        return (Task<IReadOnlyList<JobSignal>?>)method!.Invoke(worker, [repo, ct])!;
+        var ct = TestContext.Current.CancellationToken;
+        await worker.StartAsync(ct);
+        try
+        {
+            await timeProvider.InitialDelayScheduled.Task.WaitAsync(TimeSpan.FromSeconds(30), ct);
+            timeProvider.Advance(TimeSpan.FromSeconds(15));
+            var result = await Task.WhenAny(
+                    timeProvider.SteadyStateTimerScheduled.Task,
+                    timeProvider.RetryDelayScheduled.Task
+                )
+                .WaitAsync(TimeSpan.FromSeconds(30), ct);
+            if (result == timeProvider.RetryDelayScheduled.Task)
+            {
+                throw new InvalidOperationException("The cold-start sweep failed and scheduled a retry.");
+            }
+        }
+        finally
+        {
+            await worker.StopAsync(ct);
+        }
     }
 
     [Fact]
-    public async Task CollectAsync_should_bound_run_scanning_by_MaxRunsToScan()
+    public async Task ColdStartSweep_should_bound_run_scanning_by_MaxRunsToScan()
     {
         var handler = new LaneScanHandler();
-        var worker = NewWorker(handler, maxRunsToScan: 3);
-        var repo = new GitHubRepoDto("repo-a", "https://github.com/FixPortal/repo-a", false, false, "main");
+        var cache = new PerRepoCache<IReadOnlyList<JobSignal>>();
+        var timeProvider = new TrackingFakeTimeProvider();
+        var worker = NewWorker(handler, cache, timeProvider, maxRunsToScan: 3);
 
-        var result = await InvokeCollectAsync(worker, repo, TestContext.Current.CancellationToken);
+        await RunColdStartSweepAsync(worker, timeProvider);
 
-        _ = result.Should().NotBeNull();
-        _ = result!.Should().BeEmpty(); // no job ever matched the "deploy" pattern
+        _ = cache.TryGet("repo-a", out var result).Should().BeTrue();
+        _ = result.Should().BeEmpty(); // no job ever matched the "deploy" pattern
         _ = handler.JobsCallCount.Should().Be(3);
     }
 
     [Fact]
-    public async Task CollectAsync_should_soft_fail_to_null_when_the_workflow_list_call_fails()
+    public async Task ColdStartSweep_should_preserve_cached_signals_when_workflow_listing_fails()
     {
         var handler = new LaneScanHandler { FailWorkflowsForRepo = "repo-a" };
-        var worker = NewWorker(handler, maxRunsToScan: 30);
-        var repo = new GitHubRepoDto("repo-a", "https://github.com/FixPortal/repo-a", false, false, "main");
+        var cache = new PerRepoCache<IReadOnlyList<JobSignal>>();
+        IReadOnlyList<JobSignal> previous =
+        [
+            new JobSignal(
+                "CI",
+                "Deploy previous",
+                SignalState.Success,
+                "https://x/previous",
+                Instant.FromUnixTimeSeconds(1)
+            ),
+        ];
+        cache.Update("repo-a", previous);
+        var timeProvider = new TrackingFakeTimeProvider();
+        var worker = NewWorker(handler, cache, timeProvider, maxRunsToScan: 30);
 
-        var result = await InvokeCollectAsync(worker, repo, TestContext.Current.CancellationToken);
+        await RunColdStartSweepAsync(worker, timeProvider);
 
-        // Soft-fail: null keeps the caller's prior cached value rather than aborting
-        // the sweep for every other repo (RepoEnrichmentWorker<T>.RunSweepAsync).
-        _ = result.Should().BeNull();
+        _ = cache.TryGet("repo-a", out var result).Should().BeTrue();
+        _ = result.Should().BeSameAs(previous);
         _ = handler.JobsCallCount.Should().Be(0);
     }
 
     [Fact]
-    public async Task CollectAsync_should_compose_matching_signals_from_workflow_jobs()
+    public async Task ColdStartSweep_should_cache_matching_signals_from_workflow_jobs()
     {
         var handler = new LaneScanHandler { MatchDeployJob = true };
-        var worker = NewWorker(handler, maxRunsToScan: 30);
-        var repo = new GitHubRepoDto("repo-a", "https://github.com/FixPortal/repo-a", false, false, "main");
+        var cache = new PerRepoCache<IReadOnlyList<JobSignal>>();
+        var timeProvider = new TrackingFakeTimeProvider();
+        var worker = NewWorker(handler, cache, timeProvider, maxRunsToScan: 30);
 
-        var result = await InvokeCollectAsync(worker, repo, TestContext.Current.CancellationToken);
+        await RunColdStartSweepAsync(worker, timeProvider);
 
+        _ = cache.TryGet("repo-a", out var result).Should().BeTrue();
         _ = result.Should().ContainSingle().Which.Name.Should().Be("Deploy production");
     }
 }
