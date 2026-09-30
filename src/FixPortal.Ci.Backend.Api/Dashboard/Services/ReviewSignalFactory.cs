@@ -17,12 +17,8 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 /// </summary>
 public static class ReviewSignalFactory
 {
-    // The GitHub Apps that publish CodeQL and other code-scanning results. "github-advanced-security"
-    // is what GitHub actually emits today (verified 2026-08-03 by GraphQL against live PRs across
-    // three repos -- not one instance of the other slug in real data). "github-code-scanning" is the
-    // historical slug, kept in case a repo or enterprise hasn't moved to the newer branding. Matching
-    // both is strictly safer than betting on either. Live bug: this used to be a single const pinned
-    // to the wrong slug, so the CodeQL pill rendered Pending forever regardless of scan outcome.
+    // GitHub currently emits "github-advanced-security" for CodeQL. Keep the historical
+    // "github-code-scanning" slug for repositories that have not moved to the new branding.
     private static readonly string[] CodeScanningAppSlugs = ["github-advanced-security", "github-code-scanning"];
 
     public static IReadOnlyList<ReviewSignal> Build(
