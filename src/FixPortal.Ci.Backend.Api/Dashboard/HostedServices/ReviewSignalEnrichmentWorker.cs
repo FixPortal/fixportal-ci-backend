@@ -577,10 +577,9 @@ public sealed class ReviewSignalEnrichmentWorker(
     // turn), so plain accumulation is safe here.
     private void RecordGraphQlCost(ReviewFactsBatch batch)
     {
-        // Attempts, not successes. The previous version incremented once per successful
-        // call, so a sweep being refused on every query logged "0 GraphQL queries" —
-        // identical to a quiet sweep that genuinely spent nothing, and it cost real time
-        // to spot. Failures are counted separately rather than hidden.
+        // Attempts, not successes. If every query in a sweep is refused, this still
+        // logs attempted queries instead of making a failed sweep look quiet. Failures
+        // are counted separately rather than hidden.
         _sweepQueries += batch.QueriesIssued;
         _sweepFailedPrs += batch.Failed.Count;
         // Cost comes from the batch, which sums every query it issued. Reading it off the
