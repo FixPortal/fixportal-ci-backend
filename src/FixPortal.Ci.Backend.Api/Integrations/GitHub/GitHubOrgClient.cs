@@ -818,9 +818,7 @@ public sealed class GitHubOrgClient(
             run.HeadBranch,
             run.Event,
             run.UpdatedAt,
-            // Owner-qualified: the IDE diagnosis route (IdeEndpoints.FindRun) matches on
-            // "owner/repo", and the dashboard contract fixture already spells it that way.
-            // The bare name here made every diagnosis lookup 404 against a real snapshot.
+            // The dashboard and IDE diagnosis route identify repositories as "owner/repo".
             $"{_gitHub.Owner}/{repo}",
             FileName(workflow.Path),
             run.Id,
