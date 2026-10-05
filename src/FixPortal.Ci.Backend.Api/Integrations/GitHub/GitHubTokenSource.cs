@@ -226,7 +226,11 @@ public sealed class GitHubAppTokenSource(
         var signingInput = Encoding.ASCII.GetBytes($"{header}.{payload}");
         using var rsa = RSA.Create();
         rsa.ImportFromPem(NormalisePem(options.PrivateKeyPem!));
+        // RS256 is defined as RSASSA-PKCS1-v1_5 (RFC 7518 s3.3) and GitHub accepts only RS256
+        // for App JWTs, so PSS is not an option. S5542 targets encryption padding; this is a signature.
+#pragma warning disable S5542
         var signature = rsa.SignData(signingInput, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+#pragma warning restore S5542
 
         return $"{header}.{payload}.{Base64Url(signature)}";
     }
