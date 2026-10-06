@@ -11,8 +11,10 @@ SCRIPT = Path(__file__).with_name("assert_gate_coverage.py")
 HYGIENE_CHECKER = Path(__file__).with_name("assert_workflow_hygiene.py")
 
 # A gate must fail for BOTH terminal results: a cancelled dependency is not a passing
-# one. Every condition a test expects to be ACCEPTED therefore covers both.
-BOTH = "contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled')"
+# one. Every condition a test expects to be ACCEPTED therefore covers both, behind an
+# explicit always(): an implicit success() can mask the very failure the step reports
+# (canonical fixportal-agents-skills aded264).
+BOTH = "always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))"
 
 
 class GateCoverageTests(unittest.TestCase):
@@ -199,7 +201,7 @@ jobs:
 
     def test_every_dependency_must_be_gated_on_cancellation_too(self):
         """A cancelled dependency is not a passing one."""
-        result = self.run_checker("contains(needs.*.result, 'failure')", "exit 1")
+        result = self.run_checker("always() && contains(needs.*.result, 'failure')", "exit 1")
         self.assertNotEqual(0, result.returncode)
         self.assertIn("build:cancelled", result.stderr)
 
@@ -212,7 +214,7 @@ jobs:
             "TRUE && needs.build.result != 'success'",
         ):
             with self.subTest(condition=condition):
-                result = self.run_checker(condition, "exit 1")
+                result = self.run_checker(f"always() && ({condition})", "exit 1")
                 self.assertEqual(0, result.returncode, result.stdout + result.stderr)
 
     def test_multiline_continue_on_error_cannot_hide_a_non_failing_gate(self):
