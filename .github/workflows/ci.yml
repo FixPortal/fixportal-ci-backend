@@ -14,13 +14,11 @@ on:
 permissions:
   contents: read
 
-# Cancel redundant in-progress runs on branches/PRs, but NEVER on main: a second
-# push to main while a prior run's deploy is mid-flight must not cancel that run
-# (workflow-level cancellation overrides the deploy job's own group). main runs
-# therefore run to completion; the deploy job additionally guards itself.
+# Deploy workflows never cancel an in-flight run; job-level concurrency cannot
+# protect a deploy from workflow-level cancellation.
 concurrency:
   group: ci-${{ github.ref }}
-  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+  cancel-in-progress: false
 
 jobs:
   backend:
@@ -88,10 +86,11 @@ jobs:
 
   publish:
     name: Publish Image (GHCR)
-    needs: [backend]
+    needs: [ci-gate]
     # main-only, mirrors the deploy gate so the public image tracks main.
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: read
       packages: write
@@ -130,10 +129,11 @@ jobs:
 
   deploy:
     name: Deploy (Azure Container Apps)
-    needs: [publish]
+    needs: [ci-gate, publish]
     # main-only: the explicit ref check also blocks workflow_dispatch from a feature branch.
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     # Deploy must never be cancelled mid-flight; keep this job-level so PR/feature
     # branch runs above can still cancel redundant CI without killing a live deploy.
     concurrency:
@@ -466,6 +466,9 @@ jobs:
 
       - name: Test gate coverage checker
         run: python3 .github/scripts/test_assert_gate_coverage.py
+
+      - name: Test deploy safety
+        run: python3 .github/scripts/test_ci_deploy_safety.py
 
       - name: Assert every job in this workflow is gated
         env:
