@@ -133,7 +133,9 @@ jobs:
     # main-only: the explicit ref check also blocks workflow_dispatch from a feature branch.
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Three probe loops allow 675s plus the wrong-key probe, after ARM and restart.
+    # This downstream deploy is outside the ten-minute required PR lane.
+    timeout-minutes: 30
     # Serialize deployments; workflow-level concurrency also prevents cancellation.
     concurrency:
       group: deploy-${{ github.ref }}
