@@ -134,8 +134,7 @@ jobs:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 10
-    # Deploy must never be cancelled mid-flight; keep this job-level so PR/feature
-    # branch runs above can still cancel redundant CI without killing a live deploy.
+    # Serialize deployments; workflow-level concurrency also prevents cancellation.
     concurrency:
       group: deploy-${{ github.ref }}
       cancel-in-progress: false
