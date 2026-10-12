@@ -15,8 +15,6 @@ public class ContainerBuildConfigurationTests
         var workflow = File.ReadAllText(Path.Combine(RepositoryRoot, ".github", "workflows", "ci.yml"));
         var dockerfile = File.ReadAllText(Path.Combine(RepositoryRoot, "Dockerfile"));
         var compose = File.ReadAllText(Path.Combine(RepositoryRoot, "docker-compose.yml"));
-        var props = File.ReadAllText(Path.Combine(RepositoryRoot, "Directory.Build.props"));
-        var packages = File.ReadAllText(Path.Combine(RepositoryRoot, "Directory.Packages.props"));
         var nuget = File.ReadAllText(Path.Combine(RepositoryRoot, "nuget.config"));
 
         _ = workflow.Should().NotContain("github-packages-token");
@@ -25,9 +23,8 @@ public class ContainerBuildConfigurationTests
         _ = dockerfile.Should().NotContain("GITHUB_PACKAGES_TOKEN");
         _ = compose.Should().NotContain("github-packages-token");
         _ = compose.Should().NotContain("GITHUB_PACKAGES_TOKEN");
-        _ = props.Should().NotContain("FixPortal.CodeStyle");
-        _ = packages.Should().NotContain("FixPortal.CodeStyle");
 
+        // CodeStyle is public on nuget.org; enforce credential-free restore by its inputs.
         // Name-independent, so a regression cannot slip through by renaming the credential.
         // Any BuildKit secret in the restore stage reintroduces a build-time input the public
         // Dockerfile must not need, whatever the secret is called.

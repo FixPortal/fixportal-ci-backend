@@ -264,8 +264,7 @@ public static class DashboardEndpoints
                 {
                     return current!;
                 }
-                var updated =
-                    current?.ToDictionary(pair => pair.Key, pair => pair.Value) ?? new Dictionary<int, PrMergeState>();
+                var updated = current?.ToDictionary(pair => pair.Key, pair => pair.Value) ?? [];
                 updated[merge.PullNumber] = new PrMergeState(
                     merge.PullNumber,
                     existing?.IsDraft ?? false,
