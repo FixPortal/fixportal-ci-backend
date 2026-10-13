@@ -721,4 +721,81 @@ public class DashboardRefreshServiceRefreshAsyncTests
         _ = repos["auth-fails"].Workflows.Should().BeEmpty();
         _ = state.LastAuthError.Should().Contain("auth-fails");
     }
+
+    // Workflows succeed; only the supplementary open-PR listing fails.
+    private sealed class PullListFailureHandler(HttpStatusCode pullsStatus) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var path = request.RequestUri!.AbsolutePath;
+            if (path.EndsWith("/pulls", StringComparison.Ordinal))
+            {
+                return Task.FromResult(new HttpResponseMessage(pullsStatus));
+            }
+            var body = path switch
+            {
+                _ when path.EndsWith("/repos", StringComparison.Ordinal) =>
+                    """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"}]""",
+                _ when path.EndsWith("/actions/workflows", StringComparison.Ordinal) =>
+                    """{"workflows":[{"id":1,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}""",
+                _ when path.EndsWith("/runs", StringComparison.Ordinal) =>
+                    """{"workflow_runs":[{"id":30,"status":"completed","conclusion":"success","html_url":"https://github.com/FixPortal/repo-a/actions/runs/30","display_title":"ok","run_number":30,"head_branch":"main","event":"push","updated_at":"2026-01-03T00:00:00Z"}]}""",
+                _ => "[]",
+            };
+            return Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                }
+            );
+        }
+    }
+
+    // A token missing only "Pull requests: Read" (401/403) or a transient /pulls 5xx must
+    // show no PRs for the repo, not degrade it or flip the global auth/health signal.
+    [Theory]
+    [InlineData(HttpStatusCode.Unauthorized)]
+    [InlineData(HttpStatusCode.Forbidden)]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    public async Task RefreshAsync_should_degrade_only_the_pull_request_list_when_listing_fails(
+        HttpStatusCode pullsStatus
+    )
+    {
+        var state = new DashboardSnapshotState();
+        using var handler = new PullListFailureHandler(pullsStatus);
+        using var http = new HttpClient(handler, disposeHandler: false)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore(), state);
+        var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var sut = new DashboardRefreshService(
+            client,
+            new GitHubInventoryCache(client, clock, dashboardOptions),
+            Substitute.For<IDashboardSnapshotStore>(),
+            state,
+            new PerRepoCache<RepoMetrics>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<MergedPullRequest>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
+            new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(),
+            Options.Create(new ReviewSignalsOptions()),
+            gitHubOptions,
+            clock,
+            NullLogger<DashboardRefreshService>.Instance
+        );
+
+        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+
+        var repo = state.Current!.Repositories.Should().ContainSingle().Subject;
+        _ = repo.PullRequests.Should().BeEmpty();
+        _ = repo.Workflows.Should().ContainSingle(w => w.State == SignalState.Success);
+        _ = state.LastAuthError.Should().BeNull();
+    }
 }

@@ -17,6 +17,12 @@ public class ContainerBuildConfigurationTests
         var compose = File.ReadAllText(Path.Combine(RepositoryRoot, "docker-compose.yml"));
         var nuget = File.ReadAllText(Path.Combine(RepositoryRoot, "nuget.config"));
 
+        // An emptied or missing-content file would pass every NotContain below.
+        _ = workflow.Should().Contain("dotnet");
+        _ = dockerfile.Should().Contain("FROM");
+        _ = compose.Should().Contain("services");
+        _ = nuget.Should().Contain("<packageSources");
+
         _ = workflow.Should().NotContain("github-packages-token");
         _ = workflow.Should().NotContain("GITHUB_PACKAGES_TOKEN");
         _ = dockerfile.Should().NotContain("github-packages-token");

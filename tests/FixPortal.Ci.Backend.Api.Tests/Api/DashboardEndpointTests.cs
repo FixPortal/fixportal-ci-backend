@@ -848,6 +848,22 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         _ = githubBody.RootElement.GetProperty("sha").GetString().Should().Be(HeadSha);
     }
 
+    [Theory]
+    [InlineData("""{"merged":false,"sha":"abc123","message":"Not merged"}""")]
+    [InlineData("""{"merged":true,"sha":""}""")]
+    [InlineData("""{"merged":true}""")]
+    public async Task Merge_should_not_report_success_when_a_200_response_did_not_merge(string githubBody)
+    {
+        var handler = new MergeHandler(HttpStatusCode.OK, githubBody);
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
+        using var request = CreateMergeRequest("public-repo", 42);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        _ = handler.RequestCount.Should().Be(1);
+    }
+
     [Fact]
     public async Task Merge_should_reject_a_request_without_the_selected_head_sha()
     {
@@ -1010,7 +1026,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
 
         _ = response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
-        _ = (await ReadErrorAsync(response)).Should().NotBeNullOrWhiteSpace();
+        _ = (await ReadErrorAsync(response)).Should().Be("GitHub merge request failed.");
     }
 
     [Fact]
