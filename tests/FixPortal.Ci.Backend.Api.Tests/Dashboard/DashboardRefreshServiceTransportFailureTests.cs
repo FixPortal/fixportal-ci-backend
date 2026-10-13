@@ -41,7 +41,8 @@ public class DashboardRefreshServiceTransportFailureTests
     [InlineData(Fault.MalformedRunsBody)]
     public async Task One_repos_transport_fault_degrades_only_that_repo(Fault fault)
     {
-        var (sut, state, store) = Build(new FaultingRepoHandler(fault, hostCancel: null));
+        var (sut, state, store, http) = Build(new FaultingRepoHandler(fault, hostCancel: null));
+        using var owned = http;
 
         using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
         ceiling.CancelAfter(TimeSpan.FromSeconds(30));
@@ -56,16 +57,20 @@ public class DashboardRefreshServiceTransportFailureTests
     public async Task Host_shutdown_during_a_repo_fetch_propagates_instead_of_being_absorbed()
     {
         using var host = new CancellationTokenSource();
-        var (sut, _, _) = Build(new FaultingRepoHandler(Fault.Timeout, host));
+        var (sut, _, _, http) = Build(new FaultingRepoHandler(Fault.Timeout, host));
+        using var owned = http;
 
         var act = () => sut.RefreshAsync(host.Token);
 
         _ = await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
-    private static (DashboardRefreshService Sut, DashboardSnapshotState State, IDashboardSnapshotStore Store) Build(
-        HttpMessageHandler handler
-    )
+    private static (
+        DashboardRefreshService Sut,
+        DashboardSnapshotState State,
+        IDashboardSnapshotStore Store,
+        HttpClient Http
+    ) Build(HttpMessageHandler handler)
     {
         var state = new DashboardSnapshotState();
         var http = new HttpClient(handler, disposeHandler: false) { BaseAddress = new Uri("https://api.github.com/") };
@@ -90,7 +95,7 @@ public class DashboardRefreshServiceTransportFailureTests
             clock,
             NullLogger<DashboardRefreshService>.Instance
         );
-        return (sut, state, store);
+        return (sut, state, store, http);
     }
 
     // Two repos: "flaky" misbehaves according to the fault, "healthy" answers normally.
