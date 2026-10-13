@@ -16,7 +16,8 @@ namespace FixPortal.Ci.Backend.Api.Tests.Integrations;
 // batch). If this contract changes, the refresh-service catch clauses break silently.
 public class GitHubErrorMappingTests
 {
-    private sealed class StatusHandler(HttpStatusCode code, bool rateLimited = false) : HttpMessageHandler
+    private sealed class StatusHandler(HttpStatusCode code, bool rateLimited = false, bool retryAfter = false)
+        : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -31,12 +32,16 @@ public class GitHubErrorMappingTests
             {
                 _ = response.Headers.TryAddWithoutValidation("X-RateLimit-Remaining", "0");
             }
+            if (retryAfter)
+            {
+                _ = response.Headers.TryAddWithoutValidation("Retry-After", "60");
+            }
             return Task.FromResult(response);
         }
     }
 
-    private static HttpClient NewHttpClient(HttpStatusCode code, bool rateLimited = false) =>
-        new(new StatusHandler(code, rateLimited)) { BaseAddress = new Uri("https://api.github.com/") };
+    private static HttpClient NewHttpClient(HttpStatusCode code, bool rateLimited = false, bool retryAfter = false) =>
+        new(new StatusHandler(code, rateLimited, retryAfter)) { BaseAddress = new Uri("https://api.github.com/") };
 
     private static GitHubOrgClient NewClient(HttpClient http, DashboardSnapshotState? state = null)
     {
@@ -76,6 +81,21 @@ public class GitHubErrorMappingTests
         var client = NewClient(http);
         var act = async () => await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
         _ = await act.Should().ThrowAsync<GitHubRateLimitException>();
+    }
+
+    // A secondary-limit 403 carries only Retry-After (no X-RateLimit-Remaining). It must
+    // read as rate limiting, not as an auth failure that flips global health.
+    [Fact]
+    public async Task A_403_with_only_Retry_After_maps_to_GitHubRateLimitException_without_setting_auth_state()
+    {
+        var state = new DashboardSnapshotState();
+        using var http = NewHttpClient(HttpStatusCode.Forbidden, retryAfter: true);
+        var client = NewClient(http, state);
+
+        var act = async () => await client.ListRepositoriesAsync(CancellationToken.None);
+
+        _ = await act.Should().ThrowAsync<GitHubRateLimitException>();
+        state.LastAuthError.Should().BeNull();
     }
 
     [Fact]

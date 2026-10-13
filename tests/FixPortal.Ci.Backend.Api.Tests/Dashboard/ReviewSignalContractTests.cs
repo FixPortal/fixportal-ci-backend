@@ -21,23 +21,6 @@ public class ReviewSignalContractTests
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
-    private static PullRequest Pr(IReadOnlyList<ReviewSignal>? signals = null) =>
-        new(
-            7,
-            "Add widget",
-            "alice",
-            "https://github.com/FixPortal/repo/pull/7",
-            false,
-            Instant.FromUnixTimeSeconds(1000),
-            signals
-        );
-
-    [Fact]
-    public void Pull_request_defaults_to_no_review_signals()
-    {
-        _ = Pr().ReviewSignals.Should().BeNull();
-    }
-
     [Fact]
     public void Review_signal_state_serializes_as_a_camel_case_string()
     {

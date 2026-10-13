@@ -662,6 +662,12 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         {
             await Task.Delay(10, TestContext.Current.CancellationToken);
         }
+
+        // Fail here, not as a downstream mismatch: a missed completion is a hang diagnosis.
+        if (!cache.TryGet(RepoName, out _))
+        {
+            throw new TimeoutException("The review-signal cache was not written within 30s.");
+        }
     }
 
     [Fact]
