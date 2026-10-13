@@ -855,17 +855,11 @@ public class GitHubReviewFactsTransportTests
         http.BaseAddress = new Uri("https://api.github.com/");
         var client = CreateClient(http);
 
-        async Task CallAsync()
-        {
-            if (exactPrPath)
-            {
-                _ = await client.GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
-            }
-            else
-            {
-                _ = await client.GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
-            }
-        }
+        Task CallAsync() =>
+            exactPrPath
+                ? client.GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None)
+                : client.GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+
         await CallAsync();
         var afterGood = client.LastGraphQlRateLimit;
         await CallAsync();
