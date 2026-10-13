@@ -83,6 +83,86 @@ public class FileDashboardSnapshotStoreTests
         }
     }
 
+    // C4 (test audit 2026-10-11): every round trip above uses empty repository lists, so a nested
+    // property dropped by the serializer (an ignore attribute, a converter that loses a member)
+    // reloads as its default and the structural comparison cannot see it. Every member here is set
+    // to a non-default value, so a silent drop shows. Compared on the raw LoadAsync result, not
+    // through SnapshotRestoreService, which strips head-scoped signals.
+    [Fact]
+    public async Task SaveAsync_should_round_trip_a_fully_populated_snapshot()
+    {
+        var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");
+        var sut = NewStore(path);
+        var at = Instant.FromUtc(2026, 5, 28, 17, 30);
+        var run = new WorkflowRun(
+            "completed",
+            "failure",
+            "https://github.com/FixPortal/repo/actions/runs/9",
+            "Build the thing",
+            42,
+            "feature/x",
+            "pull_request",
+            at,
+            "repo",
+            "ci.yml",
+            9_000_000_001L,
+            3,
+            "abc123def456"
+        );
+        var merged = new MergedPullRequest(
+            7,
+            "Merged one",
+            "alice",
+            "repo",
+            "https://github.com/FixPortal/repo/pull/7",
+            at
+        );
+        var repository = new RepositorySnapshot(
+            "repo",
+            "https://github.com/FixPortal/repo",
+            true,
+            [new WorkflowSnapshot("CI", "ci.yml", SignalState.Failure, run, [run, run with { RunNumber = 41 }])],
+            [
+                new PullRequest(
+                    12,
+                    "Add a thing",
+                    "bob",
+                    "https://github.com/FixPortal/repo/pull/12",
+                    true,
+                    at,
+                    [new ReviewSignal("Gitar", ReviewSignalState.Outstanding, 3, "https://example.test/gitar")],
+                    true,
+                    "feedface"
+                ),
+            ],
+            new RepoMetrics(1234, 4.5, 80, 6, at),
+            [new JobSignal("deploy.yml", "deploy", SignalState.Running, "https://example.test/deploy", at)],
+            [new JobSignal("publish.yml", "publish", SignalState.Success, "https://example.test/publish", at)],
+            merged
+        );
+        var snapshot = new DashboardSnapshot(
+            at,
+            "FixPortal",
+            [repository],
+            [new SummaryCount("failing", 5)],
+            merged,
+            [new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 17, 0), CiTrendState.Failing) { IsBackfilled = true }],
+            [new CiTrendBucket(Instant.FromUtc(2026, 5, 28, 16, 0), CiTrendState.Passing)]
+        );
+
+        try
+        {
+            await sut.SaveAsync(snapshot, CancellationToken.None);
+            var reloaded = await sut.LoadAsync(CancellationToken.None);
+
+            _ = reloaded.Should().BeEquivalentTo(snapshot, options => options.WithStrictOrdering());
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
     [Fact]
     public async Task SaveAsync_should_write_camel_case_enum_strings()
     {

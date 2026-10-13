@@ -743,6 +743,62 @@ public class GitHubReviewFactsTransportTests
         _ = body.Should().Contain("rateLimit { cost remaining resetAt }");
     }
 
+    // A22 (test audit 2026-10-11): only the comments connection was tested for truncation. The
+    // other four are the dangerous ones - a paged-out reviewThreads list reads as Clean when an
+    // unresolved thread sits on the missing page - and nothing pinned their mapping. Each case
+    // truncates exactly one connection (the others report hasNextPage:false) so a mapping that
+    // lands on the wrong name, or is deleted, shows.
+    [Theory]
+    [InlineData("labels", "labels")]
+    [InlineData("reviews", "reviews")]
+    [InlineData("reviewThreads", "reviewThreads")]
+    [InlineData("checkContexts", "checkContexts")]
+    public async Task Carries_each_truncated_connection_onto_facts_by_name(string truncate, string expected)
+    {
+        const string template = """
+            {"data":{"repository":{"pr181":{"number":181,"author":{"login":"chris"},
+              "labels":{"nodes":[],"pageInfo":{"hasNextPage":@labels}},
+              "reviews":{"nodes":[],"pageInfo":{"hasNextPage":@reviews}},
+              "reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":@reviewThreads}},
+              "comments":{"nodes":[],"pageInfo":{"hasPreviousPage":false}},
+              "commits":{"nodes":[{"commit":{"oid":"abc","statusCheckRollup":{"contexts":{"nodes":[],
+                "pageInfo":{"hasNextPage":@checkContexts}}}}}]}}}}}
+            """;
+        var body = template
+            .Replace("@labels", truncate == "labels" ? "true" : "false")
+            .Replace("@reviewThreads", truncate == "reviewThreads" ? "true" : "false")
+            .Replace("@reviews", truncate == "reviews" ? "true" : "false")
+            .Replace("@checkContexts", truncate == "checkContexts" ? "true" : "false");
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
+
+        _ = batch.Facts[181].TruncatedConnections.Should().ContainSingle().Which.Should().Be(expected);
+    }
+
+    [Fact]
+    public async Task Reports_no_truncated_connections_when_every_connection_is_complete()
+    {
+        const string body = """
+            {"data":{"repository":{"pr181":{"number":181,"author":{"login":"chris"},
+              "labels":{"nodes":[],"pageInfo":{"hasNextPage":false}},
+              "reviews":{"nodes":[],"pageInfo":{"hasNextPage":false}},
+              "reviewThreads":{"nodes":[],"pageInfo":{"hasNextPage":false}},
+              "comments":{"nodes":[],"pageInfo":{"hasPreviousPage":false}},
+              "commits":{"nodes":[{"commit":{"oid":"abc","statusCheckRollup":{"contexts":{"nodes":[],
+                "pageInfo":{"hasNextPage":false}}}}}]}}}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(body)]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
+
+        _ = batch.Facts[181].TruncatedConnections.Should().BeNullOrEmpty();
+    }
+
     [Fact]
     public async Task Carries_comments_truncated_at_the_start_of_the_connection_onto_facts()
     {
@@ -778,6 +834,46 @@ public class GitHubReviewFactsTransportTests
         _ = await client.GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
 
         _ = client.LastGraphQlRateLimit.Should().Be(new GraphQlRateLimit(7, 4993, "2026-07-31T12:00:00Z"));
+    }
+
+    // D5 (test audit 2026-10-11): a spec-legal 200 carrying `data: null` and no errors array must not
+    // erase the last rate-limit reading. The reserve guard reads that field and fails OPEN on null
+    // (the worker's below-reserve predicate treats "unknown" as "spend"), so a wiped reading lets
+    // the next chunk spend past the floor. The merge-state path guards it and is tested; the
+    // per-repo sweep and the exact-PR path assigned it unguarded and nothing noticed.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_data_null_response_does_not_erase_the_last_graphql_rate_limit(bool exactPrPath)
+    {
+        const string good = """
+            {"data":{"rateLimit":{"cost":7,"remaining":4993,"resetAt":"2026-07-31T12:00:00Z"},
+             "repository":{"pullRequests":{"nodes":[]},"pr181":null}}}
+            """;
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(good), Json("""{"data":null}""")]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var client = CreateClient(http);
+
+        async Task CallAsync()
+        {
+            if (exactPrPath)
+            {
+                _ = await client.GetPullRequestReviewFactsAsync("repo", [181], CancellationToken.None);
+            }
+            else
+            {
+                _ = await client.GetPullRequestReviewFactsAsync("repo", CancellationToken.None);
+            }
+        }
+        await CallAsync();
+        var afterGood = client.LastGraphQlRateLimit;
+        await CallAsync();
+
+        _ = afterGood.Should().Be(new GraphQlRateLimit(7, 4993, "2026-07-31T12:00:00Z"));
+        _ = client
+            .LastGraphQlRateLimit.Should()
+            .Be(afterGood, "a null response carries no reading, so the previous one must stand");
     }
 
     [Fact]

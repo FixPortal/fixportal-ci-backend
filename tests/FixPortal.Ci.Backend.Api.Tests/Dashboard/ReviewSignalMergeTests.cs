@@ -992,6 +992,121 @@ public class ReviewSignalEnrichmentWorkerCollectTests
         await worker.StopAsync(TestContext.Current.CancellationToken);
     }
 
+    public enum SweepFailure
+    {
+        RateLimited403,
+        ServerError500,
+        TimeoutWithoutCancellation,
+    }
+
+    // E5 (test audit 2026-10-11): only the authorization arm of CollectAsync's soft-fail filter was
+    // tested. The rate-limit, transport and non-cancelled-timeout arms are what keep a transient
+    // GitHub fault from counting as a per-repo failure and driving the 5-minute cold-start retry
+    // forever. The observable is WHICH timer the worker registers: the steady-state one when the
+    // collect soft-failed (returned null), the retry delay when it threw.
+    [Theory]
+    [InlineData(SweepFailure.RateLimited403)]
+    [InlineData(SweepFailure.ServerError500)]
+    [InlineData(SweepFailure.TimeoutWithoutCancellation)]
+    public async Task A_rate_limit_transport_or_timeout_failure_soft_fails_and_cold_start_still_converges(
+        SweepFailure failure
+    )
+    {
+        var handler = new FailingFirstSweepRequestHandler(() =>
+        {
+            switch (failure)
+            {
+                case SweepFailure.RateLimited403:
+                    var limited = new HttpResponseMessage(HttpStatusCode.Forbidden);
+                    _ = limited.Headers.TryAddWithoutValidation("X-RateLimit-Remaining", "0");
+                    return limited;
+                case SweepFailure.ServerError500:
+                    return new HttpResponseMessage(HttpStatusCode.InternalServerError);
+                default:
+                    throw new TaskCanceledException("GitHub timed out");
+            }
+        });
+        var timeProvider = new TrackingFakeTimeProvider();
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>();
+        var worker = new ReviewSignalEnrichmentWorker(
+            client,
+            new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions),
+            cache,
+            Options.Create(
+                new ReviewSignalsOptions
+                {
+                    Reviewers = [new ReviewerOptions { Name = "Gitar", BotLogin = "gitar-app" }],
+                    RefreshSeconds = 3600,
+                }
+            ),
+            gitHubOptions,
+            timeProvider,
+            new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
+            NullLogger<ReviewSignalEnrichmentWorker>.Instance
+        );
+
+        await worker.StartAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            await timeProvider.InitialDelayScheduled.Task.WaitAsync(
+                TimeSpan.FromSeconds(30),
+                TestContext.Current.CancellationToken
+            );
+            timeProvider.Advance(TimeSpan.FromSeconds(15));
+            await handler.FailureServed.Task.WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            var steady = timeProvider.SteadyStateTimerScheduled.Task;
+            var done = await Task.WhenAny(steady, timeProvider.RetryDelayScheduled.Task)
+                .WaitAsync(TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
+
+            _ = done.Should().BeSameAs(steady, "a soft-failed collect must not count as a per-repo sweep failure");
+            _ = cache.IsEmpty.Should().BeTrue("a soft-failed collect keeps last-known-good - here, an empty cache");
+        }
+        finally
+        {
+            await worker.StopAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    private sealed class FailingFirstSweepRequestHandler(Func<HttpResponseMessage> fail) : HttpMessageHandler
+    {
+        public TaskCompletionSource FailureServed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/repos", StringComparison.Ordinal))
+            {
+                return Task.FromResult(
+                    new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(
+                            """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"}]""",
+                            Encoding.UTF8,
+                            "application/json"
+                        ),
+                    }
+                );
+            }
+
+            try
+            {
+                return Task.FromResult(fail());
+            }
+            finally
+            {
+                FailureServed.TrySetResult();
+            }
+        }
+    }
+
     // H5: the per-repo signal cache expires after 3x the refresh cadence, and a null
     // collect (the GraphQL reserve guard holding, or a sustained soft-fail) never
     // refreshes it. On the first sweep after recovery over a QUIET repo the state used to
