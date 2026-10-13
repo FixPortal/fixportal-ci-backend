@@ -310,6 +310,12 @@ public sealed class IdeSnapshotEndpointTests(CiWebApplicationFactory factory)
 
     [Theory]
     [InlineData(" ide-integration-key-012345678901234")]
+    // G4 (test audit 2026-10-11): every case above is at least 36 characters, so the length floor
+    // and the "${" and trailing-space clauses could each be deleted without any case changing
+    // outcome. Each of these is otherwise valid and violates exactly one rule.
+    [InlineData("ide-integration-key-01234567890")] // 31 characters: one under the floor
+    [InlineData("ide-integration-key-0123456789012345 ")] // trailing space only
+    [InlineData("ide-integration-${UNRESOLVED_VARIABLE}-key-0123")] // unresolved ${...}, no "{{"
     [InlineData("{{this-is-an-unresolved-placeholder-longer-than-32-characters}}")]
     [InlineData("@Microsoft.KeyVault(SecretUri=https://example.vault.azure.net/secrets/key)")]
     public void Padded_or_placeholder_IDE_keys_are_rejected_at_startup(string invalidKey)

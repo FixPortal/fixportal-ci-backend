@@ -317,7 +317,7 @@ public sealed class GitHubOrgClient(
             ct
         );
 
-        LastGraphQlRateLimit = data?.RateLimit;
+        LastGraphQlRateLimit = data?.RateLimit ?? LastGraphQlRateLimit; // a data:null reply carries no reading; keep the last one
 
         if (data?.Repository?.PullRequests?.PageInfo?.HasNextPage == true)
         {
@@ -489,7 +489,7 @@ public sealed class GitHubOrgClient(
             ct
         );
 
-        LastGraphQlRateLimit = data?.RateLimit;
+        LastGraphQlRateLimit = data?.RateLimit ?? LastGraphQlRateLimit; // a data:null reply carries no reading; keep the last one
 
         foreach (var pull in data?.Repository?.Values ?? [])
         {
