@@ -1,6 +1,7 @@
 using System.Reflection;
 using AwesomeAssertions;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
+using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using FixPortal.Ci.Backend.Api.Integrations.Lizard;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -31,7 +32,7 @@ public class LizardScannerTests
             .Be($"AUTHORIZATION: basic {Convert.ToBase64String("x-access-token:super-secret-token"u8)}");
     }
 
-    private static LizardScanner NewScanner(string workRoot) =>
+    private static LizardScanner NewScanner(string workRoot, IGitHubTokenSource? tokenSource = null) =>
         new(
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),
             Options.Create(
@@ -42,10 +43,134 @@ public class LizardScannerTests
                     MetricsWorkDirectory = workRoot,
                 }
             ),
-            new StaticGitHubTokenSource(Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" })),
+            tokenSource
+                ?? new StaticGitHubTokenSource(Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" })),
             new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
             NullLogger<LizardScanner>.Instance
         );
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Token_failure_returns_null_and_removes_the_owned_clone(bool timeout)
+    {
+        using var owned = new OwnedScannerDirectory();
+        owned.CreateClone();
+        var initialCleanupObserved = false;
+        CancellationToken receivedToken = default;
+        var tokens = new FailingTokenSource(ct =>
+        {
+            receivedToken = ct;
+            initialCleanupObserved = !Directory.Exists(owned.Clone);
+            owned.CreateClone();
+            if (timeout)
+            {
+                throw new OperationCanceledException("token acquisition timed out without caller shutdown");
+            }
+            throw new InvalidOperationException("token acquisition failed");
+        });
+
+        RepoMetrics? result = null;
+        Func<Task> act = async () =>
+        {
+            result = await NewScanner(owned.Root, tokens)
+                .ScanAsync("owned-repo", TestContext.Current.CancellationToken);
+        };
+        _ = await act.Should()
+            .NotThrowAsync("a token failure without caller shutdown must preserve last-known-good metrics");
+
+        _ = tokens.Called.Should().BeTrue("failure must occur inside ScanAsync's try block before any child process");
+        _ = receivedToken.Should().Be(TestContext.Current.CancellationToken);
+        _ = initialCleanupObserved.Should().BeTrue("the initial cleanup must remove the old clone");
+        _ = result.Should().BeNull();
+        _ = Directory
+            .Exists(owned.Clone)
+            .Should()
+            .BeFalse("finally must remove the clone recreated at the failure boundary");
+        _ = Directory.Exists(owned.Root).Should().BeTrue("cleanup must remain scoped to the owned clone");
+    }
+
+    [Fact]
+    public async Task Caller_shutdown_propagates_and_still_removes_the_owned_clone()
+    {
+        using var owned = new OwnedScannerDirectory();
+        owned.CreateClone();
+        using var cancellation = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        var initialCleanupObserved = false;
+        CancellationToken receivedToken = default;
+        var tokens = new FailingTokenSource(ct =>
+        {
+            receivedToken = ct;
+            initialCleanupObserved = !Directory.Exists(owned.Clone);
+            owned.CreateClone();
+            cancellation.Cancel();
+            ct.ThrowIfCancellationRequested();
+        });
+        var scanner = NewScanner(owned.Root, tokens);
+
+        var act = () => scanner.ScanAsync("owned-repo", cancellation.Token);
+        var thrown = await act.Should().ThrowAsync<OperationCanceledException>();
+
+        _ = thrown.Which.CancellationToken.Should().Be(cancellation.Token);
+        _ = tokens.Called.Should().BeTrue();
+        _ = receivedToken.Should().Be(cancellation.Token);
+        _ = initialCleanupObserved.Should().BeTrue();
+        _ = Directory.Exists(owned.Clone).Should().BeFalse("shutdown must also execute the finally cleanup");
+        _ = Directory.Exists(owned.Root).Should().BeTrue();
+    }
+
+    private sealed class FailingTokenSource(Action<CancellationToken> fail) : IGitHubTokenSource
+    {
+        public bool Called { get; private set; }
+
+        public Task<string> GetTokenAsync(CancellationToken ct)
+        {
+            Called = true;
+            fail(ct);
+            throw new InvalidOperationException("The test token source must fail before any git invocation.");
+        }
+    }
+
+    private sealed class OwnedScannerDirectory : IDisposable
+    {
+        private readonly string _witness = Guid.NewGuid().ToString("N");
+        private readonly string _resolvedRoot;
+        public string Root => _resolvedRoot;
+        public string Clone => Path.Combine(Root, "owned-repo");
+
+        public OwnedScannerDirectory()
+        {
+            _resolvedRoot = Path.GetFullPath(Path.Combine(Path.GetTempPath(), $"lizard-failure-{_witness}"));
+            if (Directory.Exists(_resolvedRoot))
+            {
+                throw new IOException("Refusing to claim an existing fixture directory.");
+            }
+            _ = Directory.CreateDirectory(_resolvedRoot);
+            using var marker = new FileStream(Path.Combine(Root, ".fixture-owner"), FileMode.CreateNew);
+            marker.Write(System.Text.Encoding.UTF8.GetBytes(_witness));
+            // Failed construction never reaches Dispose, so no unvalidated cleanup is attempted.
+        }
+
+        public void CreateClone()
+        {
+            Console.WriteLine($"Owned clone fixture: {Path.GetFullPath(Clone)}");
+            _ = Directory.CreateDirectory(Clone);
+            File.WriteAllText(Path.Combine(Clone, ".clone-owner"), _witness);
+        }
+
+        public void Dispose()
+        {
+            var target = Path.GetFullPath(Root);
+            var marker = Path.Combine(target, ".fixture-owner");
+            if (target != _resolvedRoot || !File.Exists(marker) || File.ReadAllText(marker) != _witness)
+            {
+                Console.WriteLine("Refusing recursive cleanup without the exact fixture ownership witness.");
+                return;
+            }
+            Console.WriteLine($"Deleting owned scanner fixture: {target}");
+            Directory.Delete(target, recursive: true);
+        }
+    }
 
     // The regression to guard against is a weakened containment check
     // letting ScanAsync's TryDeleteDir(dir) delete something outside WorkRoot. A
