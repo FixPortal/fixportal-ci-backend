@@ -162,7 +162,7 @@ jobs:
           for required in .claude/ci-budget-approval.json .github/canonical-assets.json \
             .github/scripts/assert_canonical_assets.py \
             nuget.config NuGet.config global.json .config/dotnet-tools.json .npmrc Directory.Build.props; do
-            if [ -f "$required" ] && ! jq -e --arg r "$required" '.high | index($r)' "$policy" >/dev/null; then
+            if git ls-files | grep -xF -- "$required" >/dev/null && ! jq -e --arg r "$required" '.high | index($r)' "$policy" >/dev/null; then
               echo "::error file=$policy::'$required' exists but is missing from the high list. An edit to it would get the lighter review."
               exit 1
             fi
