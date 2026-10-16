@@ -71,10 +71,12 @@ public sealed class DashboardRefreshWorkerTests : IDisposable
             );
     }
 
-    private DashboardRefreshService NewBrokenRefreshService(HttpMessageHandler handler)
+    private static DashboardRefreshService NewRefreshService(
+        HttpClient http,
+        DashboardSnapshotState state,
+        IDashboardSnapshotStore store
+    )
     {
-        var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
-        _httpClients.Add(http);
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
@@ -83,8 +85,8 @@ public sealed class DashboardRefreshWorkerTests : IDisposable
         return new DashboardRefreshService(
             client,
             inventory,
-            Substitute.For<IDashboardSnapshotStore>(),
-            new DashboardSnapshotState(),
+            store,
+            state,
             new PerRepoCache<RepoMetrics>(),
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
             new PerRepoCache<IReadOnlyList<JobSignal>>(),
@@ -103,10 +105,16 @@ public sealed class DashboardRefreshWorkerTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_should_survive_a_non_cancellation_refresh_failure_and_stop_cleanly_on_shutdown()
     {
-        var refreshService = NewBrokenRefreshService(new BrokenReposHandler());
+        var http = new HttpClient(new BrokenReposHandler()) { BaseAddress = new Uri("https://api.github.com/") };
+        _httpClients.Add(http);
+        var refreshService = NewRefreshService(
+            http,
+            new DashboardSnapshotState(),
+            Substitute.For<IDashboardSnapshotStore>()
+        );
         var options = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var workerLogger = new SignalingLogger<DashboardRefreshWorker>();
-        var worker = new DashboardRefreshWorker(refreshService, options, workerLogger);
+        var worker = new DashboardRefreshWorker(refreshService, options, TimeProvider.System, workerLogger);
 
         await worker.StartAsync(TestContext.Current.CancellationToken);
         // Event-driven: wait for the exact moment the guard logged
@@ -125,5 +133,116 @@ public sealed class DashboardRefreshWorkerTests : IDisposable
             .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
         _ = worker.ExecuteTask.IsCompleted.Should().BeTrue();
         _ = worker.ExecuteTask.IsFaulted.Should().BeFalse();
+    }
+
+    private sealed class RecoveringReposHandler : HttpMessageHandler
+    {
+        private int _inventoryRequests;
+        public int InventoryRequests => Volatile.Read(ref _inventoryRequests);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            var body = "[]";
+            if (request.RequestUri!.AbsolutePath.EndsWith("/repos", StringComparison.Ordinal))
+            {
+                body =
+                    Interlocked.Increment(ref _inventoryRequests) == 1
+                        ? "not valid json"
+                        : """[{"name":"recovered-repo","html_url":"https://github.com/FixPortal/recovered-repo","private":false,"archived":false,"default_branch":"main"}]""";
+            }
+            else if (request.RequestUri.AbsolutePath.EndsWith("/actions/workflows", StringComparison.Ordinal))
+            {
+                body = """{"workflows":[]}""";
+            }
+            return Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                }
+            );
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_should_publish_a_successful_refresh_on_the_next_tick_after_initial_failure()
+    {
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        var ct = ceiling.Token;
+        var handler = new RecoveringReposHandler();
+        var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        var state = new DashboardSnapshotState();
+        var store = Substitute.For<IDashboardSnapshotStore>();
+        var saved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        DashboardSnapshot? savedSnapshot = null;
+        var saveCount = 0;
+        store
+            .SaveAsync(Arg.Any<DashboardSnapshot>(), Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                savedSnapshot = call.Arg<DashboardSnapshot>();
+                Interlocked.Increment(ref saveCount);
+                saved.TrySetResult();
+                return Task.CompletedTask;
+            });
+        var refreshService = NewRefreshService(http, state, store);
+        var options = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
+        var time = new TrackingFakeTimeProvider();
+        var workerLogger = new SignalingLogger<DashboardRefreshWorker>();
+        var worker = new DashboardRefreshWorker(refreshService, options, time, workerLogger);
+        Exception? primaryFailure = null;
+        try
+        {
+            await worker.StartAsync(ct);
+            await workerLogger.ErrorLogged.Task.WaitAsync(ct);
+            ct.IsCancellationRequested.Should().BeFalse("the operation deadline is diagnostic only");
+            // Timer construction precedes the first refresh, whose real failure is
+            // now observed. This is a completed-prefix assertion, not a timing poll.
+            time.SteadyStateTimerScheduled.Task.IsCompletedSuccessfully.Should()
+                .BeTrue("the scheduled refresh timer must bind the injected clock before the first failed refresh");
+            await time.SteadyStateTimerScheduled.Task.WaitAsync(ct);
+            time.Advance(TimeSpan.FromSeconds(60));
+            await Task.WhenAny(saved.Task, worker.ExecuteTask!).WaitAsync(ct);
+            // Save signals before publication. Join the actual worker so the real
+            // PersistAndPublishAsync continuation finishes state.Update first.
+            await worker.StopAsync(CancellationToken.None).WaitAsync(ct);
+            ct.IsCancellationRequested.Should().BeFalse("the operation deadline is diagnostic only");
+            worker.ExecuteTask!.IsCompleted.Should().BeTrue();
+            worker.ExecuteTask.IsFaulted.Should().BeFalse();
+            state.Current.Should().NotBeNull("the next scheduled refresh must publish a successful snapshot");
+            var recovered = state.Current!;
+            recovered.Org.Should().Be("FixPortal");
+            recovered.RefreshedAt.Should().Be(Instant.FromUtc(2026, 1, 1, 0, 0));
+            recovered.Repositories.Should().ContainSingle().Which.Name.Should().Be("recovered-repo");
+            savedSnapshot.Should().BeSameAs(recovered);
+            handler.InventoryRequests.Should().Be(2);
+            Volatile.Read(ref saveCount).Should().Be(1);
+        }
+        catch (Exception error)
+        {
+            primaryFailure = error;
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await worker.StopAsync(CancellationToken.None).WaitAsync(cleanup.Token);
+                if (worker.ExecuteTask is { } execution)
+                {
+                    execution.IsCompleted.Should().BeTrue("worker shutdown must join before dependencies are disposed");
+                }
+                worker.Dispose();
+                http.Dispose();
+            }
+            catch (Exception cleanupError) when (primaryFailure is not null)
+            {
+                Console.WriteLine("ScheduledRecoveryCleanupFailure: " + cleanupError);
+            }
+        }
     }
 }
