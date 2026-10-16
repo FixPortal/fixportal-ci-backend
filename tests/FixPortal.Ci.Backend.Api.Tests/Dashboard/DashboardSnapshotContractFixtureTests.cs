@@ -20,6 +20,7 @@ public class DashboardSnapshotContractFixtureTests(WebApplicationFactory<Program
             .WithWebHostBuilder(builder =>
             {
                 _ = builder.UseSetting("GitHub:Token", "test-token");
+                _ = builder.UseSetting("Admin:AdminKey", "contract-admin-key-2026");
                 _ = builder.ConfigureServices(services =>
                 {
                     _ = services.RemoveAll<IHostedService>();
@@ -34,8 +35,10 @@ public class DashboardSnapshotContractFixtureTests(WebApplicationFactory<Program
             })
             .CreateClient();
 
-    [Fact]
-    public async Task Get_snapshot_should_match_the_versioned_dashboard_contract_fixture()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Get_snapshot_should_match_the_versioned_dashboard_contract_fixture(bool admin)
     {
         var snapshot = new DashboardSnapshot(
             Instant.FromUtc(2026, 6, 1, 12, 30),
@@ -169,15 +172,59 @@ public class DashboardSnapshotContractFixtureTests(WebApplicationFactory<Program
                 new CiTrendBucket(Instant.FromUtc(2026, 6, 1, 11, 0), CiTrendState.Passing) { IsBackfilled = true },
             ]
         );
-        var client = CreateClient(snapshot);
+        var privateMerge = new MergedPullRequest(
+            99,
+            "Private change",
+            "carol",
+            "private-repo",
+            "https://github.com/FixPortal/private-repo/pull/99",
+            Instant.FromUtc(2026, 6, 1, 12, 15)
+        );
+        snapshot = snapshot with
+        {
+            Repositories =
+            [
+                .. snapshot.Repositories,
+                new RepositorySnapshot(
+                    "private-repo",
+                    "https://github.com/FixPortal/private-repo",
+                    true,
+                    [],
+                    [],
+                    new RepoMetrics(71, 2.5, 8, 1, Instant.FromUtc(2026, 6, 1, 9, 15)),
+                    [],
+                    [],
+                    privateMerge
+                ),
+            ],
+            Summary = [new SummaryCount("admin-only-proof", 77)],
+            LastMergedPr = privateMerge,
+            CiTrend =
+            [
+                new CiTrendBucket(Instant.FromUtc(2026, 6, 1, 10, 0), CiTrendState.Failing),
+                new CiTrendBucket(Instant.FromUtc(2026, 6, 1, 11, 0), CiTrendState.Failing) { IsBackfilled = true },
+            ],
+        };
+        using var client = CreateClient(snapshot);
+        if (admin)
+        {
+            client.DefaultRequestHeaders.Add("X-Admin-Key", "contract-admin-key-2026");
+        }
 
-        var response = await client.GetAsync("/api/dashboard/snapshot", TestContext.Current.CancellationToken);
+        using var response = await client.GetAsync(
+            admin ? "/api/dashboard/snapshot/admin" : "/api/dashboard/snapshot",
+            TestContext.Current.CancellationToken
+        );
 
         _ = response.StatusCode.Should().Be(HttpStatusCode.OK);
         var actual = JsonNode.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
         var expected = JsonNode.Parse(
             await File.ReadAllTextAsync(
-                Path.Combine(AppContext.BaseDirectory, "Contracts", "dashboard-snapshot.v1.json"),
+                Path.Combine(
+                    AppContext.BaseDirectory,
+                    "Contracts",
+                    admin ? "dashboard-snapshot.admin.v1.json" : "dashboard-snapshot.v1.json"
+                ),
                 TestContext.Current.CancellationToken
             )
         );

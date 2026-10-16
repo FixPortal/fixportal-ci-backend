@@ -26,5 +26,8 @@
     <None Include="..\..\contracts\dashboard-snapshot.v1.json"
           Link="Contracts\dashboard-snapshot.v1.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\contracts\dashboard-snapshot.admin.v1.json"
+          Link="Contracts\dashboard-snapshot.admin.v1.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>
