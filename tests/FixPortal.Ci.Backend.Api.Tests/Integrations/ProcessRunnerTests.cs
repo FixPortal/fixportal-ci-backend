@@ -178,6 +178,79 @@ public class ProcessRunnerTests
         _ = await act.Should().ThrowAsync<OperationCanceledException>();
     }
 
+    [Fact]
+    public async Task RunAsync_timeout_kills_the_announced_child_without_cancelling_the_caller()
+    {
+        var marker = Path.Combine(Path.GetTempPath(), $"fixportal-timeout-{Guid.NewGuid():N}.pid");
+        var (fileName, arguments) = OperatingSystem.IsWindows()
+            ? (
+                "powershell.exe",
+                new[]
+                {
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    $"Set-Content -LiteralPath '{marker}' -Value $PID; Start-Sleep -Seconds 60",
+                }
+            )
+            : ("/bin/sh", new[] { "-c", $"echo $$ > '{marker}'; exec sleep 60" });
+        using var caller = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        Process? child = null;
+        try
+        {
+            var running = ProcessRunner.RunAsync(fileName, arguments, TimeSpan.FromSeconds(10), caller.Token);
+            var childId = await WaitForChildPidAsync(
+                marker,
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken
+            );
+            child = Process.GetProcessById(childId);
+            child.HasExited.Should().BeFalse("the announced process must still be running before its timeout");
+
+            var act = () => running.WaitAsync(TimeSpan.FromSeconds(20), TestContext.Current.CancellationToken);
+            await act.Should().ThrowAsync<OperationCanceledException>();
+            caller.IsCancellationRequested.Should().BeFalse("only the configured process timeout expired");
+            try
+            {
+                await child
+                    .WaitForExitAsync(TestContext.Current.CancellationToken)
+                    .WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            }
+            catch (TimeoutException)
+            {
+                // Convert the diagnostic wait ceiling into the explicit child-lifecycle assertion.
+            }
+            child.HasExited.Should().BeTrue("the timeout must kill the exact child that published its PID");
+        }
+        finally
+        {
+            if (child is not null)
+            {
+                if (!child.HasExited)
+                {
+                    child.Kill(entireProcessTree: true);
+                    child.WaitForExit(5000).Should().BeTrue("owned child cleanup must settle");
+                }
+                child.Dispose();
+            }
+            Console.WriteLine($"Owned timeout marker cleanup: {Path.GetFullPath(marker)}");
+            File.Delete(marker);
+        }
+    }
+
+    [Fact]
+    public async Task RunAsync_missing_executable_preserves_the_actionable_start_failure()
+    {
+        var executable = Path.Combine(Path.GetTempPath(), $"fixportal-missing-{Guid.NewGuid():N}");
+        var act = () =>
+            ProcessRunner.RunAsync(executable, [], TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        var thrown = await act.Should().ThrowAsync<InvalidOperationException>();
+        thrown.Which.Message.Should().Contain(executable).And.Contain("installed and on PATH");
+        thrown.Which.InnerException.Should().BeOfType<System.ComponentModel.Win32Exception>();
+    }
+
     private static async Task<int> WaitForChildPidAsync(string marker, TimeSpan timeout, CancellationToken ct)
     {
         var timer = Stopwatch.StartNew();
