@@ -150,6 +150,17 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
         _ = options.ToString().Should().Contain("123456");
     }
 
+    private sealed record CapturedAppRequest(
+        string Method,
+        string? AbsoluteUri,
+        string? AuthorizationScheme,
+        string? Bearer,
+        string Accept,
+        string UserAgent,
+        string ApiVersion,
+        bool HasContent
+    );
+
     // Scripted HTTP covers token response binding, including expires_at, and auth refusals.
     private sealed class MintHandler(
         string mintBody,
@@ -159,6 +170,7 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
     {
         public int InstallationLookups;
         public int Mints;
+        public List<CapturedAppRequest> Requests { get; } = [];
 
         // Settable mid-test so a reinstall scenario can flip the mint response on the
         // SAME handler — the source's installation-id cache is the thing under test.
@@ -169,6 +181,20 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
             CancellationToken cancellationToken
         )
         {
+            Requests.Add(
+                new CapturedAppRequest(
+                    request.Method.Method,
+                    request.RequestUri?.AbsoluteUri,
+                    request.Headers.Authorization?.Scheme,
+                    request.Headers.Authorization?.Parameter,
+                    string.Join(",", request.Headers.Accept.Select(value => value.ToString())),
+                    string.Join(" ", request.Headers.UserAgent.Select(value => value.ToString())),
+                    request.Headers.TryGetValues("X-GitHub-Api-Version", out var versions)
+                        ? string.Join(",", versions)
+                        : "",
+                    request.Content is not null
+                )
+            );
             var (status, body) =
                 request.Method == HttpMethod.Get
                     ? (HttpStatusCode.OK, """{"id":4242}""")
@@ -222,17 +248,102 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
         }
     }
 
-    private GitHubAppTokenSource CreateMinting(HttpMessageHandler handler, FakeClock clock)
+    private GitHubAppTokenSource CreateMinting(
+        HttpMessageHandler handler,
+        FakeClock clock,
+        string? pem = null,
+        string? installationId = null
+    )
     {
         var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
         _httpClients.Add(http);
         return new GitHubAppTokenSource(
             http,
-            Options.Create(new GitHubAppOptions { AppId = "123456", PrivateKeyPem = NewPrivateKeyPem() }),
+            Options.Create(
+                new GitHubAppOptions
+                {
+                    AppId = "123456",
+                    PrivateKeyPem = pem ?? NewPrivateKeyPem(),
+                    InstallationId = installationId,
+                }
+            ),
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "unused" }),
             clock,
             NullLogger<GitHubAppTokenSource>.Instance
         );
+    }
+
+    [Fact]
+    public async Task A_configured_installation_should_mint_at_its_literal_id_without_discovery() =>
+        await AssertMintExchangeAsync("987654", "https://api.github.com/app/installations/987654/access_tokens");
+
+    [Fact]
+    public async Task A_discovered_installation_should_mint_at_the_returned_literal_id() =>
+        await AssertMintExchangeAsync(null, "https://api.github.com/app/installations/4242/access_tokens");
+
+    private async Task AssertMintExchangeAsync(string? installationId, string expectedMintUri)
+    {
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        using var signingKey = RSA.Create(2048);
+        using var verifier = RSA.Create();
+        verifier.ImportSubjectPublicKeyInfo(signingKey.ExportSubjectPublicKeyInfo(), out _);
+        using var handler = new MintHandler("""{"token":"minted-fixture-token","expires_at":"__EXPIRES_AT__"}""");
+        var source = CreateMinting(handler, new FakeClock(Now), signingKey.ExportPkcs8PrivateKeyPem(), installationId);
+
+        var token = await source.GetTokenAsync(ceiling.Token);
+
+        token.Should().Be("minted-fixture-token");
+        handler.Mints.Should().Be(1);
+        handler.InstallationLookups.Should().Be(installationId is null ? 1 : 0);
+        handler.Requests.Should().HaveCount(installationId is null ? 2 : 1);
+        var mint = handler.Requests[^1];
+        mint.Method.Should().Be("POST");
+        mint.AbsoluteUri.Should().Be(expectedMintUri);
+        if (installationId is null)
+        {
+            handler.Requests[0].Method.Should().Be("GET");
+            handler.Requests[0].AbsoluteUri.Should().Be("https://api.github.com/orgs/FixPortal/installation");
+        }
+        foreach (var request in handler.Requests)
+        {
+            request.HasContent.Should().BeFalse("installation lookup and token exchange are bodyless requests");
+            request.Accept.Should().Be("application/vnd.github+json");
+            request.UserAgent.Should().Be("fixportal-ci-backend");
+            request.ApiVersion.Should().Be("2022-11-28");
+            request.AuthorizationScheme.Should().Be("Bearer");
+            request.Bearer.Should().NotBeNullOrWhiteSpace();
+            var parts = request.Bearer!.Split('.');
+            parts.Should().HaveCount(3);
+            using var header = JsonDocument.Parse(DecodeSegment(parts[0]));
+            header.RootElement.GetProperty("alg").GetString().Should().Be("RS256");
+            header.RootElement.GetProperty("typ").GetString().Should().Be("JWT");
+            using var payload = JsonDocument.Parse(DecodeSegment(parts[1]));
+            payload.RootElement.GetProperty("iss").GetString().Should().Be("123456");
+            payload
+                .RootElement.GetProperty("iat")
+                .GetInt64()
+                .Should()
+                .Be((Now - Duration.FromSeconds(60)).ToUnixTimeSeconds());
+            payload
+                .RootElement.GetProperty("exp")
+                .GetInt64()
+                .Should()
+                .Be((Now + Duration.FromMinutes(9)).ToUnixTimeSeconds());
+            var signature = Convert.FromBase64String(
+                parts[2].Replace('-', '+').Replace('_', '/') + new string('=', (4 - parts[2].Length % 4) % 4)
+            );
+            verifier
+                .VerifyData(
+                    Encoding.ASCII.GetBytes($"{parts[0]}.{parts[1]}"),
+                    signature,
+                    HashAlgorithmName.SHA256,
+                    RSASignaturePadding.Pkcs1
+                )
+                .Should()
+                .BeTrue("the actual outgoing bearer must be signed by the test-generated app key");
+        }
+        ceiling.IsCancellationRequested.Should().BeFalse();
     }
 
     [Fact]
