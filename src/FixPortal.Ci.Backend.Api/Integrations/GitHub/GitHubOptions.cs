@@ -9,8 +9,9 @@ public sealed class GitHubOptions
     // [JsonIgnore] keeps the token out of any System.Text.Json serialization of
     // the bound options object (e.g. structured logging); config binding is
     // unaffected. ToString() is overridden so the token never lands in a log line.
+    // Startup validation requires a non-empty token; required conflicts with JsonIgnore.
     [JsonIgnore]
-    public required string Token { get; init; }
+    public string Token { get; init; } = string.Empty;
 
     public override string ToString() => $"GitHubOptions {{ Owner = {Owner}, Token = *** }}";
 }
