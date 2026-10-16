@@ -94,7 +94,8 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             })
             .CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = allowAutoRedirect });
 
-    private sealed class MergeHandler(HttpStatusCode statusCode, string body) : HttpMessageHandler
+    private sealed class MergeHandler(HttpStatusCode statusCode, string body, Action? beforeResponse = null)
+        : HttpMessageHandler
     {
         public int RequestCount { get; private set; }
         public TaskCompletionSource Disposed { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -120,10 +121,52 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             Method = request.Method;
             Path = request.RequestUri?.AbsolutePath;
             Body = request.Content is null ? null : await request.Content.ReadAsStringAsync(cancellationToken);
+            beforeResponse?.Invoke();
             return new HttpResponseMessage(statusCode)
             {
                 Content = new StringContent(body, Encoding.UTF8, "application/json"),
             };
+        }
+    }
+
+    private sealed class ConflictReadBarrier(
+        IReadOnlyDictionary<int, PrMergeState> values,
+        CancellationToken cancellationToken
+    ) : IReadOnlyDictionary<int, PrMergeState>
+    {
+        private int _armed;
+        private int _reads;
+
+        public TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Arm() => Interlocked.Exchange(ref _armed, 1);
+
+        public PrMergeState this[int key] => values[key];
+        public IEnumerable<int> Keys => values.Keys;
+        public IEnumerable<PrMergeState> Values => values.Values;
+        public int Count => values.Count;
+
+        public bool ContainsKey(int key) => values.ContainsKey(key);
+
+        public IEnumerator<KeyValuePair<int, PrMergeState>> GetEnumerator() => values.GetEnumerator();
+
+        System.Collections.IEnumerator System.Collections.IEnumerable.GetEnumerator() => GetEnumerator();
+
+        public bool TryGetValue(int key, out PrMergeState value)
+        {
+            if (Volatile.Read(ref _armed) != 1)
+            {
+                throw new InvalidOperationException(
+                    "Cache callback must begin after the actual GitHub conflict response."
+                );
+            }
+            if (Interlocked.Increment(ref _reads) == 1)
+            {
+                Entered.TrySetResult();
+                Release.Task.WaitAsync(cancellationToken).GetAwaiter().GetResult();
+            }
+            return values.TryGetValue(key, out value!);
         }
     }
 
@@ -1006,6 +1049,86 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
 
         _ = mergeStates.TryGet("public-repo", out var cached).Should().BeTrue();
         _ = cached![42].Should().BeSameAs(newer);
+    }
+
+    [Fact]
+    public async Task Merge_rejection_racing_a_cache_publication_should_preserve_the_newer_head_and_sibling()
+    {
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        var original = new PrMergeState(42, false, "MERGEABLE", "CLEAN", HeadSha);
+        var barrier = new ConflictReadBarrier(new Dictionary<int, PrMergeState> { [42] = original }, ceiling.Token);
+        var mergeStates = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>();
+        mergeStates.Update("public-repo", barrier);
+        using var handler = new MergeHandler(
+            HttpStatusCode.Conflict,
+            """{"message":"Head branch was modified"}""",
+            barrier.Arm
+        );
+        using var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler, mergeStates);
+        using var request = CreateMergeRequest("public-repo", 42);
+        Task<HttpResponseMessage>? pending = null;
+        HttpResponseMessage? response = null;
+        Exception? primaryFailure = null;
+        try
+        {
+            pending = Task.Run(() => client.SendAsync(request, ceiling.Token), ceiling.Token);
+            await barrier.Entered.Task.WaitAsync(ceiling.Token);
+            handler.RequestCount.Should().Be(1);
+            handler.Method.Should().Be(HttpMethod.Put);
+            handler.Path.Should().Be("/repos/FixPortal/public-repo/pulls/42/merge");
+
+            const string newerHead = "abcdef0123456789abcdef0123456789abcdef01";
+            var newer = new PrMergeState(42, false, "MERGEABLE", "CLEAN", newerHead);
+            var sibling = new PrMergeState(43, true, "UNKNOWN", "UNKNOWN", "sibling-head");
+            IReadOnlyDictionary<int, PrMergeState> published = new Dictionary<int, PrMergeState>
+            {
+                [42] = newer,
+                [43] = sibling,
+            };
+            mergeStates.Update("public-repo", published);
+            barrier.Release.TrySetResult();
+            response = await pending.WaitAsync(ceiling.Token);
+
+            response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            mergeStates.TryGet("public-repo", out var cached).Should().BeTrue();
+            cached!
+                [42]
+                .HeadSha.Should()
+                .Be(newerHead, "the request callback must retry against the concurrently published head");
+            cached[42].Should().BeSameAs(newer);
+            cached[43]
+                .Should()
+                .BeSameAs(sibling, "the concurrent publication's sibling must survive the request update");
+            cached.Should().BeSameAs(published);
+            ceiling.IsCancellationRequested.Should().BeFalse();
+        }
+        catch (Exception ex)
+        {
+            primaryFailure = ex;
+            throw;
+        }
+        finally
+        {
+            barrier.Release.TrySetResult();
+            try
+            {
+                if (pending is not null)
+                {
+                    using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                    var completedResponse = await pending.WaitAsync(cleanup.Token);
+                    response ??= completedResponse;
+                }
+            }
+            catch (Exception cleanupFailure) when (primaryFailure is not null)
+            {
+                Console.WriteLine($"CachePublicationCleanupFailure: {cleanupFailure}");
+            }
+            finally
+            {
+                response?.Dispose();
+            }
+        }
     }
 
     [Fact]
