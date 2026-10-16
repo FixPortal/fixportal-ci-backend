@@ -933,6 +933,64 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             .BeFalse();
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Merge_rejection_should_immediately_update_the_served_snapshot(bool admin)
+    {
+        var seed = SnapshotWithPrivateRepo();
+        var ready = new PullRequest(
+            42,
+            "Ready PR",
+            "alice",
+            "https://github.com/FixPortal/public-repo/pull/42",
+            false,
+            seed.RefreshedAt,
+            ReadyToMerge: true,
+            HeadSha: HeadSha
+        );
+        seed = seed with
+        {
+            Repositories = seed
+                .Repositories.Select(repo => repo.Name == "public-repo" ? repo with { PullRequests = [ready] } : repo)
+                .ToArray(),
+        };
+        using var handler = new MergeHandler(HttpStatusCode.Conflict, """{"message":"Head branch was modified"}""");
+        using var client = CreateClient(seed, AdminKey, handler);
+        if (admin)
+        {
+            client.DefaultRequestHeaders.Add("X-Admin-Key", AdminKey);
+        }
+        var path = admin ? "/api/dashboard/snapshot/admin" : "/api/dashboard/snapshot";
+        using var before = await client.GetAsync(path, TestContext.Current.CancellationToken);
+        before.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var initial = JsonDocument.Parse(
+            await before.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        initial
+            .RootElement.GetProperty("repositories")[0]
+            .GetProperty("pullRequests")[0]
+            .GetProperty("readyToMerge")
+            .GetBoolean()
+            .Should()
+            .BeTrue();
+
+        using var request = CreateMergeRequest("public-repo", 42);
+        using var rejection = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        rejection.StatusCode.Should().Be(HttpStatusCode.Conflict);
+
+        using var after = await client.GetAsync(path, TestContext.Current.CancellationToken);
+        after.StatusCode.Should().Be(HttpStatusCode.OK);
+        using var current = JsonDocument.Parse(
+            await after.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
+        );
+        var served = current.RootElement.GetProperty("repositories")[0].GetProperty("pullRequests")[0];
+        served.GetProperty("number").GetInt32().Should().Be(42);
+        served.GetProperty("headSha").GetString().Should().Be(HeadSha);
+        served.GetProperty("readyToMerge").GetBoolean().Should().BeFalse();
+        handler.RequestCount.Should().Be(1);
+    }
+
     [Fact]
     public async Task Stale_merge_rejection_should_not_replace_a_newer_cached_head()
     {
