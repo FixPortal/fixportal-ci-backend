@@ -6,6 +6,9 @@ using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Ide;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Configuration;
@@ -18,8 +21,8 @@ namespace FixPortal.Ci.Backend.Api.Tests.Configuration;
 /// drops a reviewer's flag). The existing tests type their own configuration keys, which proves the
 /// binder works and says nothing about what the template actually ships.
 ///
-/// These read the REAL template, map each variable name to a configuration key the way the
-/// environment-variable provider does (<c>__</c> becomes <c>:</c>), and bind through the real
+/// These read the REAL template, install its names in uniquely scoped process environment
+/// variables and use the actual environment-variable provider, then bind through the real
 /// options types, so every shipped name must reach a real property and the shipped reviewer roster
 /// must come out as declared. The set of declared names is pinned in both directions, so a variable
 /// added to the template without an option (or the reverse) is noticed.
@@ -70,11 +73,8 @@ public class BicepEnvironmentBindingTests
         var entries = ReadEnvEntries();
         entries.Should().NotBeEmpty("the parser found no environment entries, so it and the template have drifted");
 
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(
-                entries.ToDictionary(e => ToKey(e.Name), string? (e) => SampleFor(e), StringComparer.OrdinalIgnoreCase)
-            )
-            .Build();
+        using var environment = new TemplateEnvironment(entries.ToDictionary(e => e.Name, string? (e) => SampleFor(e)));
+        var configuration = environment.Configuration;
 
         foreach (var entry in entries.Where(e => !e.Name.StartsWith("ReviewSignals__", StringComparison.Ordinal)))
         {
@@ -107,11 +107,8 @@ public class BicepEnvironmentBindingTests
             .ToList();
         entries.Should().NotBeEmpty("the template declares a reviewer roster");
 
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(
-                entries.ToDictionary(e => ToKey(e.Name), string? (e) => e.Literal, StringComparer.OrdinalIgnoreCase)
-            )
-            .Build();
+        using var environment = new TemplateEnvironment(entries.ToDictionary(e => e.Name, e => e.Literal));
+        var configuration = environment.Configuration;
         var options = configuration.GetSection("ReviewSignals").Get<ReviewSignalsOptions>();
         options.Should().NotBeNull();
 
@@ -185,7 +182,111 @@ public class BicepEnvironmentBindingTests
             .ToList();
     }
 
-    private static string ToKey(string name) => name.Replace("__", ":", StringComparison.Ordinal);
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Environment_bound_shipped_roster_runs_real_startup_validation(bool invalidName)
+    {
+        var values = ReadEnvEntries()
+            .Where(e => e.Name.StartsWith("ReviewSignals__", StringComparison.Ordinal))
+            .ToDictionary(e => e.Name, e => e.Literal);
+        if (invalidName)
+        {
+            values["ReviewSignals__Reviewers__0__Name"] = " ";
+        }
+        using var environment = new TemplateEnvironment(values);
+        var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { DisableDefaults = true });
+        builder.Configuration.AddConfiguration(environment.Configuration);
+        builder.Services.AddReviewSignalsOptions(builder.Configuration);
+        using var host = builder.Build();
+        if (invalidName)
+        {
+            var start = () => host.StartAsync(TestContext.Current.CancellationToken);
+            await start.Should().ThrowAsync<OptionsValidationException>().WithMessage("*non-blank Name*");
+        }
+        else
+        {
+            await host.StartAsync(TestContext.Current.CancellationToken);
+            host.Services.GetRequiredService<IOptions<ReviewSignalsOptions>>()
+                .Value.Reviewers.Select(r => r.Name)
+                .Should()
+                .Equal("CodeRabbit", "Gitar", "CodeQL", "Code Quality", "Secret Scanning");
+            await host.StopAsync(TestContext.Current.CancellationToken);
+        }
+    }
+
+    [Fact]
+    public void Indexed_cors_template_names_bind_through_the_environment_provider()
+    {
+        var match = Regex.Match(
+            File.ReadAllText(MainBicep()),
+            @"map\(range\(0, length\(corsAllowedOrigins\)\), i => \{\s*name: '(?<name>[^']+)'\s*value: corsAllowedOrigins\[i\]\s*\}\)"
+        );
+        match.Success.Should().BeTrue("the actual indexed template expression must be understood before expansion");
+        string[] origins = ["https://one.example.test", "https://two.example.test"];
+        var values = origins
+            .Select(
+                (origin, index) =>
+                    new
+                    {
+                        Name = match
+                            .Groups["name"]
+                            .Value.Replace(
+                                "${i}",
+                                index.ToString(CultureInfo.InvariantCulture),
+                                StringComparison.Ordinal
+                            ),
+                        Origin = origin,
+                    }
+            )
+            .ToDictionary(entry => entry.Name, string? (entry) => entry.Origin);
+        using var environment = new TemplateEnvironment(values);
+        environment.Configuration.GetSection("Cors:AllowedOrigins").Get<string[]>().Should().Equal(origins);
+    }
+
+    private sealed class TemplateEnvironment : IDisposable
+    {
+        private readonly List<string> _ownedNames = [];
+        public ConfigurationRoot Configuration { get; }
+
+        public TemplateEnvironment(IReadOnlyDictionary<string, string?> values)
+        {
+            var prefix = "AUDIT_BICEP_" + Guid.NewGuid().ToString("N") + "_";
+            try
+            {
+                foreach (var (name, value) in values)
+                {
+                    var owned = prefix + name;
+                    Environment
+                        .GetEnvironmentVariable(owned)
+                        .Should()
+                        .BeNull("each scope owns only previously absent keys");
+                    Environment.SetEnvironmentVariable(owned, value);
+                    _ownedNames.Add(owned);
+                }
+                Configuration = (ConfigurationRoot)new ConfigurationBuilder().AddEnvironmentVariables(prefix).Build();
+            }
+            catch
+            {
+                ClearOwnedNames();
+                throw;
+            }
+        }
+
+        public void Dispose()
+        {
+            Configuration.Dispose();
+            ClearOwnedNames();
+        }
+
+        private void ClearOwnedNames()
+        {
+            foreach (var name in _ownedNames)
+            {
+                Environment.SetEnvironmentVariable(name, null);
+            }
+        }
+    }
 
     // The template's own literal where it has one; otherwise a sample of the right type, because a
     // value taken from a Bicep parameter or a secret is only known at deploy time.
