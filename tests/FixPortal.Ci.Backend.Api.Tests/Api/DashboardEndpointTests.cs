@@ -13,9 +13,12 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NodaTime;
+using NodaTime.Testing;
 using NodaTime.Text;
+using NSubstitute;
 using Xunit;
 
 namespace FixPortal.Ci.Backend.Api.Tests.Api;
@@ -37,7 +40,8 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>? mergeStates = null,
         bool exposePrivateToGuests = false,
         bool allowAutoRedirect = true,
-        string? environment = null
+        string? environment = null,
+        DashboardSnapshotState? sharedState = null
     ) =>
         factory
             .WithWebHostBuilder(builder =>
@@ -62,7 +66,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
                     // endpoint reads from.
                     _ = services.RemoveAll<IHostedService>();
                     _ = services.RemoveAll<DashboardSnapshotState>();
-                    var state = new DashboardSnapshotState();
+                    var state = sharedState ?? new DashboardSnapshotState();
                     if (seed is not null)
                     {
                         state.Update(seed, DashboardSnapshotState.ComputePublicSnapshot(seed, seed.PublicCiTrend));
@@ -188,6 +192,46 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
 
         // Program.RunAsync can finish disposing the host on its own continuation.
         await handler.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+    }
+
+    private sealed class RefreshedHeadHandler(string head) : HttpMessageHandler
+    {
+        public int RepositoryRequests { get; private set; }
+        public int PullRequests { get; private set; }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var path = request.RequestUri!.AbsolutePath;
+            string body;
+            switch (path)
+            {
+                case "/orgs/FixPortal/repos":
+                    RepositoryRequests++;
+                    body =
+                        """[{"name":"public-repo","html_url":"https://github.com/FixPortal/public-repo","private":false,"archived":false,"default_branch":"main"}]""";
+                    break;
+                case "/repos/FixPortal/public-repo/actions/workflows":
+                    body = """{"workflows":[]}""";
+                    break;
+                case "/repos/FixPortal/public-repo/pulls":
+                    PullRequests++;
+                    body =
+                        $$$"""[{"number":42,"title":"New head","user":{"login":"alice"},"html_url":"https://github.com/FixPortal/public-repo/pull/42","draft":false,"created_at":"2026-01-01T00:00:00Z","head":{"sha":"{{{head}}}"}}]""";
+                    break;
+                default:
+                    throw new InvalidOperationException($"Unexpected refresh fixture path: {path}");
+            }
+            return Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(body, Encoding.UTF8, "application/json"),
+                }
+            );
+        }
     }
 
     private sealed class ThrowingHandler(Exception exception) : HttpMessageHandler
@@ -1158,6 +1202,179 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             {
                 response?.Dispose();
             }
+        }
+    }
+
+    [Fact]
+    public async Task A_stale_merge_rejection_should_preserve_the_head_published_by_an_overlapping_actual_refresh()
+    {
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        var state = new DashboardSnapshotState();
+        var mergeStates = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>();
+        var barrier = new ConflictReadBarrier(
+            new Dictionary<int, PrMergeState> { [42] = new(42, false, "MERGEABLE", "CLEAN", HeadSha) },
+            ceiling.Token
+        );
+        mergeStates.Update("public-repo", barrier);
+        using var rejectionHandler = new MergeHandler(
+            HttpStatusCode.Conflict,
+            """{"message":"Old head rejected"}""",
+            barrier.Arm
+        );
+        using var client = CreateClient(
+            SnapshotWithPrivateRepo(),
+            AdminKey,
+            rejectionHandler,
+            mergeStates,
+            sharedState: state
+        );
+        client.DefaultRequestHeaders.Add("X-Admin-Key", AdminKey);
+        const string newerHead = "abcdef0123456789abcdef0123456789abcdef01";
+        using var refreshHandler = new RefreshedHeadHandler(newerHead);
+        using var refreshHttp = new HttpClient(refreshHandler, disposeHandler: false)
+        {
+            BaseAddress = new Uri("https://api.github.com/"),
+        };
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "fixture-token" });
+        var dashboardOptions = Options.Create(
+            new DashboardOptions { SnapshotPath = "unused-fixture.json", RefreshSeconds = 60 }
+        );
+        var github = new GitHubOrgClient(refreshHttp, gitHubOptions, dashboardOptions, new GitHubETagStore(), state);
+        var clock = new FakeClock(Instant.FromUtc(2030, 1, 1, 0, 0));
+        var store = Substitute.For<IDashboardSnapshotStore>();
+        store.SaveAsync(Arg.Any<DashboardSnapshot>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        var refresh = new DashboardRefreshService(
+            github,
+            new GitHubInventoryCache(github, clock, dashboardOptions),
+            store,
+            state,
+            new PerRepoCache<RepoMetrics>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<MergedPullRequest>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
+            mergeStates,
+            Options.Create(new ReviewSignalsOptions { Enabled = false }),
+            gitHubOptions,
+            clock,
+            NullLogger<DashboardRefreshService>.Instance
+        );
+        using var request = CreateMergeRequest("public-repo", 42);
+        Task<HttpResponseMessage>? pendingRejection = null;
+        Task? pendingRefresh = null;
+        HttpResponseMessage? rejection = null;
+        Exception? primaryFailure = null;
+        try
+        {
+            pendingRejection = Task.Run(() => client.SendAsync(request, ceiling.Token), ceiling.Token);
+            await barrier.Entered.Task.WaitAsync(ceiling.Token);
+            rejectionHandler.RequestCount.Should().Be(1);
+            mergeStates.Update(
+                "public-repo",
+                new Dictionary<int, PrMergeState> { [42] = new(42, false, "MERGEABLE", "CLEAN", newerHead) }
+            );
+            pendingRefresh = refresh.RefreshAsync(ceiling.Token);
+            await pendingRefresh.WaitAsync(ceiling.Token);
+            refreshHandler.RepositoryRequests.Should().Be(1);
+            refreshHandler.PullRequests.Should().Be(1);
+            await store.Received(1).SaveAsync(Arg.Any<DashboardSnapshot>(), Arg.Any<CancellationToken>());
+            await AssertRefreshedHeadServedAsync(client, newerHead, ceiling.Token);
+
+            barrier.Release.TrySetResult();
+            rejection = await pendingRejection.WaitAsync(ceiling.Token);
+            rejection.StatusCode.Should().Be(HttpStatusCode.Conflict);
+            await AssertRefreshedHeadServedAsync(client, newerHead, ceiling.Token);
+            ceiling.IsCancellationRequested.Should().BeFalse();
+        }
+        catch (Exception ex)
+        {
+            primaryFailure = ex;
+            throw;
+        }
+        finally
+        {
+            barrier.Release.TrySetResult();
+            await ObserveRefreshRejectionTasksAsync(pendingRefresh, pendingRejection, rejection, primaryFailure);
+        }
+    }
+
+    private static async Task ObserveRefreshRejectionTasksAsync(
+        Task? pendingRefresh,
+        Task<HttpResponseMessage>? pendingRejection,
+        HttpResponseMessage? rejection,
+        Exception? primaryFailure
+    )
+    {
+        using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var cleanupFailures = new List<Exception>();
+        try
+        {
+            try
+            {
+                if (pendingRefresh is not null)
+                {
+                    await pendingRefresh.WaitAsync(cleanup.Token);
+                }
+            }
+            catch (Exception cleanupFailure)
+            {
+                cleanupFailures.Add(cleanupFailure);
+            }
+            try
+            {
+                if (pendingRejection is not null)
+                {
+                    var completedResponse = await pendingRejection.WaitAsync(cleanup.Token);
+                    rejection ??= completedResponse;
+                }
+            }
+            catch (Exception cleanupFailure)
+            {
+                cleanupFailures.Add(cleanupFailure);
+            }
+            if (cleanupFailures.Count > 0)
+            {
+                if (primaryFailure is null)
+                {
+                    throw new AggregateException("RefreshRejectionCleanupFailure", cleanupFailures);
+                }
+                foreach (var cleanupFailure in cleanupFailures)
+                {
+                    Console.WriteLine($"RefreshRejectionCleanupFailure: {cleanupFailure}");
+                }
+            }
+        }
+        finally
+        {
+            rejection?.Dispose();
+        }
+    }
+
+    private static async Task AssertRefreshedHeadServedAsync(
+        HttpClient client,
+        string expectedHead,
+        CancellationToken ct
+    )
+    {
+        foreach (var path in new[] { "/api/dashboard/snapshot", "/api/dashboard/snapshot/admin" })
+        {
+            using var response = await client.GetAsync(path, ct);
+            response.StatusCode.Should().Be(HttpStatusCode.OK);
+            using var body = JsonDocument.Parse(await response.Content.ReadAsStringAsync(ct));
+            body.RootElement.GetProperty("refreshedAt").GetString().Should().Be("2030-01-01T00:00:00Z");
+            var repositories = body.RootElement.GetProperty("repositories");
+            repositories.GetArrayLength().Should().Be(1);
+            repositories[0].GetProperty("name").GetString().Should().Be("public-repo");
+            var pulls = repositories[0].GetProperty("pullRequests");
+            pulls.GetArrayLength().Should().Be(1);
+            pulls[0].GetProperty("number").GetInt32().Should().Be(42);
+            pulls[0].GetProperty("headSha").GetString().Should().Be(expectedHead);
+            pulls[0]
+                .GetProperty("readyToMerge")
+                .GetBoolean()
+                .Should()
+                .BeTrue("the actual refresh's newer head must survive the stale merge rejection");
         }
     }
 
