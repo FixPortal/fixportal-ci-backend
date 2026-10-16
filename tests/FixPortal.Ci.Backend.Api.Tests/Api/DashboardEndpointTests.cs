@@ -198,6 +198,36 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         ) => Task.FromException<HttpResponseMessage>(exception);
     }
 
+    private sealed class TimeoutThenSuccessHandler : HttpMessageHandler
+    {
+        public int RequestCount { get; private set; }
+        public List<string?> Paths { get; } = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        )
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            RequestCount++;
+            Paths.Add(request.RequestUri?.AbsolutePath);
+            if (RequestCount == 1)
+            {
+                return Task.FromException<HttpResponseMessage>(new TaskCanceledException("GitHub timed out"));
+            }
+            return Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """{"merged":true,"sha":"next-explicit-sha"}""",
+                        Encoding.UTF8,
+                        "application/json"
+                    ),
+                }
+            );
+        }
+    }
+
     private sealed class BlockingMergeHandler : HttpMessageHandler
     {
         private readonly Lock _concurrencyLock = new();
@@ -1208,6 +1238,59 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
 
         _ = response.StatusCode.Should().Be(HttpStatusCode.BadGateway);
         _ = (await ReadErrorAsync(response)).Should().Be("GitHub merge request failed.");
+    }
+
+    [Fact]
+    public async Task Merge_timeout_should_allow_the_next_explicit_request_for_the_same_pull_request()
+    {
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        var repoName = $"timeout-next-{Guid.NewGuid():N}";
+        var seed = SnapshotWithPrivateRepo();
+        seed = seed with
+        {
+            Repositories = seed
+                .Repositories.Select(repo => repo.Name == "public-repo" ? repo with { Name = repoName } : repo)
+                .ToArray(),
+        };
+        using var handler = new TimeoutThenSuccessHandler();
+        using var client = CreateClient(seed, AdminKey, handler);
+        using var firstRequest = CreateMergeRequest(repoName, 42);
+        using var firstResponse = await client.SendAsync(firstRequest, ceiling.Token);
+
+        firstResponse.StatusCode.Should().Be(HttpStatusCode.BadGateway);
+        using var error = JsonDocument.Parse(await firstResponse.Content.ReadAsStringAsync(ceiling.Token));
+        error.RootElement.GetProperty("error").GetString().Should().Be("GitHub merge request failed.");
+        handler.RequestCount.Should().Be(1);
+        ceiling.IsCancellationRequested.Should().BeFalse("the first cancellation is upstream, not the request caller");
+
+        using var nextRequest = CreateMergeRequest(repoName, 42);
+        HttpResponseMessage? nextResponse = null;
+        try
+        {
+            var nextError = await Record.ExceptionAsync(async () =>
+            {
+                nextResponse = await client.SendAsync(nextRequest, ceiling.Token);
+            });
+            nextError
+                .Should()
+                .BeNull("the next explicit same-key request must remain usable after an upstream timeout");
+            nextResponse!
+                .StatusCode.Should()
+                .Be(HttpStatusCode.OK, "the next explicit same-key request must succeed after the timeout");
+            using var body = JsonDocument.Parse(await nextResponse.Content.ReadAsStringAsync(ceiling.Token));
+            body.RootElement.GetProperty("merged").GetBoolean().Should().BeTrue();
+            body.RootElement.GetProperty("sha").GetString().Should().Be("next-explicit-sha");
+            handler.RequestCount.Should().Be(2);
+            handler
+                .Paths.Should()
+                .Equal($"/repos/FixPortal/{repoName}/pulls/42/merge", $"/repos/FixPortal/{repoName}/pulls/42/merge");
+            ceiling.IsCancellationRequested.Should().BeFalse();
+        }
+        finally
+        {
+            nextResponse?.Dispose();
+        }
     }
 
     [Fact]
