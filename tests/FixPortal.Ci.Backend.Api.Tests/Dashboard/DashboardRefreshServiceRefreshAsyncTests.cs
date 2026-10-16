@@ -334,16 +334,33 @@ public class DashboardRefreshServiceRefreshAsyncTests
             {
                 return Task.FromResult(
                     JsonOk(
-                        """[{"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"},{"name":"repo-b","html_url":"https://github.com/FixPortal/repo-b","private":false,"archived":false,"default_branch":"main"}]"""
+                        """
+                        [
+                          {"name":"repo-a","html_url":"https://github.com/FixPortal/repo-a","private":false,"archived":false,"default_branch":"main"},
+                          {"name":"repo-b","html_url":"https://github.com/FixPortal/repo-b","private":true,"archived":false,"default_branch":"main"},
+                          {"name":"repo-c","html_url":"https://github.com/FixPortal/repo-c","private":false,"archived":false,"default_branch":"main"}
+                        ]
+                        """
                     )
                 );
             }
             if (path.EndsWith("/actions/workflows", StringComparison.Ordinal))
             {
                 return Task.FromResult(
-                    path.Contains("/repo-b/", StringComparison.Ordinal)
+                    path.Contains("/repo-c/", StringComparison.Ordinal)
                         ? new HttpResponseMessage(HttpStatusCode.Unauthorized)
-                        : JsonOk("""{"workflows":[]}""")
+                        : JsonOk(
+                            """{"workflows":[{"id":1,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}"""
+                        )
+                );
+            }
+            if (path.EndsWith("/runs", StringComparison.Ordinal))
+            {
+                var conclusion = path.Contains("/repo-b/", StringComparison.Ordinal) ? "failure" : "success";
+                return Task.FromResult(
+                    JsonOk(
+                        $$"""{"workflow_runs":[{"id":1,"status":"completed","conclusion":"{{conclusion}}","html_url":"https://github.com/FixPortal/example/actions/runs/1","display_title":"fixture run","run_number":1,"head_branch":"main","event":"push","updated_at":"2026-01-01T00:30:00Z"}]}"""
+                    )
                 );
             }
             return Task.FromResult(JsonOk("[]"));
@@ -433,7 +450,12 @@ public class DashboardRefreshServiceRefreshAsyncTests
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
         var store = Substitute.For<IDashboardSnapshotStore>();
-        var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        DashboardSnapshot? savedSnapshot = null;
+        store
+            .SaveAsync(Arg.Do<DashboardSnapshot>(snapshot => savedSnapshot = snapshot), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        var refreshedAt = Instant.FromUtc(2026, 1, 1, 1, 45);
+        var clock = new FakeClock(refreshedAt);
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
         var sut = new DashboardRefreshService(
             client,
@@ -452,16 +474,47 @@ public class DashboardRefreshServiceRefreshAsyncTests
             NullLogger<DashboardRefreshService>.Instance
         );
 
-        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        await sut.RefreshAsync(ceiling.Token);
 
         _ = state.Current.Should().NotBeNull();
         if (shouldPersist)
         {
-            await store.Received(1).SaveAsync(Arg.Any<DashboardSnapshot>(), Arg.Any<CancellationToken>());
+            await store.Received(1).SaveAsync(Arg.Any<DashboardSnapshot>(), ceiling.Token);
+            _ = savedSnapshot.Should().NotBeNull();
+            var saved = savedSnapshot!;
+            _ = saved.Should().BeSameAs(state.Current, "the complete newly built snapshot must reach persistence");
+            _ = saved.RefreshedAt.Should().Be(refreshedAt);
+            _ = saved.Org.Should().Be("FixPortal");
+            _ = saved.Repositories.Select(repo => repo.Name).Should().BeEquivalentTo("repo-a", "repo-b", "repo-c");
+            _ = saved.Repositories.Single(repo => repo.Name == "repo-a").Private.Should().BeFalse();
+            _ = saved.Repositories.Single(repo => repo.Name == "repo-b").Private.Should().BeTrue();
+            _ = saved.CiTrend.Should().NotBeNull().And.HaveCount(24);
+            _ = saved
+                .PublicCiTrend.Should()
+                .NotBeNull("the actual refresh must persist its public-only trend")
+                .And.HaveCount(24);
+            var firstBucket = Instant.FromUtc(2025, 12, 31, 2, 0);
+            for (var index = 0; index < 24; index++)
+            {
+                var expectedHour = firstBucket + Duration.FromHours(index);
+                _ = saved.CiTrend![index].BucketStart.Should().Be(expectedHour);
+                _ = saved.PublicCiTrend![index].BucketStart.Should().Be(expectedHour);
+                _ = saved.CiTrend[index].State.Should().Be(index == 22 ? CiTrendState.Failing : CiTrendState.NoData);
+                _ = saved
+                    .PublicCiTrend[index]
+                    .State.Should()
+                    .Be(index == 22 ? CiTrendState.Passing : CiTrendState.NoData);
+                _ = saved.CiTrend[index].IsBackfilled.Should().BeFalse();
+                _ = saved.PublicCiTrend[index].IsBackfilled.Should().BeFalse();
+            }
+            _ = state.Public!.Repositories.Select(repo => repo.Name).Should().NotContain("repo-b");
         }
         else
         {
             await store.DidNotReceive().SaveAsync(Arg.Any<DashboardSnapshot>(), Arg.Any<CancellationToken>());
+            _ = savedSnapshot.Should().BeNull("a cold degraded refresh must not hand a snapshot to persistence");
         }
     }
 
