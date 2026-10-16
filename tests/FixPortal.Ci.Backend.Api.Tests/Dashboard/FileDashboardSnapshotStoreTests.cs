@@ -309,6 +309,56 @@ public class FileDashboardSnapshotStoreTests
     }
 
     [Fact]
+    public async Task SaveAsync_should_preserve_committed_data_and_recover_after_serialization_fails()
+    {
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        var ct = ceiling.Token;
+        await OwnedSnapshotDirectory.RunAsync(async fixture =>
+        {
+            var store = NewStore(fixture.SnapshotPath);
+            var previous = new DashboardSnapshot(Instant.FromUtc(2026, 5, 28, 18, 0), "Previous", [], [], null);
+            await store.SaveAsync(previous, ct);
+            var committed = await File.ReadAllBytesAsync(fixture.SnapshotPath, ct);
+            var invalid = previous with
+            {
+                Org = "Replacement",
+                Repositories =
+                [
+                    new RepositorySnapshot(
+                        "replacement",
+                        "https://example.test/replacement",
+                        false,
+                        [],
+                        [],
+                        new RepoMetrics(2, double.NaN, 3, 1, previous.RefreshedAt),
+                        null,
+                        null
+                    ),
+                ],
+            };
+
+            // Production JSON rejects the non-finite metric after opening the temp file.
+            // This exercises serialization failure, not cancellation or a flush/fsync fault.
+            var save = () => store.SaveAsync(invalid, ct);
+            _ = await save.Should().ThrowAsync<ArgumentException>();
+
+            _ = (await File.ReadAllBytesAsync(fixture.SnapshotPath, ct)).Should().Equal(committed);
+            _ = (await store.LoadAsync(ct)).Should().BeEquivalentTo(previous);
+            _ = File.Exists(fixture.SnapshotPath + ".tmp").Should().BeFalse();
+
+            var recovery = previous with
+            {
+                Org = "Recovered",
+                RefreshedAt = previous.RefreshedAt + Duration.FromHours(1),
+            };
+            await store.SaveAsync(recovery, ct);
+            _ = (await store.LoadAsync(ct)).Should().BeEquivalentTo(recovery);
+            _ = File.Exists(fixture.SnapshotPath + ".tmp").Should().BeFalse();
+        });
+    }
+
+    [Fact]
     public async Task SaveAsync_should_preserve_the_existing_snapshot_and_remove_temp_file_when_cancelled()
     {
         var path = Path.Join(Path.GetTempPath(), $"{Guid.NewGuid()}.json");

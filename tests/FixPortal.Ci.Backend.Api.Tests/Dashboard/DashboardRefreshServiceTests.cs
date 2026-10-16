@@ -469,31 +469,70 @@ public class DashboardRefreshServiceTests
     [Fact]
     public async Task PersistAndPublishAsync_updates_live_state_even_when_persistence_fails()
     {
-        var store = Substitute.For<IDashboardSnapshotStore>();
-        _ = store
-            .SaveAsync(Arg.Any<DashboardSnapshot>(), Arg.Any<CancellationToken>())
-            .ThrowsAsync(new IOException("disk full"));
-        var state = new DashboardSnapshotState();
-        var snapshot = new DashboardSnapshot(
-            Instant.FromUtc(2026, 5, 30, 12, 0),
-            "FixPortal",
-            [Repo("a", (SignalState.Success, "success"))],
-            [],
-            null,
-            []
-        );
+        using var ceiling = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        ceiling.CancelAfter(TimeSpan.FromSeconds(30));
+        var ct = ceiling.Token;
+        await OwnedSnapshotDirectory.RunAsync(async fixture =>
+        {
+            var store = new FileDashboardSnapshotStore(
+                fixture.SnapshotPath,
+                "same-filters",
+                NullLogger<FileDashboardSnapshotStore>.Instance
+            );
+            var previous = new DashboardSnapshot(Instant.FromUtc(2026, 5, 30, 12, 0), "Previous", [], [], null);
+            await store.SaveAsync(previous, ct);
+            var committed = await File.ReadAllBytesAsync(fixture.SnapshotPath, ct);
+            var state = new DashboardSnapshotState();
+            state.Update(previous, previous);
+            var snapshot = previous with
+            {
+                Org = "Replacement",
+                Repositories =
+                [
+                    Repo("a", (SignalState.Success, "success")) with
+                    {
+                        Metrics = new RepoMetrics(2, double.NaN, 3, 1, previous.RefreshedAt),
+                    },
+                ],
+            };
+            var publicSnapshot = previous with { Org = "Public replacement" };
 
-        await DashboardRefreshService.PersistAndPublishAsync(
-            store,
-            state,
-            snapshot,
-            snapshot,
-            persist: true,
-            logger: NullLogger<DashboardRefreshService>.Instance,
-            CancellationToken.None
-        );
+            await DashboardRefreshService.PersistAndPublishAsync(
+                store,
+                state,
+                snapshot,
+                publicSnapshot,
+                persist: true,
+                NullLogger<DashboardRefreshService>.Instance,
+                ct
+            );
 
-        _ = state.Current.Should().BeSameAs(snapshot);
+            _ = state.Current.Should().BeSameAs(snapshot);
+            _ = state.Public.Should().BeSameAs(publicSnapshot);
+            _ = (await File.ReadAllBytesAsync(fixture.SnapshotPath, ct)).Should().Equal(committed);
+            _ = (await store.LoadAsync(ct)).Should().BeEquivalentTo(previous);
+            _ = File.Exists(fixture.SnapshotPath + ".tmp").Should().BeFalse();
+
+            var recovery = previous with
+            {
+                Org = "Recovered",
+                RefreshedAt = previous.RefreshedAt + Duration.FromHours(1),
+            };
+            var publicRecovery = recovery with { Org = "Public recovery" };
+            await DashboardRefreshService.PersistAndPublishAsync(
+                store,
+                state,
+                recovery,
+                publicRecovery,
+                persist: true,
+                NullLogger<DashboardRefreshService>.Instance,
+                ct
+            );
+            _ = state.Current.Should().BeSameAs(recovery);
+            _ = state.Public.Should().BeSameAs(publicRecovery);
+            _ = (await store.LoadAsync(ct)).Should().BeEquivalentTo(recovery);
+            _ = File.Exists(fixture.SnapshotPath + ".tmp").Should().BeFalse();
+        });
     }
 
     [Fact]
