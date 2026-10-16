@@ -3,7 +3,7 @@
 
 # FixPortal CI Dashboard — Backend API
 
-> The backend for an **org-wide** CI/CD status board. Point it at a
+> The backend for an **org-wide GitHub dashboard**. Point it at a
 > GitHub org and it auto-discovers repositories and workflows, optionally narrows
 > the sweep by repository-name or GitHub-topic filters, polls the GitHub Actions
 > API server-side, and exposes a single snapshot of build, deploy, package, PR,
