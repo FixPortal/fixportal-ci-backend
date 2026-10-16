@@ -305,7 +305,7 @@ public sealed class ReviewSignalWorkerGatingTests : IDisposable
 // 2-4 unit tests only exercise separately — the null-vs-zero alerts
 // conversion, the needsAlerts gate, and the excluded-authors skip — by driving
 // the real ReviewSignalEnrichmentWorker over a scripted HttpMessageHandler.
-public class ReviewSignalEnrichmentWorkerCollectTests
+public partial class ReviewSignalEnrichmentWorkerCollectTests
 {
     private const string RepoName = "repo-a";
 
