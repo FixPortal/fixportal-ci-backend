@@ -7,6 +7,7 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.HostedServices;
 public sealed class DashboardRefreshWorker(
     DashboardRefreshService refreshService,
     IOptions<DashboardOptions> options,
+    TimeProvider timeProvider,
     ILogger<DashboardRefreshWorker> logger
 ) : BackgroundService
 {
@@ -14,7 +15,7 @@ public sealed class DashboardRefreshWorker(
     {
         // Cold-start restore happens in SnapshotRestoreService.StartingAsync,
         // before the server accepts traffic.
-        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(options.Value.RefreshSeconds));
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(options.Value.RefreshSeconds), timeProvider);
         await RefreshSafelyAsync(stoppingToken);
 
         while (await timer.WaitForNextTickAsync(stoppingToken))
