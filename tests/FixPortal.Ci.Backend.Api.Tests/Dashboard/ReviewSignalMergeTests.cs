@@ -58,7 +58,7 @@ public class ReviewSignalMergeTests
     {
         var merged = DashboardRefreshService.ApplyReviewSignals(
             [Pr(181, HeadB)],
-            new Dictionary<int, CachedReviewSignals> { [181] = Cached(HeadA) }
+            new Dictionary<int, CachedReviewSignals> { [181] = Cached() }
         );
 
         _ = merged[0]
@@ -508,7 +508,8 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
     public async Task A_transient_alert_failure_keeps_the_pr_watermark_dirty_for_retry()
     {
         var handler = new RoutingHandler(FactsJson("chris", true), HttpStatusCode.OK, "[]");
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
@@ -537,10 +538,10 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
 
         var first =
             (Task<IReadOnlyDictionary<int, CachedReviewSignals>?>)
-                collect!.Invoke(worker, [repo, TestContext.Current.CancellationToken])!;
+                collect.Invoke(worker, [repo, TestContext.Current.CancellationToken])!;
         var firstResult = await first;
         _ = firstResult.Should().ContainKey(181);
-        cache.Update(RepoName, firstResult!);
+        cache.Update(RepoName, firstResult);
         _ = handler.GraphQlCalls.Should().Be(1);
 
         handler.PullsJson = OpenPullsJson.Replace("2026-01-02", "2026-01-03", StringComparison.Ordinal);
@@ -602,7 +603,8 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
             StringComparison.Ordinal
         );
         var handler = new RoutingHandler(oldHeadFacts, HttpStatusCode.OK, "[]");
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
         var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
@@ -674,7 +676,8 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
     public async Task Merge_state_fetch_preserves_the_cache_when_the_GraphQL_reserve_is_breached()
     {
         var handler = new RoutingHandler("{}", HttpStatusCode.OK, "[]");
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
         var client = new GitHubOrgClient(
             http,
@@ -731,7 +734,8 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
             }}
             """;
         var handler = new RoutingHandler(mergeStateWithBudget, HttpStatusCode.OK, "[]");
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
         var client = new GitHubOrgClient(
             http,
@@ -774,7 +778,8 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
         const string dataless = """{"data":null}""";
 
         var handler = new RoutingHandler(withBudget, HttpStatusCode.OK, "[]");
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var client = new GitHubOrgClient(
             http,
             Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" }),

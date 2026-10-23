@@ -744,10 +744,11 @@ public sealed class GitHubOrgClient(
     )
     {
         var path = $"repos/{_gitHub.Owner}/{repo}/pulls/{pullNumber}/merge";
-        using var request = new HttpRequestMessage(HttpMethod.Put, path)
-        {
-            Content = JsonContent.Create(new { merge_method = "rebase", sha = headSha }, options: SerializerOptions),
-        };
+        using var request = new HttpRequestMessage(HttpMethod.Put, path);
+        request.Content = JsonContent.Create(
+            new { merge_method = "rebase", sha = headSha },
+            options: SerializerOptions
+        );
         await AddStandardHeadersAsync(request, ct);
 
         using var response = await httpClient.SendAsync(request, ct);
@@ -1083,6 +1084,7 @@ public sealed class GitHubOrgClient(
     /// All string sets are case-insensitive so a configured BotLogin cannot miss on
     /// casing alone (GitHub logins are case-preserving but not case-sensitive).
     /// </summary>
+    /// <param name="pull">The GraphQL pull-request node to flatten.</param>
     /// <param name="headFirstSeenAt">
     /// When the enrichment worker first observed the current head SHA, scoping the
     /// issue-comment channel (see CollectHeadCommentAuthors). Null scopes that channel

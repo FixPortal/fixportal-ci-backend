@@ -60,7 +60,8 @@ public class GitHubETagCachingTests
     {
         var store = new GitHubETagStore();
         var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Ok(PullBody(1, "one"), "W/\"abc\"")]));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var client = CreateClient(http, store);
 
         var prs = await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
@@ -80,7 +81,8 @@ public class GitHubETagCachingTests
                 new HttpResponseMessage(HttpStatusCode.NotModified),
             ])
         );
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var client = CreateClient(http, store);
 
         _ = await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);
@@ -97,7 +99,8 @@ public class GitHubETagCachingTests
         var handler = new ScriptedHandler(
             new Queue<HttpResponseMessage>([Ok(PullBody(1, "old"), "W/\"v1\""), Ok(PullBody(2, "new"), "W/\"v2\"")])
         );
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var client = CreateClient(http, store);
 
         _ = await client.ListOpenPullRequestsAsync("repo", CancellationToken.None);

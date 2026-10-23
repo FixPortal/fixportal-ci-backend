@@ -630,6 +630,7 @@ public sealed class DashboardRefreshService(
             // Null-tolerant: a snapshot restored from a pre-PR on-disk file
             // deserializes PullRequests to null and can be reintroduced via
             // MergeWithPrevious for a degraded repo. Metrics is already guarded below.
+            // ReSharper disable once ConditionIsAlwaysTrueOrFalseAccordingToNullableAPIContract
             new SummaryCount("open-prs", repos.Sum(r => r.PullRequests is null ? 0 : r.PullRequests.Count)),
             new SummaryCount(
                 "nloc-fixportal",

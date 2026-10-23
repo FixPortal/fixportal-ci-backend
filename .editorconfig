@@ -92,3 +92,11 @@ resharper_not_accessed_positional_property_global_highlighting = none
 # so making them get-only would silently stop the values binding at all.
 [src/FixPortal.Ci.Backend.Api/{Ide/IdeIntegrationOptions,Dashboard/Configuration/MergeStateOptions}.cs]
 resharper_auto_property_can_be_made_get_only_global_highlighting = none
+
+# Test lambdas that capture a `using var` (an HttpClient, a host, a scoped provider) are
+# only ever invoked and awaited inside that scope: Should().Throw/NotThrow and Task.Run
+# bodies run to completion before the declaring method returns. The inspection cannot see
+# that the delegate does not outlive the variable, so it is silenced for tests only.
+# Production code keeps the inspection.
+[tests/**/*.cs]
+resharper_access_to_disposed_closure_highlighting = none

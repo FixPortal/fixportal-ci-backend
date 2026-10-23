@@ -52,7 +52,7 @@ public class GitHubMergedPrTests
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);
 
         _ = result.Should().NotBeNull();
-        _ = result!.Number.Should().Be(42);
+        _ = result.Number.Should().Be(42);
         _ = result.Repo.Should().Be("repo");
         _ = handler.RequestUris.Should().HaveCount(1);
         _ = handler.RequestUris[0].AbsolutePath.Should().EndWith("search/issues");
@@ -81,7 +81,7 @@ public class GitHubMergedPrTests
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);
 
         _ = result.Should().NotBeNull();
-        _ = result!.Number.Should().Be(20);
+        _ = result.Number.Should().Be(20);
         _ = result.Author.Should().Be("bob");
         _ = handler.RequestUris.Should().HaveCount(1);
     }
@@ -136,13 +136,14 @@ public class GitHubMergedPrTests
         );
         var page2 = SearchPage((42, 2500L, 2980L));
         var handler = new RecordingHandler(page1, page2);
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var client = NewClient(http);
 
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);
 
         _ = result.Should().NotBeNull();
-        _ = result!.Number.Should().Be(42);
+        _ = result.Number.Should().Be(42);
         _ = result.MergedAt.Should().Be(At(2500));
         _ = handler.RequestUris.Should().HaveCount(2); // both pages fetched
         _ = handler.RequestUris[1].Query.Should().Contain("page=2");
@@ -164,7 +165,8 @@ public class GitHubMergedPrTests
         );
         var unreachablePage2 = SearchPage((999, 4990L, 4980L));
         var handler = new RecordingHandler(page1, unreachablePage2);
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var client = NewClient(http);
 
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);
@@ -183,7 +185,8 @@ public class GitHubMergedPrTests
         // not the dominate-the-window termination.
         var page1 = SearchPage((7, 500L, 1000L));
         var handler = new RecordingHandler(page1, SearchPage((8, 2000L, 2000L)));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var client = NewClient(http);
 
         var result = await client.GetLastMergedPullRequestAsync("repo", CancellationToken.None);

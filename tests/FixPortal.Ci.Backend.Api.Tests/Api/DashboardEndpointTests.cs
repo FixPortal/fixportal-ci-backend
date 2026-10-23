@@ -786,7 +786,7 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
 
         var cacheControl = response.Headers.CacheControl;
         _ = cacheControl.Should().NotBeNull();
-        _ = cacheControl!.Private.Should().BeTrue();
+        _ = cacheControl.Private.Should().BeTrue();
         _ = cacheControl.NoStore.Should().BeTrue();
         _ = response.Headers.Vary.Should().ContainSingle().Which.Should().Be("X-Admin-Key");
     }
@@ -881,10 +881,8 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     {
         var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
         var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/dashboard/merge")
-        {
-            Content = new StringContent(body, Encoding.UTF8, "application/json"),
-        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/dashboard/merge");
+        request.Content = new StringContent(body, Encoding.UTF8, "application/json");
         if (adminKey is not null)
         {
             request.Headers.Add("X-Admin-Key", adminKey);
@@ -986,10 +984,8 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
     {
         var handler = new MergeHandler(HttpStatusCode.OK, """{"merged":true,"sha":"abc123"}""");
         var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler);
-        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/dashboard/merge")
-        {
-            Content = JsonContent.Create(new { repo = "public-repo", pullNumber = 42 }),
-        };
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/dashboard/merge");
+        request.Content = JsonContent.Create(new { repo = "public-repo", pullNumber = 42 });
         request.Headers.Add("X-Admin-Key", AdminKey);
 
         var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
@@ -1232,10 +1228,8 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         client.DefaultRequestHeaders.Add("X-Admin-Key", AdminKey);
         const string newerHead = "abcdef0123456789abcdef0123456789abcdef01";
         using var refreshHandler = new RefreshedHeadHandler(newerHead);
-        using var refreshHttp = new HttpClient(refreshHandler, disposeHandler: false)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        using var refreshHttp = new HttpClient(refreshHandler, disposeHandler: false);
+        refreshHttp.BaseAddress = new Uri("https://api.github.com/");
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "fixture-token" });
         var dashboardOptions = Options.Create(
             new DashboardOptions { SnapshotPath = "unused-fixture.json", RefreshSeconds = 60 }
@@ -1411,8 +1405,8 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
         }
 
         _ = handler.MaxConcurrency.Should().Be(1);
-        _ = firstResponse!.StatusCode.Should().Be(HttpStatusCode.OK);
-        _ = secondResponse!.StatusCode.Should().Be(HttpStatusCode.OK);
+        _ = firstResponse.StatusCode.Should().Be(HttpStatusCode.OK);
+        _ = secondResponse.StatusCode.Should().Be(HttpStatusCode.OK);
     }
 
     [Fact]

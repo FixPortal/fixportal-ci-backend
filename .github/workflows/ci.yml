@@ -54,6 +54,22 @@ jobs:
       - name: Build
         run: dotnet build FixPortal.Ci.Backend.slnx --configuration Release --no-restore
 
+      - name: Inspect code (ReSharper)
+        # --dotnetcoresdk is required: without it InspectCode picks a Visual Studio MSBuild
+        # where one exists and fails with "Can't connect to protocol model". The tool exits 0
+        # whatever it finds, so the verdict is the SARIF result count, not the exit code.
+        run: |
+          set -euo pipefail
+          sarif="$RUNNER_TEMP/inspectcode.sarif"
+          dotnet jb inspectcode FixPortal.Ci.Backend.slnx --output="$sarif" --format=Sarif --severity=WARNING --no-build --properties:Configuration=Release --dotnetcoresdk="$(dotnet --version)"
+          # Fail closed: only exactly one structurally valid SARIF 2.1.0 document can count as zero findings.
+          count="$(jq -es 'if length == 1 and (.[0].version == "2.1.0") and (.[0].runs | type) == "array" and (.[0].runs | length) > 0 and all(.[0].runs[]; (.tool.driver.name | type) == "string" and (.results | type) == "array" and (.invocations | type) == "array" and (.invocations | length) > 0 and all(.invocations[]; .executionSuccessful == true)) then [.[0].runs[].results[]] | length else error("invalid SARIF: need one document, version 2.1.0 and, per run, tool.driver.name, a results array and successful invocations") end' "$sarif")"
+          case "$count" in '' | *[!0-9]*) echo "::error::InspectCode report did not yield a finding count"; exit 1 ;; esac
+          if [ "$count" -ne 0 ]; then
+            jq -r '.runs[].results[] | "\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine // 0): \(.ruleId): \(.message.text)"' "$sarif"
+            echo "::error::InspectCode reported $count finding(s)"
+            exit 1
+          fi
       # Coverage is collected by wrapping the existing test command, not by asking the test
       # platform for it. dotnet-coverage attaches to the process, so it needs no package
       # reference in the test project and stays off the collector path entirely --

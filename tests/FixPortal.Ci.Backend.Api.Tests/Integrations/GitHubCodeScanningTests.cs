@@ -74,7 +74,7 @@ public class GitHubCodeScanningTests
         var counts = await CreateClient(http).GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
 
         _ = counts.Should().NotBeNull();
-        _ = counts![181].Should().Be(2);
+        _ = counts[181].Should().Be(2);
         _ = counts[179].Should().Be(1);
         _ = counts.Should().HaveCount(2);
     }
@@ -97,7 +97,7 @@ public class GitHubCodeScanningTests
         var counts = await CreateClient(http).GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
 
         _ = counts.Should().NotBeNull();
-        _ = counts![181].Should().Be(1);
+        _ = counts[181].Should().Be(1);
         _ = handler.Urls.Should().HaveCount(2);
         _ = handler.Urls[1].Should().Contain("page=2");
     }
@@ -112,7 +112,8 @@ public class GitHubCodeScanningTests
         var handler = new ScriptedHandler(
             new Queue<HttpResponseMessage>([JsonOk(firstPage), new HttpResponseMessage(HttpStatusCode.NotFound)])
         );
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
 
         var counts = await CreateClient(http).GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
 
@@ -160,7 +161,7 @@ public class GitHubCodeScanningTests
         _ = await client.GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
 
         _ = recovered.Should().NotBeNull();
-        _ = recovered![181].Should().Be(1);
+        _ = recovered[181].Should().Be(1);
         _ = logger.Entries.Count(e => e.Level == LogLevel.Warning).Should().Be(2);
         _ = logger
             .Entries.Should()

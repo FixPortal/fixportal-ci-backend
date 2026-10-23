@@ -6,6 +6,9 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 public sealed class AdminOptions
 {
     public string AdminKey { get; init; } = "";
+
+    // Read by DashboardEndpoints; only the init accessor is reached by the configuration binder, not by code.
+    // ReSharper disable once UnusedAutoPropertyAccessor.Global
     public bool ExposePrivateToGuests { get; init; }
 
     // Null-tolerant: an explicitly null bound value must produce the configured

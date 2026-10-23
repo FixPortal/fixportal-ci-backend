@@ -184,6 +184,8 @@ public sealed class DashboardRefreshWorkerTests : IDisposable
             .Returns(call =>
             {
                 savedSnapshot = call.Arg<DashboardSnapshot>();
+                // Intentional: the counter is mutated from the worker thread and read with Volatile.Read.
+                // ReSharper disable once AccessToModifiedClosure
                 Interlocked.Increment(ref saveCount);
                 saved.TrySetResult();
                 return Task.CompletedTask;

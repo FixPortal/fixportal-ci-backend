@@ -1,5 +1,4 @@
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
-using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Options;

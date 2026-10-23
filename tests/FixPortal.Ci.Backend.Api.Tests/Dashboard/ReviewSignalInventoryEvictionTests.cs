@@ -38,7 +38,8 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
         deadline.CancelAfter(TimeSpan.FromSeconds(30));
         var ct = deadline.Token;
         var handler = new InventoryEvictionHandler { FailAlerts = failFirst };
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var dashboard = Options.Create(new DashboardOptions { SnapshotPath = "unused", RefreshSeconds = 20 });
         var github = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "test-only" });
         var client = new GitHubOrgClient(http, github, dashboard, new GitHubETagStore());

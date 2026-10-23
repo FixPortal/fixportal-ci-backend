@@ -629,7 +629,7 @@ public sealed class IdeIntegrationEnvironmentVariableTests(WebApplicationFactory
             var optionsType = typeof(Program).Assembly.GetType("FixPortal.Ci.Backend.Api.Ide.IdeIntegrationOptions");
 
             _ = optionsType.Should().NotBeNull();
-            var closedOptions = typeof(IOptions<>).MakeGenericType(optionsType!);
+            var closedOptions = typeof(IOptions<>).MakeGenericType(optionsType);
             var options = localFactory.Services.GetRequiredService(closedOptions);
             var value = options.GetType().GetProperty("Value")!.GetValue(options)!;
 
