@@ -111,48 +111,14 @@ public class DashboardRefreshServiceTransportFailureTests
 
             if (path.Contains("/orgs/", StringComparison.Ordinal) && path.EndsWith("/repos", StringComparison.Ordinal))
             {
-                // The shutdown case has exactly one repo, so nothing else in the batch can
-                // observe the cancelled host token and mask whether the filter let it through.
-                if (hostCancel is not null)
-                {
-                    return Task.FromResult(
-                        Ok(
-                            """[{"name":"flaky","html_url":"https://github.com/FixPortal/flaky","private":false,"archived":false,"default_branch":"main"}]"""
-                        )
-                    );
-                }
-
-                return Task.FromResult(
-                    Ok(
-                        """
-                        [
-                          {"name":"flaky","html_url":"https://github.com/FixPortal/flaky","private":false,"archived":false,"default_branch":"main"},
-                          {"name":"healthy","html_url":"https://github.com/FixPortal/healthy","private":false,"archived":false,"default_branch":"main"}
-                        ]
-                        """
-                    )
-                );
+                return Task.FromResult(Ok(RepoListJson()));
             }
 
             if (path.EndsWith("/actions/workflows", StringComparison.Ordinal))
             {
-                if (flaky && fault == Fault.Timeout)
+                if (flaky)
                 {
-                    // Shutdown variant: the HOST token is cancelled, then the request observes it.
-                    if (hostCancel is not null)
-                    {
-                        hostCancel.Cancel();
-                        throw new TaskCanceledException("host shutdown", null, cancellationToken);
-                    }
-
-                    // Timeout variant: HttpClient surfaces a timeout as a TaskCanceledException
-                    // while no token has been cancelled.
-                    throw new TaskCanceledException("The request timed out.", new TimeoutException());
-                }
-
-                if (flaky && fault == Fault.TransportError)
-                {
-                    throw new HttpRequestException("Connection refused.");
+                    ThrowConfiguredFault(cancellationToken);
                 }
 
                 return Task.FromResult(
@@ -175,6 +141,40 @@ public class DashboardRefreshServiceTransportFailureTests
             }
 
             return Task.FromResult(Ok("[]"));
+        }
+
+        // The shutdown case has exactly one repo, so nothing else in the batch can
+        // observe the cancelled host token and mask whether the filter let it through.
+        private string RepoListJson() =>
+            hostCancel is not null
+                ? """[{"name":"flaky","html_url":"https://github.com/FixPortal/flaky","private":false,"archived":false,"default_branch":"main"}]"""
+                : """
+                    [
+                      {"name":"flaky","html_url":"https://github.com/FixPortal/flaky","private":false,"archived":false,"default_branch":"main"},
+                      {"name":"healthy","html_url":"https://github.com/FixPortal/healthy","private":false,"archived":false,"default_branch":"main"}
+                    ]
+                    """;
+
+        private void ThrowConfiguredFault(CancellationToken cancellationToken)
+        {
+            if (fault == Fault.Timeout)
+            {
+                // Shutdown variant: the HOST token is cancelled, then the request observes it.
+                if (hostCancel is not null)
+                {
+                    hostCancel.Cancel();
+                    throw new TaskCanceledException("host shutdown", null, cancellationToken);
+                }
+
+                // Timeout variant: HttpClient surfaces a timeout as a TaskCanceledException
+                // while no token has been cancelled.
+                throw new TaskCanceledException("The request timed out.", new TimeoutException());
+            }
+
+            if (fault == Fault.TransportError)
+            {
+                throw new HttpRequestException("Connection refused.");
+            }
         }
 
         private static HttpResponseMessage Ok(string json) =>

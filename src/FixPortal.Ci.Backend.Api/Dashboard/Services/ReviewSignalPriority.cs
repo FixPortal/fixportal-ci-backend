@@ -47,6 +47,7 @@ public static class ReviewSignalPriority
     /// <param name="observedAt">When each pull request was last fetched.</param>
     /// <param name="refreshInterval">How stale a non-terminal pill may get.</param>
     /// <param name="now">Injected clock reading.</param>
+    /// <param name="reconcileInterval">Overrides the terminal-pill reconcile interval; null uses the default.</param>
     public static IReadOnlyList<int> SelectDue(
         IReadOnlyDictionary<int, CachedReviewSignals> signalsByPr,
         IReadOnlyDictionary<int, Instant> observedAt,

@@ -612,7 +612,8 @@ public class GitHubReviewFactsTransportTests
             {"data":{"rateLimit":{"cost":9,"remaining":11,"resetAt":"2026-08-02T21:00:00Z"},"repository":{}}}
             """;
         var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(firstChunk)]));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var observed = new List<GraphQlRateLimit?>();
 
         var batch = await CreateClient(http)
@@ -646,7 +647,8 @@ public class GitHubReviewFactsTransportTests
             }
             """;
         var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(refused), Json(recovered)]));
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var observed = new List<GraphQlRateLimit?>();
 
         var batch = await CreateClient(http)

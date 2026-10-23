@@ -130,10 +130,8 @@ public class MergeStateEnrichmentWorkerTests
         var cache = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>();
         cache.Update("repo-a", Seeded());
         var time = new TrackingFakeTimeProvider();
-        using var http = new HttpClient(handler, disposeHandler: false)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        using var http = new HttpClient(handler, disposeHandler: false);
+        http.BaseAddress = new Uri("https://api.github.com/");
         using var worker = NewWorker(http, cache, time);
 
         var converged = await RunColdStartAsync(worker, time);
@@ -157,10 +155,8 @@ public class MergeStateEnrichmentWorkerTests
         var previous = Seeded();
         cache.Update("repo-b", previous);
         var time = new TrackingFakeTimeProvider();
-        using var http = new HttpClient(handler, disposeHandler: false)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        using var http = new HttpClient(handler, disposeHandler: false);
+        http.BaseAddress = new Uri("https://api.github.com/");
         using var worker = NewWorker(http, cache, time);
 
         var converged = await RunColdStartAsync(worker, time);
@@ -214,10 +210,8 @@ public class MergeStateEnrichmentWorkerTests
         var previous = Seeded();
         cache.Update("repo-a", previous);
         var time = new TrackingFakeTimeProvider();
-        using var http = new HttpClient(handler, disposeHandler: false)
-        {
-            BaseAddress = new Uri("https://api.github.com/"),
-        };
+        using var http = new HttpClient(handler, disposeHandler: false);
+        http.BaseAddress = new Uri("https://api.github.com/");
         using var worker = NewWorker(http, cache, time);
 
         var converged = await RunColdStartAsync(worker, time);

@@ -22,7 +22,8 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
     public async Task Cached_unchanged_pull_request_uses_current_roster_and_repository_secret_count(bool removeReviewer)
     {
         var handler = new CarryOverHandler();
-        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
         var dashboard = Options.Create(new DashboardOptions { SnapshotPath = "unused", RefreshSeconds = 20 });
         var github = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "test-only" });
         var client = new GitHubOrgClient(http, github, dashboard, new GitHubETagStore());

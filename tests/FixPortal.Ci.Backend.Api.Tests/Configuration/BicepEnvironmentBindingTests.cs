@@ -93,7 +93,7 @@ public class BicepEnvironmentBindingTests
 
             var expected = SampleFor(entry);
             Convert
-                .ToString(property!.GetValue(bound), CultureInfo.InvariantCulture)
+                .ToString(property.GetValue(bound), CultureInfo.InvariantCulture)
                 .Should()
                 .BeEquivalentTo(expected, $"{entry.Name} must reach {type.Name}.{property.Name}");
         }
@@ -118,7 +118,7 @@ public class BicepEnvironmentBindingTests
             .Order()
             .ToList();
         indexes.Should().Equal(Enumerable.Range(0, indexes.Count), "reviewer indexes must be contiguous from 0");
-        options!.Reviewers.Should().HaveCount(indexes.Count);
+        options.Reviewers.Should().HaveCount(indexes.Count);
 
         // The roster the estate ships, pinned by name and by the flags its behaviour depends on. A
         // reviewer re-indexed, renamed or stripped of a flag in the template changes what the board
@@ -150,7 +150,7 @@ public class BicepEnvironmentBindingTests
             property.Should().NotBeNull($"{entry.Name} must name a ReviewerOptions property");
 
             Convert
-                .ToString(property!.GetValue(reviewer), CultureInfo.InvariantCulture)
+                .ToString(property.GetValue(reviewer), CultureInfo.InvariantCulture)
                 .Should()
                 .BeEquivalentTo(entry.Literal, $"{entry.Name} must bind to ReviewerOptions.{property.Name}");
         }

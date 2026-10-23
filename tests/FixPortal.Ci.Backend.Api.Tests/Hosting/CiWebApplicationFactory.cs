@@ -33,7 +33,7 @@ public class CiWebApplicationFactory : WebApplicationFactory<Program>
     }
 
     /// <summary>
-    /// Runs after the host exists and before <see cref="IHost.Start"/>. Tests override this
+    /// Runs after the host exists and before <c>Start</c>. Tests override this
     /// to wait until a startup failure has already disposed the provider.
     /// </summary>
     protected virtual void OnHostBuilt(IHost host, StartupFailureCapture capture) { }

@@ -232,7 +232,7 @@ public class LizardScannerTests
         _ = scrub.Should().NotBeNull("LizardScanner.Scrub must still exist as the redaction call site");
 
         var scrubbed = (string)
-            scrub!.Invoke(
+            scrub.Invoke(
                 scanner,
                 [$"fatal: authentication failed using token {token}; active {installationToken}", installationToken]
             )!;
