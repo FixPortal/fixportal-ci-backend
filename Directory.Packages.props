@@ -20,6 +20,6 @@
     <!-- Scalar -->
     <PackageVersion Include="Scalar.AspNetCore" Version="2.18.0" />
     <!-- OpenApi vuln override -->
-    <PackageVersion Include="Microsoft.OpenApi" Version="2.12.2" />
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.13.0" />
   </ItemGroup>
 </Project>
