@@ -45,6 +45,9 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 | `Dashboard:MergedPrRefreshSeconds` | `150` | Merged-PR cadence (2.5 min). |
 | `Dashboard:JobLanes` | deploys, packages | Named lanes that surface matching workflow **jobs** (by name pattern) as their own status chips. |
 | `ReviewSignals:Reviewers` | *(empty)* | Per-reviewer status pills (CodeRabbit, Gitar, CodeQL, …) on each open PR. Empty by default — the feature is off and issues no GitHub requests until reviewers are configured. Full option reference: **[README.md § Review signals](README.md#review-signals-reviewsignals)**. |
+| `MergeState:Enabled` | `true` | Run the merge-state enrichment worker that backs the board's "ready to merge" filter. On by default, unlike review signals (`MergeStateOptions.cs:8-14`). |
+| `MergeState:RefreshSeconds` | `120` | Merge-state sweep cadence. Must be > 0, validated at startup (`MergeStateOptions.cs:23`, `:29`). The merge-state cache expires after 3x this value (`Program.cs:235-242`). |
+| `ReviewSignals:Enabled` / `ReviewSignals:RefreshSeconds` / `ReviewSignals:ReserveBudgetPoints` | `true` / `150` / `1000` | Master switch, cadence, and GraphQL points kept in reserve. See **[README.md § Review signals](README.md#review-signals-reviewsignals)**. |
 | `Cors:AllowedOrigins` | *(empty)* | Origins allowed to read the anonymous public snapshot; configure as `Cors__AllowedOrigins__0`, etc. The merge endpoint does not allow cross-origin browser requests. |
 | `Admin:AdminKey` / `IdeIntegration:ApiKey` | *(empty)* | Shared secrets for the private admin snapshot and merge endpoint, and for IDE v1 endpoints. Keep them out of source. |
 
@@ -138,7 +141,13 @@ server-side in the background collector.
 `X-Admin-Key`, accepts one pull request at a time, validates the repository
 against the current dashboard snapshot, and always requests a rebase merge. Call
 it through a same-origin host/backend proxy that adds the shared key server-side;
-never expose that key to browser JavaScript.
+never expose that key to browser JavaScript. Its status codes (`200`, `400`, `401`,
+`404`, `409`, `502`, `503`), the `Admin:AdminKey` (>= 16 characters when set) and
+`IdeIntegration:ApiKey` (>= 32 characters, unpadded, distinct from the admin key) rules,
+and the snapshot contract fixtures are documented in the README under
+[Merge endpoint responses](README.md#merge-endpoint-responses). The Container App is
+pinned to one replica (`deploy/bicep/main.bicep:288-291`); do not raise `maxReplicas`,
+because the snapshot and merge gates are in-process state.
 
 > **Rate limits & conditional requests.** A fine-grained PAT allows 5000 REST
 > requests/hour. The collector caches an ETag per URL and re-validates with
@@ -166,17 +175,24 @@ then exits at startup logging
 `GitHub:Owner must be configured (e.g. set GitHub__Owner).` Running the image directly,
 without that env mapping, the default applies and no owner need be supplied.
 
-The credential beside it depends on the mode: `GITHUB_TOKEN` in PAT mode;
-`GITHUBAPP__APPID` and `GITHUBAPP__PRIVATEKEYPEM` in App mode, where `GITHUB_TOKEN` is
-ignored. The frontend starts either way, so a dead backend behind a live UI means the
-configuration is incomplete.
+The credential beside it depends on the mode. The shipped compose file is **PAT-only**:
+its `backend` service forwards just `GitHub__Token` and `GitHub__Owner`
+(`docker-compose.yml:9-10`) and has no `env_file`, so `.env` values reach the container
+only when the compose file references them as `${NAME}`. For App mode, add
+`GitHubApp__AppId: ${GITHUBAPP_APPID}`, `GitHubApp__PrivateKeyPem: ${GITHUBAPP_PRIVATEKEYPEM}`
+and, optionally, `GitHubApp__InstallationId: ${GITHUBAPP_INSTALLATIONID}` to the
+`backend.environment` block, and define those variables in `.env` (see the commented
+block in `.env.example`). `GitHub__Token` must still be non-empty to start
+(`Program.cs:33`) but is ignored for GitHub calls once the App is selected. The frontend
+starts either way, so a dead backend behind a live UI means the configuration is
+incomplete.
 
 The simplest route is a `.env` file, which Compose auto-loads from the project
 directory:
 
 ```powershell
 Copy-Item .env.example .env
-# Edit .env: set GITHUB_TOKEN and GITHUB_OWNER
+# Edit .env: set GITHUB_TOKEN and GITHUB_OWNER (PAT mode; see above for App mode)
 docker compose up -d
 ```
 
@@ -352,7 +368,10 @@ To rotate either:
 ## Validation
 
 1. The backend serves no board at `/`: it redirects to `https://www.fixportal.org/ci`
-   (`Program.cs:342`). Confirm the board renders there, or skip to step 2.
+   (`Program.cs:342`). Observed 2026-10-27: `curl -I https://ci.fixportal.org/` returned
+   `HTTP/1.1 301 Moved Permanently` with `location: https://www.fixportal.org/ci`, while
+   `https://ci.fixportal.org/api/dashboard/snapshot` returned `200` on the same host.
+   Confirm the board renders at the redirect target, or skip to step 2.
 2. Call the snapshot endpoint and check the status:
 
    ```

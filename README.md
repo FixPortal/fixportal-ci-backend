@@ -38,8 +38,19 @@ board keeps the last-known-good snapshot if a refresh fails rather than blanking
 A single deployable ASP.NET Core API. Background hosted services enrich an
 in-memory snapshot on independent cadences; the HTTP endpoint just hands out the
 latest snapshot. Non-API routes 301-redirect to the canonical board at
-`www.fixportal.org/ci`, where the board UI (any snapshot consumer, e.g. the
-open-source `@fix-portal/ci-frontend`) fetches this API cross-origin.
+`www.fixportal.org/ci` (`Program.cs:342`), where the board UI (any snapshot consumer,
+e.g. the open-source `@fix-portal/ci-frontend`) fetches this API cross-origin.
+
+Observed 2026-10-27 against the production host: `curl -I https://ci.fixportal.org/`
+answered `HTTP/1.1 301 Moved Permanently` with `server: Kestrel` and
+`location: https://www.fixportal.org/ci`, and
+`GET https://ci.fixportal.org/api/dashboard/snapshot` answered `200`. So
+`ci.fixportal.org` is the **API host**, not a board: its root redirects and only
+`/api/*` is served from it.
+
+The deployment runs a **single replica** (`minReplicas: 1`, `maxReplicas: 1`,
+`deploy/bicep/main.bicep:288-291`): the snapshot and merge gates live in process memory, so
+this service does not scale out.
 
 ```mermaid
 graph LR
@@ -49,12 +60,16 @@ graph LR
         MW["MetricsEnrichmentWorker (12h)<br/>Lizard NLOC / CCN"]
         PW["MergedPrEnrichmentWorker (150s)"]
         JW["JobLaneEnrichmentWorker ×N (150s)<br/>deploys / packages"]
+        RSW["ReviewSignalEnrichmentWorker (150s)<br/>review pills"]
+        MSW["MergeStateEnrichmentWorker (120s)<br/>PR merge state"]
         SNAP[("In-memory snapshot<br/>+ last-known-good file")]
         API["public snapshot + private admin API"]
         RW --> SNAP
         MW --> SNAP
         PW --> SNAP
         JW --> SNAP
+        RSW --> SNAP
+        MSW --> SNAP
         SNAP --> API
     end
     GH["GitHub API<br/>(App token or PAT)"]
@@ -63,6 +78,8 @@ graph LR
     MW -.clone.-> GH
     PW -.poll.-> GH
     JW -.poll.-> GH
+    RSW -.poll.-> GH
+    MSW -.poll.-> GH
     API -.admin rebase merge.-> GH
     API -.snapshot CORS.-> SPA
 ```
@@ -98,6 +115,24 @@ Both steps are required — the backend fails fast on startup if `GITHUB_TOKEN` 
 `GITHUB_OWNER` is unset, with `GitHub:Owner must be configured (e.g. set
 GitHub__Owner).` Compose auto-loads `.env` from the project directory; exported
 environment variables work equally well.
+
+**The shipped `docker-compose.yml` is PAT-only.** Its `backend` service forwards
+just `GitHub__Token` and `GitHub__Owner` (`docker-compose.yml:9-10`), and it has no
+`env_file`, so a `.env` entry reaches the container only if the compose file
+references it as `${NAME}`. To run App mode under Compose, add these lines to the
+`backend.environment` block and put the matching variables in `.env` (names are
+yours to choose; the keys on the left are the real settings, see
+`GitHubAppOptions.cs:27-41`):
+
+```yaml
+      GitHubApp__AppId: ${GITHUBAPP_APPID}
+      GitHubApp__PrivateKeyPem: ${GITHUBAPP_PRIVATEKEYPEM}
+      GitHubApp__InstallationId: ${GITHUBAPP_INSTALLATIONID}   # optional
+```
+
+`GITHUB_TOKEN` must still be set to a non-empty value, because startup validation
+requires `GitHub:Token` in every mode (`Program.cs:33`). A multi-line PEM may be
+written with literal `\n` sequences (`GitHubAppOptions.cs:35-39`).
 
 Open `http://localhost:8082` for the board. The backend snapshot API is at
 `http://localhost:5049/api/dashboard/snapshot`. Both ports are published on
@@ -219,6 +254,7 @@ values in deployment configuration, not `appsettings.json`, the same way as
 |---|---|---|
 | `ReviewSignals:Enabled` | `true` | Master switch. Even when `true`, the worker stays idle until `Reviewers` is non-empty. |
 | `ReviewSignals:RefreshSeconds` | `150` | Enrichment cadence, independent of `Dashboard:RefreshSeconds` — the pills refresh on their own schedule, not the 20 s board loop. The last-known-good cache expires after 3× this interval, so a persistently failing fetch drops to no pills rather than showing a stale pass. |
+| `ReviewSignals:ReserveBudgetPoints` | `1000` | GraphQL points left unspent for everything else on the same GitHub identity (the 5,000/hour budget is metered per user, so a PAT shares it with anyone running `gh`). A sweep that would dip below it skips repositories and logs a Warning; seeing that Warning means something has regressed. Must be `>= 0`; `0` disables the reserve (`ReviewSignalsOptions.cs:153-165`, validated at `:191-194`). |
 | `ReviewSignals:ExcludedAuthors` | `dependabot`, `dependabot[bot]`, `renovate`, `renovate[bot]` | Pull-request authors (matched case-insensitively) whose PRs carry no review signals at all. Both spellings of each bot ship by default: GraphQL reports a Bot node's login **without** the `[bot]` suffix, which is a REST-ism, so a suffix-only list would never match. |
 | `ReviewSignals:Reviewers` | *(empty)* | The reviewers to report — see below. |
 
@@ -230,6 +266,9 @@ Each entry in `Reviewers` is:
 | `BotLogin` | The reviewing bot's GitHub login. Required when `Source` is `ReviewThreads`; matched against unresolved review-thread authors and PR participants. |
 | `RequiredLabel` | When set, this reviewer only applies to pull requests carrying that label — how CodeRabbit is scoped to HIGH-tier PRs only. Absent means every pull request. |
 | `WaivedLabel` | When set, a pull request carrying that label stops waiting on this reviewer: `pending` becomes `disabled`. Only `pending` is relaxed — open findings still read `outstanding` — and only for `ReviewThreads` reviewers; a scanning source's `pending` means its endpoint was unreadable and stays visible. For an owner's deliberate waiver, e.g. a re-sync opened with `@coderabbitai ignore`; a label because applying one needs triage access, so an author cannot waive their own review. |
+| `WaivedBodyDirective` | When set, a pull request whose description contains this text (case-insensitive), written by an org owner or member, waives this reviewer exactly as `WaivedLabel` does: only `pending` relaxes, to `disabled`. For the reviewer's own opt-out directive, e.g. `@coderabbitai ignore`. Restricted to owners and members so an outside author cannot waive their own review. Default: unset (`ReviewSignalsOptions.cs:55-67`). |
+| `CommentsCountAsParticipation` | Default `false`. When `true`, an issue comment from `BotLogin` dated after the head commit counts as participation (for reviewers such as Gitar that announce a clean result as a plain comment). Requires a non-blank `BotLogin`, enforced at startup (`ReviewSignalsOptions.cs:69-78`, `:207-208`). See below. |
+| `CodeScanningCheckCountsAsParticipation` | Default `false`. When `true`, a successful code-scanning check on the head commit is itself evidence the reviewer ran (for GitHub Code Quality, which is silent on a clean pull request). Says "the scan ran", never "the scan was happy" (`ReviewSignalsOptions.cs:80-98`). See below. |
 | `Source` | `ReviewThreads` (default) reads unresolved review-thread authorship; `CodeScanning` reads open code-scanning alert counts on the PR's head ref instead (used for CodeQL) and ignores `BotLogin`; `SecretScanning` reads the repository's open secret-scanning alert count and likewise ignores `BotLogin`. |
 | `PublicOnly` | When `true`, the reviewer is omitted entirely on private repositories — no pill, and nothing for the ready-to-merge verdict to wait on. For GitHub's scanning products, which are paid on private repos and free on public ones. |
 
@@ -241,15 +280,20 @@ FixPortal's worked example, set via deployment configuration:
   "RefreshSeconds": 150,
   "ExcludedAuthors": [ "dependabot", "dependabot[bot]", "renovate", "renovate[bot]" ],
   "Reviewers": [
-    { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high", "WaivedLabel": "review-waived" },
+    { "Name": "CodeRabbit", "BotLogin": "coderabbitai", "RequiredLabel": "review-high", "WaivedLabel": "review-waived", "WaivedBodyDirective": "@coderabbitai ignore" },
     { "Name": "Gitar", "BotLogin": "gitar-bot", "CommentsCountAsParticipation": true },
     { "Name": "CodeQL", "Source": "CodeScanning", "PublicOnly": true },
+    { "Name": "Code Quality", "BotLogin": "github-code-quality", "CodeScanningCheckCountsAsParticipation": true, "PublicOnly": true },
     { "Name": "Secret Scanning", "Source": "SecretScanning", "PublicOnly": true }
   ]
 }
 ```
 
-The last two carry `PublicOnly` because GitHub's scanning products are paid on
+The `Reviewers` entries mirror `deploy/bicep/main.bicep:168-266` (reviewer indexes 0
+to 4). `Enabled`, `RefreshSeconds` and `ExcludedAuthors` are not set by the bicep;
+they come from the `appsettings.json` defaults shown in the table above.
+
+CodeQL, Code Quality and Secret Scanning carry `PublicOnly` because GitHub's scanning products are paid on
 private repositories and were switched off org-wide on 2026-08-04. Their
 endpoints answer 403/404 on a private repo, which this worker reads as
 `Pending` — a state such a repo can never leave, so every private pull request
@@ -347,7 +391,7 @@ dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-bu
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Backend container exits at startup with `OptionsValidationException: GitHub:Owner must be configured` (frontend stays up) | Under Compose, `GitHub__Owner: ${GITHUB_OWNER}` substitutes **empty** when the variable is unset, overriding the `FixPortal` default that ships in `appsettings.json` — so no `.env` in the project directory and nothing exported means no owner. Same for the mode's credential | `cp .env.example .env`, then fill in `GITHUB_OWNER` plus either `GITHUB_TOKEN` (PAT mode) or the `GITHUBAPP__*` settings (App mode), and `docker compose up -d` |
+| Backend container exits at startup with `OptionsValidationException: GitHub:Owner must be configured` (frontend stays up) | Under Compose, `GitHub__Owner: ${GITHUB_OWNER}` substitutes **empty** when the variable is unset, overriding the `FixPortal` default that ships in `appsettings.json` — so no `.env` in the project directory and nothing exported means no owner. Same for the mode's credential | `cp .env.example .env`, then fill in `GITHUB_OWNER` and `GITHUB_TOKEN` (required in every mode). App mode under Compose additionally needs the `GitHubApp__*` lines added to `docker-compose.yml` first (see [Quick start — Docker Compose](#quick-start--docker-compose-full-stack)); the shipped file forwards only `GitHub__Token` and `GitHub__Owner`. Then `docker compose up -d` |
 | Snapshot returns stale data after a workflow run | Refresh worker polls on a 20 s cadence; run completed between polls | Wait up to 20 s, or restart to force an immediate poll |
 | Snapshot endpoint returns `204 No Content` | No snapshot yet — the first poll has not completed, or every poll has failed | Allow ~5 s after startup; if it persists, check the container logs for `GitHubAuthException` |
 | `MetricsEnrichmentWorker` logs `git clone` errors | Credential lacks **Contents** read | App mode: grant `contents` and accept the request on the installation. PAT mode: re-issue with Contents (read) and update `GitHub__Token` — which is **ignored** in App mode, so check which mode is live first |
@@ -435,14 +479,50 @@ and `:sha-<full commit SHA>`.
 |---|---|
 | [`FixPortal/fixportal-ci-frontend`](https://github.com/FixPortal/fixportal-ci-frontend) | Open-source board UI — reference snapshot consumer |
 
+### Merge endpoint responses
+
+All errors are JSON `{ "error": "<message>" }`; every response carries
+`Cache-Control: private, no-store` (`DashboardEndpoints.cs:138-211, 282-286, 315-316`).
+Checks run in this order: key, request body, snapshot, repository, GitHub call.
+
+| Status | Body | When |
+|---|---|---|
+| `200` | `{ "merged": true, "sha": "<merge commit sha>" }` | GitHub returned 200 with `merged` true and a non-blank sha |
+| `400` | `Invalid request body.` / `Pull number must be greater than zero.` / `Head SHA is required.` | Unparseable or null body, `pullNumber <= 0`, blank `headSha` |
+| `401` | `Unauthorized.` | `X-Admin-Key` absent, wrong, or no `Admin:AdminKey` configured (fail-closed) |
+| `404` | `Repository not found.` | `repo` (case-insensitive) is not in the current snapshot |
+| `409` | GitHub's message | GitHub answered 405 or 409 (conflict or blocked required check). The pull request is also marked not mergeable (`CONFLICTING`/`DIRTY`) in the cached merge state and served snapshot |
+| `502` | `GitHub merge request failed.` or GitHub's message | GitHub auth/rate-limit/transport/JSON failure, or any other non-merged GitHub answer |
+| `503` | `No dashboard snapshot available yet.` | No snapshot has been produced yet |
+
+Concurrent requests for the same repository and pull number are serialised.
+
+### Key constraints
+
+| Setting | Rule | Source |
+|---|---|---|
+| `Admin:AdminKey` | Empty is valid and fails closed (admin endpoints return 401). When set, at least 16 characters, checked at startup. | `Program.cs:113-117` |
+| `IdeIntegration:ApiKey` | Empty is valid (`/api/ide/v1/*` returns 401, a startup warning is logged). When set: at least 32 characters, no leading or trailing whitespace, not containing `{{` or `${`, not starting with `@Microsoft.KeyVault(`, and not equal to `Admin:AdminKey`. | `IdeIntegrationOptions.cs:7-14`, `Program.cs:119-126, 288-291` |
+
+### Snapshot contract fixtures
+
+`contracts/dashboard-snapshot.v1.json` (public) and
+`contracts/dashboard-snapshot.admin.v1.json` (admin) are the versioned wire-shape
+fixtures for `GET /api/dashboard/snapshot` and `/api/dashboard/snapshot/admin`.
+They are linked into the test project (`FixPortal.Ci.Backend.Api.Tests.csproj:26-31`) and
+compared against the live endpoint output by `DashboardSnapshotContractFixtureTests.cs:41, 225`,
+so a change to the snapshot shape fails that test until the fixture is updated.
+UNVERIFIED: whether `fixportal-ci-frontend` or any other repository also reads these
+files; refuted if a search of that repository finds a reference to `contracts/dashboard-snapshot`.
+
 ### Key endpoints
 
 | Endpoint | Description |
 |---|---|
 | `GET /api/dashboard/snapshot` | Anonymous public projection: private repositories are removed server-side unless the security-sensitive `Admin:ExposePrivateToGuests=true` escape hatch is deliberately set. CORS applies; returns `204` before a snapshot exists. Use that escape hatch only on a private, trusted network. |
 | `GET /api/dashboard/snapshot/admin` | Full private-inclusive snapshot. Requires `X-Admin-Key`; every response is `Cache-Control: private, no-store` and `Vary: X-Admin-Key`. |
-| `POST /api/dashboard/merge` | Rebase-merges one pull request using `{ "repo", "pullNumber", "headSha" }`, rejecting the request if the PR head has moved. Requires `X-Admin-Key`; call through a same-origin host/backend proxy because cross-origin browser POST is blocked and the shared key must stay server-side. |
+| `POST /api/dashboard/merge` | Rebase-merges one pull request using `{ "repo", "pullNumber", "headSha" }`, rejecting the request if the PR head has moved. Requires `X-Admin-Key`; call through a same-origin host/backend proxy because cross-origin browser POST is blocked and the shared key must stay server-side. Status codes and bodies: see [Merge endpoint responses](#merge-endpoint-responses). |
 | `GET /api/health` | Anonymous credential health: `200` healthy or `503` degraded, without exposing the underlying GitHub error. |
 | `GET /api/ide/v1/snapshot` | Full IDE projection. Requires `X-CI-IDE-Key`; `Cache-Control: no-store`, `Vary: X-CI-IDE-Key`, and supports ETag conditional requests. |
 | `GET /api/ide/v1/repositories/{repository}/runs/{runId}/diagnosis` | Failure diagnosis for an IDE snapshot run. Requires `X-CI-IDE-Key`; `Cache-Control: no-store` and `Vary: X-CI-IDE-Key`. |
-| `GET /*` (non-API) | 301 redirect to `https://www.fixportal.org/ci` |
+| `GET /*` (non-API) | 301 redirect to `https://www.fixportal.org/ci` (observed on `ci.fixportal.org/` 2026-10-27; `/api/*` on the same host is served, not redirected) |
