@@ -512,8 +512,9 @@ fixtures for `GET /api/dashboard/snapshot` and `/api/dashboard/snapshot/admin`.
 They are linked into the test project (`FixPortal.Ci.Backend.Api.Tests.csproj:26-31`) and
 compared against the live endpoint output by `DashboardSnapshotContractFixtureTests.cs:41, 225`,
 so a change to the snapshot shape fails that test until the fixture is updated.
-UNVERIFIED: whether `fixportal-ci-frontend` or any other repository also reads these
-files; refuted if a search of that repository finds a reference to `contracts/dashboard-snapshot`.
+The `fixportal-ci-frontend` repository checks its parser against `dashboard-snapshot.v1.json`
+in its own CI and release workflows (`npm run test:backend-contract`, `ci.yml:95` and
+`release.yml:103` there), so a shape change here is a contract change for the frontend.
 
 ### Key endpoints
 
