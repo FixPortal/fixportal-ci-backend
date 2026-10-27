@@ -26,7 +26,7 @@ reviewer list (see **Deploying to Azure**); the remaining settings come from
 | Setting | Default | What it does |
 |---|---|---|
 | `GitHub:Owner` | `FixPortal` | The GitHub organization whose repositories are enumerated. **The one setting most forks change.** |
-| `GitHub:Token` | *(empty)* | Fine-grained PAT (see **GitHub**). `Contents: Read and write` is required for the merge endpoint; read-only permissions are enough for polling. Required in **PAT mode** only, and the app fails fast at startup if empty; **ignored** when `GitHubApp:AppId` and `GitHubApp:PrivateKeyPem` are both set. |
+| `GitHub:Token` | *(empty)* | Fine-grained PAT (see **GitHub**). `Contents: Read and write` is required for the merge endpoint; read-only permissions are enough for polling. The app fails fast at startup if it is empty, in **every** mode (`Program.cs:33`); when `GitHubApp:AppId` and `GitHubApp:PrivateKeyPem` are both set, GitHub calls use the App credentials instead of this token. |
 | `GitHubApp:AppId` | *(empty)* | Numeric App ID. Set with `PrivateKeyPem` to select App mode (see **GitHub**). |
 | `GitHubApp:PrivateKeyPem` | *(empty)* | PEM contents, not a path. Set with `AppId` to select App mode. |
 | `GitHubApp:InstallationId` | *(empty)* | Optional. Discovered once via `GET /orgs/{owner}/installation` when unset. |
@@ -98,8 +98,9 @@ competes with whoever is running `gh` at a terminal; an installation gets its ow
 
 ### Option B - fine-grained personal access token
 
-Used whenever either App setting is absent. In App mode `GitHub:Token` is ignored
-entirely, so check which mode is live before re-issuing a token to fix a symptom.
+Used whenever either App setting is absent. In App mode GitHub calls use the App
+credentials, not `GitHub:Token` (which must still be non-empty to start), so check
+which mode is live before re-issuing a token to fix a symptom.
 
 1. Create it: GitHub → your avatar → **Settings** → **Developer settings** →
    **Personal access tokens** → **Fine-grained tokens** → **Generate new token**.
@@ -145,7 +146,7 @@ never expose that key to browser JavaScript.
 > which it does **not** charge against the primary rate limit. A stable org
 > therefore costs almost nothing per cycle — only changed resources spend budget
 > — which is what makes the 20s `RefreshSeconds` cadence safe. The frontend polls
-> the in-memory snapshot (not GitHub) on the same 20s interval, so the browser
+> the in-memory snapshot (not GitHub) on a 30s interval, so the browser
 > never touches the rate budget.
 
 ## Running locally via Docker Compose
@@ -241,7 +242,9 @@ domain is a plain **Variable**. Set them once per deployment:
 |---|---|---|
 | `AZURE_CLIENT_ID` / `AZURE_TENANT_ID` / `AZURE_SUBSCRIPTION_ID` | *(GUIDs)* | OIDC login for the deploy identity (set by the bootstrap script). |
 | `DASHBOARD_GH_TOKEN` | *(PAT)* | Fine-grained PAT fallback, written into the container-app secret on each deploy (set by the bootstrap script). Use `Contents: Read and write` when the merge endpoint is enabled. |
-| `AZURE_RESOURCE_GROUP` | `rg-myapp-prod` | Resource group the container app is deployed into. |
+| `AZURE_RESOURCE_GROUP` | `rg-myapp-prod` | Resource group the container app is deployed into (set by the bootstrap script). |
+| `CI_ADMIN_KEY` | *(random, at least 16 characters)* | Written into the container-app secret `admin-key` on each deploy (`Admin__AdminKey`). Guards the admin snapshot and merge endpoints. |
+| `CI_IDE_API_KEY` | *(random, at least 32 characters)* | Written into the container-app secret `ci-ide-api-key` on each deploy. Must be non-empty with no leading or trailing whitespace, or the deploy fails (`ci.yml:231-234`). |
 | `ACR_NAME` | `myregistry` | Registry that receives the image imported from GHCR. |
 | `ACR_LOGIN_SERVER` | `myregistry.azurecr.io` | Login server the image is pulled from. |
 | `ACA_ENVIRONMENT_ID` | `/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.App/managedEnvironments/<env>` | Existing managed environment that hosts the app. |
@@ -273,9 +276,9 @@ domain is a plain **Variable**. Set them once per deployment:
 2. Create the fine-grained PAT (see **GitHub**).
 3. From the repo root, run the bootstrap once (PowerShell 7). It creates a
    resource group, an Entra app with a GitHub OIDC federated credential, grants
-   it Contributor on that group, and sets the four OIDC/token repository
-   **Secrets** (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`,
-   `DASHBOARD_GH_TOKEN`):
+   it Contributor on that group, and sets five repository **Secrets**
+   (`AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID`,
+   `DASHBOARD_GH_TOKEN`, `AZURE_RESOURCE_GROUP`):
 
    ```
    ./scripts/bootstrap-azure.ps1 -GitHubToken '<the-PAT>'
@@ -348,8 +351,8 @@ To rotate either:
 
 ## Validation
 
-1. Open the site root (`/`) and confirm the board renders one card per repo in
-   the org, with real workflow states.
+1. The backend serves no board at `/`: it redirects to `https://www.fixportal.org/ci`
+   (`Program.cs:342`). Confirm the board renders there, or skip to step 2.
 2. Call the snapshot endpoint and check the status:
 
    ```

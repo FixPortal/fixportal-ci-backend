@@ -151,15 +151,16 @@ only.
 | GitHub App *(recommended)* | `GitHubApp:AppId` **and** `GitHubApp:PrivateKeyPem` are both non-blank | Installation token, minted per hour |
 | Personal access token | either App setting is missing | `GitHub:Token` |
 
-The App wins whenever both of its settings are present, and `GitHub:Token` is then
-ignored entirely.
+The App wins whenever both of its settings are present, and GitHub calls then use the
+App credentials instead of `GitHub:Token`. The token must still be non-empty: startup
+validation rejects an empty one in every mode (`Program.cs:33`).
 
 | Setting | Required | Notes |
 |---|---|---|
 | `GitHubApp__AppId` | for App mode | Numeric App ID |
 | `GitHubApp__PrivateKeyPem` | for App mode | PEM contents, not a path |
 | `GitHubApp__InstallationId` | no | Discovered once via `GET /orgs/{owner}/installation` when unset, so a reinstall needs no configuration change |
-| `GitHub__Token` | for PAT mode | Ignored in App mode |
+| `GitHub__Token` | always (startup validation) | Used for GitHub calls in PAT mode only |
 
 **A fine-grained PAT degrades every review pill, not only the check-run ones.** A PAT
 cannot read check runs at all: `statusCheckRollup` answers *"Resource not accessible by
