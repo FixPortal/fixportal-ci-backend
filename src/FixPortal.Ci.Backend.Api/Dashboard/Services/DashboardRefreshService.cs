@@ -161,7 +161,7 @@ public sealed class DashboardRefreshService(
                 runs.AddRange(wfRuns);
                 // The pill reflects the DEFAULT branch's latest run, not whichever branch
                 // ran most recently: a green workflow_dispatch run on a side branch must not
-                // mask a red run on main (observed 2026-09-27 on fixportal-simulator-backend).
+                // mask a red run on main (observed 2026-09-27 on a monitored repository).
                 // wfRuns is newest-first. A workflow with no default-branch run in the page
                 // (pull_request-only, e.g. review-tier.yml) has no main state to mask, so it
                 // falls back to its newest run rather than a permanent Unknown pill.

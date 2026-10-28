@@ -376,7 +376,7 @@ dependencies and needs no registry credentials:
 docker build -t fixportal-ci-backend .
 ```
 
-At runtime `GitHub:Token` is required. `GitHub:Owner` defaults to `FixPortal` when you run the image directly, so set it to your organisation; under Docker Compose it must be set explicitly (see `operator-handoff.md`). Every option and its default is listed in [`docs/configuration.md`](docs/configuration.md).
+At runtime `GitHub:Token` is required. `GitHub:Owner` defaults to `FixPortal` when you run the image directly, so set it to your organisation; under Docker Compose it must be set explicitly (see `operator-handoff.md`). Every option and its default is listed in [`docs/configuration.md`](docs/configuration.md), and every endpoint with its authentication, status codes and response shape in [`docs/api-reference.md`](docs/api-reference.md).
 
 ## Testing
 
