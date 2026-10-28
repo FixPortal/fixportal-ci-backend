@@ -45,7 +45,7 @@ param gitHubAppId string = ''
 @secure()
 param gitHubAppPrivateKey string = ''
 
-@description('Shared key for the /api/dashboard/snapshot/admin and /api/dashboard/merge endpoints. Must match the Admin__Key secret in the simulator backend.')
+@description('Shared key for the /api/dashboard/snapshot/admin and /api/dashboard/merge endpoints. Clients must send this value as the X-Admin-Key header.')
 @secure()
 param adminKey string
 

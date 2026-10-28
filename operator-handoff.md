@@ -154,7 +154,8 @@ because the snapshot and merge gates are in-process state.
 > `If-None-Match`; GitHub answers an unchanged resource with `304 Not Modified`,
 > which it does **not** charge against the primary rate limit. A stable org
 > therefore costs almost nothing per cycle — only changed resources spend budget
-> — which is what makes the 20s `RefreshSeconds` cadence safe. The frontend polls
+> — which is what makes the 20s `RefreshSeconds` default safe (the shipped Azure
+> Bicep sets 30s). The frontend polls
 > the in-memory snapshot (not GitHub) on a 30s interval, so the browser
 > never touches the rate budget.
 
@@ -261,6 +262,8 @@ domain is a plain **Variable**. Set them once per deployment:
 | `AZURE_RESOURCE_GROUP` | `rg-myapp-prod` | Resource group the container app is deployed into (set by the bootstrap script). |
 | `CI_ADMIN_KEY` | *(random, at least 16 characters)* | Written into the container-app secret `admin-key` on each deploy (`Admin__AdminKey`). Guards the admin snapshot and merge endpoints. |
 | `CI_IDE_API_KEY` | *(random, at least 32 characters)* | Written into the container-app secret `ci-ide-api-key` on each deploy. Must be non-empty with no leading or trailing whitespace, or the deploy fails (`ci.yml:231-234`). |
+| `DASHBOARD_GH_APP_PRIVATE_KEY` | *(PEM contents)* *(optional)* | GitHub App private key. With the `DASHBOARD_GH_APP_ID` variable it selects GitHub App mode; the deploy writes it to `GitHubApp__PrivateKeyPem`. |
+| `CORS_ALLOWED_ORIGINS` | *(origins)* *(optional)* | Origins passed to the `corsAllowedOrigins` Bicep array, emitted as `Cors__AllowedOrigins__N`. |
 | `ACR_NAME` | `myregistry` | Registry that receives the image imported from GHCR. |
 | `ACR_LOGIN_SERVER` | `myregistry.azurecr.io` | Login server the image is pulled from. |
 | `ACA_ENVIRONMENT_ID` | `/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.App/managedEnvironments/<env>` | Existing managed environment that hosts the app. |
@@ -271,6 +274,7 @@ domain is a plain **Variable**. Set them once per deployment:
 
 | Variable | Example | What |
 |---|---|---|
+| `DASHBOARD_GH_APP_ID` | *(numeric App ID)* *(optional)* | GitHub App ID; sets `GitHubApp__AppId`. Used with the `DASHBOARD_GH_APP_PRIVATE_KEY` secret. |
 | `CUSTOM_DOMAIN_NAME` | `ci.example.org` *(optional)* | Custom domain for the ingress — already public (it is the URL). Leave **unset/empty** to serve on the generated FQDN. |
 
 > **Custom domain.** A managed certificate cannot be provisioned inline in Bicep
@@ -348,22 +352,18 @@ To rotate either:
   the value never left the machine, and the entry has since been replaced with
   a real PAT. Rotation (executed 2026-08-18 — see the next entry) is a
   **two-sided change**: set the
-  new value as the `CI_ADMIN_KEY` Actions secret in **both**
-  `FixPortal/fixportal-ci-backend` and `FixPortal/fixportal-simulator-backend`,
-  then redeploy both apps close together. The admin snapshot returns 401 in the
-  gap between the two deploys, and the simulator side only resolves its Key
-  Vault secret at revision start, so both sides need a full redeploy (or a
-  revision restart) for the new key to take effect.
+  new value as the `CI_ADMIN_KEY` Actions secret here **and** in every other
+  service that sends it as `X-Admin-Key`, then redeploy them close together. The
+  admin snapshot returns 401 in the gap between the deploys, and a client that
+  resolves its key from a Key Vault secret only does so at revision start, so
+  each side needs a full redeploy (or a revision restart) for the new key to
+  take effect.
 - **2026-08-18 — rotation executed.** New key generated and set as the
-  `CI_ADMIN_KEY` Actions secret in both repos, then both apps redeployed
-  (ci-backend run 32189969489, simulator-backend run 32189972314, deploy
-  `fixportal-prod`). Verified: ci-backend ACA secret `admin-key` matches the
-  new value; `GET /api/dashboard/snapshot/admin` returns 200 with the new key
-  and 401 with a wrong key; simulator KV `ci-admin-key` updated 22:04:11 and
-  revision `fpsim-engine-prod--0000050` (created 22:04:48, 100% traffic)
-  resolved it at start. The simulator's `/api/ci/admin-snapshot` proxy is
-  `PlatformAdmin`-gated, so its 401 to anonymous callers is the auth policy,
-  not a key mismatch.
+  `CI_ADMIN_KEY` Actions secret in both places, then both services redeployed
+  (ci-backend run 32189969489, deploy `fixportal-prod`). Verified: ci-backend
+  ACA secret `admin-key` matches the new value; `GET /api/dashboard/snapshot/admin`
+  returns 200 with the new key and 401 with a wrong key; the client's Key Vault
+  secret was updated and its new revision resolved it at start.
 
 ## Validation
 

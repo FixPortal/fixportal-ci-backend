@@ -35,8 +35,9 @@ GitHub API  (App installation token or fine-grained PAT)
         │     PerRepoCache (per-repo enrichment results)
         ▼
   Dashboard/HostedServices/*  ............... background workers, independent cadences
-        RepoEnrichmentWorker (abstract base)
-          ├─ DashboardRefreshWorker      20s  → DashboardRefreshService builds snapshot + 24h CI trend
+        DashboardRefreshWorker (a BackgroundService, not an enrichment worker)
+                                     20s  → DashboardRefreshService builds snapshot + 24h CI trend
+        RepoEnrichmentWorker<T> (abstract base of the five below)
           ├─ MetricsEnrichmentWorker     12h  → LizardScanner (NLOC / cyclomatic complexity)
           ├─ MergedPrEnrichmentWorker    150s → org's most-recently-merged PR
           ├─ JobLaneEnrichmentWorker     150s → named lanes (Deploys / Packages) from matching jobs
@@ -123,7 +124,7 @@ data immediately instead of blanking.
 2. **Background Workers** — `RepoEnrichmentWorker` base + dashboard, metrics, merged-PR, job-lane, review-signal and merge-state workers + `SnapshotRestoreService`
 3. **Domain Services** — `DashboardRefreshService`, `DashboardSnapshotState`, `FileDashboardSnapshotStore`/`IDashboardSnapshotStore`, `GitHubInventoryCache`, `PerRepoCache`, `DashboardModels`
 4. **External Integrations** — `GitHubOrgClient` + `GitHubETagStore` (GitHub); `LizardScanner` + `ProcessRunner` (Lizard)
-5. **Configuration** — strongly-typed Options (`GitHubOptions`, `DashboardOptions`, `JobLaneOptions`, `AdminOptions`) + appsettings + csproj/sln/build props
+5. **Configuration** — strongly-typed Options (`GitHubOptions`, `GitHubAppOptions`, `DashboardOptions`, `JobLaneOptions`, `ReviewSignalsOptions`, `MergeStateOptions`, `AdminOptions`, `IdeIntegrationOptions`) + appsettings + csproj/sln/build props
 6. **Infrastructure & CI/CD** — `Dockerfile`, `docker-compose.yml`, `deploy/bicep/main.bicep`, `ci.yml`, `mutation.yml`, `dependabot.yml`, bootstrap/summarize scripts
 7. **Documentation** — `README.md`, `operator-handoff.md`, this architecture overview
 

@@ -238,7 +238,7 @@ The equivalent environment variables are
 `Dashboard__IncludeRepositories__0=api-*`,
 `Dashboard__IncludeTopics__0=production`, and
 `Dashboard__ExcludeTopics__0=internal`. Add `__1`, `__2`, and so on for more
-patterns. Blank entries are rejected at startup.
+patterns. Blank entries, and entries with leading or trailing whitespace, are rejected at startup.
 
 ### Review signals (`ReviewSignals`)
 
@@ -376,7 +376,7 @@ dependencies and needs no registry credentials:
 docker build -t fixportal-ci-backend .
 ```
 
-At runtime only the GitHub token and owner are required.
+At runtime `GitHub:Token` is required. `GitHub:Owner` defaults to `FixPortal` when you run the image directly, so set it to your organisation; under Docker Compose it must be set explicitly (see `operator-handoff.md`). Every option and its default is listed in [`docs/configuration.md`](docs/configuration.md).
 
 ## Testing
 
@@ -392,7 +392,7 @@ dotnet test --solution FixPortal.Ci.Backend.slnx --configuration Release --no-bu
 | Symptom | Cause | Fix |
 |---|---|---|
 | Backend container exits at startup with `OptionsValidationException: GitHub:Owner must be configured` (frontend stays up) | Under Compose, `GitHub__Owner: ${GITHUB_OWNER}` substitutes **empty** when the variable is unset, overriding the `FixPortal` default that ships in `appsettings.json` — so no `.env` in the project directory and nothing exported means no owner. Same for the mode's credential | `cp .env.example .env`, then fill in `GITHUB_OWNER` and `GITHUB_TOKEN` (required in every mode). App mode under Compose additionally needs the `GitHubApp__*` lines added to `docker-compose.yml` first (see [Quick start — Docker Compose](#quick-start--docker-compose-full-stack)); the shipped file forwards only `GitHub__Token` and `GitHub__Owner`. Then `docker compose up -d` |
-| Snapshot returns stale data after a workflow run | Refresh worker polls on a 20 s cadence; run completed between polls | Wait up to 20 s, or restart to force an immediate poll |
+| Snapshot returns stale data after a workflow run | Refresh worker polls every `Dashboard:RefreshSeconds` (20 s by default; the shipped Azure Bicep sets 30 s); run completed between polls | Wait up to one interval, or restart to force an immediate poll |
 | Snapshot endpoint returns `204 No Content` | No snapshot yet — the first poll has not completed, or every poll has failed | Allow ~5 s after startup; if it persists, check the container logs for `GitHubAuthException` |
 | `MetricsEnrichmentWorker` logs `git clone` errors | Credential lacks **Contents** read | App mode: grant `contents` and accept the request on the installation. PAT mode: re-issue with Contents (read) and update `GitHub__Token` — which is **ignored** in App mode, so check which mode is live first |
 | Merge endpoint returns `502` with a GitHub authorization failure | Credential lacks **Contents: Read and write** | App mode: grant `contents: write`, save, and accept the request on the organization installation. PAT mode: re-issue with Contents (read and write). Restart the backend revision to replace a cached installation token immediately |
