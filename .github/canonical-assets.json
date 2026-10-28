@@ -2,16 +2,16 @@
   "schema": 1,
   "canonical": {
     "repository": "FixPortal/fixportal-agents-skills",
-    "commit": "e3f3dfa4ee07c41cf12a5c16b11d136da93e4cf7",
-    "syncedAt": "2026-10-26"
+    "commit": "688a6c66085f9ceb5333b70d66c4ae668ddc9fdd",
+    "syncedAt": "2026-10-28"
   },
   "assets": [
     {
       "path": ".github/ai-smells/detect.ps1",
-      "sha256": "15ee9ad925191d633e649e96cfae2edbd929bba8c9f3b96c9d03600f7ec58b67",
+      "sha256": "4b3f724ef2aa57388a48d92e9cacd6fc97242d199e59c10bd284a758adb8b70f",
       "verbatim": true,
-      "commit": "39b1670411f25b531bca3e2e4cb7c468935af475",
-      "syncedAt": "2026-10-21"
+      "commit": "688a6c66085f9ceb5333b70d66c4ae668ddc9fdd",
+      "syncedAt": "2026-10-28"
     },
     {
       "path": ".github/ai-smells/detectors/rules/S10.yml",
@@ -113,10 +113,10 @@
     },
     {
       "path": ".github/ai-smells/post-smell-threads.ps1",
-      "sha256": "d355f70a3e510cf25d856c6dd455e22ccf6c8ac93fc79b8f1d3b1d971665ba46",
+      "sha256": "5c0c6e455b2f9fdbce719f527c609bee2a49261c3efec23e6756392c8dfba302",
       "verbatim": true,
-      "commit": "39b1670411f25b531bca3e2e4cb7c468935af475",
-      "syncedAt": "2026-10-21"
+      "commit": "688a6c66085f9ceb5333b70d66c4ae668ddc9fdd",
+      "syncedAt": "2026-10-28"
     },
     {
       "path": ".github/ai-smells/pr-detect.ps1",
