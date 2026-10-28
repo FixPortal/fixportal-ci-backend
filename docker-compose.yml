@@ -11,8 +11,11 @@ services:
       # The unauthenticated /api/dashboard/snapshot endpoint serves the PUBLIC
       # snapshot only — private repos are filtered server-side. Do NOT set
       # Admin__ExposePrivateToGuests here: it makes that anonymous endpoint return
-      # the full snapshot (private repos included). See .env.example to opt in for
-      # a private, trusted-network deployment only.
+      # the full snapshot (private repos included). This file forwards only the keys
+      # listed here, so a value in .env alone does nothing. To opt in for a private,
+      # trusted-network deployment only, add
+      # `Admin__ExposePrivateToGuests: ${ADMIN_EXPOSE_PRIVATE_TO_GUESTS}` below and
+      # set ADMIN_EXPOSE_PRIVATE_TO_GUESTS=true in .env (see .env.example).
       # Unused by this compose stack — the frontend's nginx proxies /api/ to the
       # backend over the compose network, so the browser only ever makes
       # same-origin calls. Kept for a client served from a different origin.
