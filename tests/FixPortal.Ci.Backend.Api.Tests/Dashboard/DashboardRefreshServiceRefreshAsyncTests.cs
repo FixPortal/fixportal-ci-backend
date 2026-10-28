@@ -58,7 +58,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
 
     // Newest run (30) is a green workflow_dispatch run on a side branch; the older run
     // (20) is red, on olderBranch. Pins the masking bug observed 2026-09-27 on
-    // fixportal-simulator-backend, and the fallback for workflows that never run on main.
+    // a monitored repository, and the fallback for workflows that never run on main.
     private sealed class NonDefaultBranchNewestRunHandler(string olderBranch) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(

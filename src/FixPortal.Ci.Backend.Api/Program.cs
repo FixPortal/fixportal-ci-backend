@@ -334,7 +334,7 @@ app.MapDashboardEndpoints();
 app.MapIdeEndpoints();
 
 // Unmatched API routes return 404. Non-API routes redirect permanently to the
-// canonical UI location — the CI board is now served by fixportal-simulator-frontend.
+// canonical UI location — the CI board is now served by the host site at /ci.
 // The destination is a fixed, well-known absolute URI, so S1075 (no hardcoded URIs)
 // does not apply.
 #pragma warning disable S1075

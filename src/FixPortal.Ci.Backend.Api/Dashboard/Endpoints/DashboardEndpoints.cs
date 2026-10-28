@@ -76,7 +76,7 @@ public static class DashboardEndpoints
         );
 
         // Full snapshot including private repositories. Protected by a shared
-        // key that the host (simulator backend) holds server-side and forwards
+        // key that the host application holds server-side and forwards
         // as X-Admin-Key — the key never reaches the browser. Returns 401 when
         // the key is absent, wrong, or not configured (fail-closed).
         _ = endpoints.MapGet(
