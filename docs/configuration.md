@@ -51,7 +51,7 @@ list nest the same way (`ReviewSignals__Reviewers__0__Name`).
 | `ReviewSignals:RefreshSeconds` | `150` | |
 | `ReviewSignals:ReserveBudgetPoints` | `1000` | |
 | `ReviewSignals:ExcludedAuthors` | four bot logins in `appsettings.json` | |
-| `ReviewSignals:Reviewers` | empty list, so the feature is idle | Per reviewer: `Name` (required), `BotLogin`, `RequiredLabel`, `WaivedLabel`, `WaivedBodyDirective`, `CommentsCountAsParticipation`, `CodeScanningCheckCountsAsParticipation`, `PublicOnly` (all `false`), `Source` (`ReviewThreads`). The README section on review signals describes the semantics. |
+| `ReviewSignals:Reviewers` | empty list, so the feature is idle | Per reviewer: `Name` (required), `BotLogin` (required when `Source` is `ReviewThreads`, the default, or when `CommentsCountAsParticipation` is `true`; it must have no leading or trailing whitespace, and startup fails otherwise), `RequiredLabel`, `WaivedLabel`, `WaivedBodyDirective`, `CommentsCountAsParticipation`, `CodeScanningCheckCountsAsParticipation`, `PublicOnly` (all `false`), `Source` (`ReviewThreads`). The README section on review signals describes the semantics. |
 
 ## Admin and integration
 
