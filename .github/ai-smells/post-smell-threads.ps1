@@ -62,13 +62,13 @@ if ($gaps) {
     # A green check means the detectors ran, not that every smell was assessed. Say so in the log
     # and as a run annotation, not only in the job summary page nobody opens from the pull request.
     Write-Host "ai-smells: $($gaps.Count) smell(s) not assessed (not the same as clean):"
-    $gaps | ForEach-Object { Write-Host "  $($_.smell): $($_.reason)" }
+    $gaps | ForEach-Object { Write-Host "  $($_.smell): $(Format-SafeLogText $_.reason)" }
     if ($env:GITHUB_ACTIONS) { Write-Host "::warning title=ai-smells coverage gap::$($gaps.Count) smell(s) not assessed: $(@($gaps.smell) -join ', '). Not the same as clean; see the job summary." }
 }
 
 if ($env:GITHUB_STEP_SUMMARY) {
     $summary = @("## ai-smells", "", "$(@($result.hits).Count) hit(s) on added lines; $($pick.Post.Count) new thread(s) posted.")
-    if ($gaps) { $summary += @('', '**Not assessed** (a detector could not run; not the same as clean):') + @($gaps | ForEach-Object { "- $($_.smell): $($_.reason)" }) }
+    if ($gaps) { $summary += @('', '**Not assessed** (a detector could not run; not the same as clean):') + @($gaps | ForEach-Object { "- $($_.smell): $(Format-SafeLogText $_.reason)" }) }
     if ($pick.Overflow.Count) { $summary += @('', '**Over the cap:**') + @($pick.Overflow | ForEach-Object { "- $($_.smell) $($_.file):$($_.line) $($_.lineText)" }) }
     Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Value $summary
 }

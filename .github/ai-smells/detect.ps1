@@ -536,7 +536,7 @@ function Invoke-SmellDetectors {
             $firstEnd = if ($d.firstFile.end) { [int]$d.firstFile.end } else { [int]$d.firstFile.start + [int]$d.lines - 1 }
             $raw.Add([pscustomobject]@{ smell = $s.id; file = $first; line = [int]$d.firstFile.start; endLine = $firstEnd; scopeStart = [int]$d.firstFile.start; text ="duplicates ${second}:$($d.secondFile.start) ($($d.lines) lines)"; detector = "jscpd@$($tools['jscpd'])" })
         }
-        $cloneNote = if ($repairedEnds) { "jscpd reported an unusable end line for $repairedEnds clone partner(s); their spans were taken from start and line count" } else { '' }
+        $cloneNote = if ($repairedEnds) { "jscpd reported an unusable end line for $repairedEnds clone partner(s); end lines are advisory, so spans come from start and line count, and a second location is scoped by the first one's line count for every clone" } else { '' }
         $coverage.Add([pscustomobject]@{ smell = $s.id; status = 'assessed'; reason = $cloneNote })
     }
 
