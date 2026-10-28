@@ -104,13 +104,15 @@ unchanged snapshot answers `304`. Responses are sent with `Cache-Control: no-sto
 ## Run diagnosis
 
 `GET /api/ide/v1/repositories/{repository}/runs/{runId}/diagnosis` with the `X-CI-IDE-Key` header.
-`runId` must be a number. The run must be in the current snapshot.
+`runId` must be a number. Only failed runs have a diagnosis: the run must be in the current snapshot
+with `status` `completed` and `conclusion` `failure`. A running, cancelled or successful run
+answers `404`.
 
 | Status | Body | Meaning |
 |---|---|---|
 | `200` | `{ schemaVersion, repository, runId, attempt, headSha, textSha256, truncated, excerpt }` | An excerpt of the run's log text. `repository` is `owner/name`, `textSha256` is a SHA-256 of the text that was read, and `truncated` says the excerpt is shorter than that text. |
 | `401` | none | Missing or wrong key. |
-| `404` | `{ "error": "Diagnosis is unavailable." }` | The run cannot be matched to exactly one repository and run in the snapshot, or no diagnosis could be read. |
+| `404` | `{ "error": "Diagnosis is unavailable." }` | The run is not a completed, failed run in the snapshot, cannot be matched to exactly one repository and workflow run, or no diagnosis could be read. |
 | `502` | `{ "error": "Diagnosis provider response was rejected." }` | The provider answered something the backend refused to use. |
 | `504` | `{ "error": "Diagnosis provider timed out." }` | The provider did not answer in time. |
 
