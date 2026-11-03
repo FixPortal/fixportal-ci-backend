@@ -310,7 +310,7 @@ jobs:
       - name: Restart active revision
         run: |
           set -euo pipefail
-          active_revision=$(az containerapp revision list --name "$APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query '[?properties.active].name | [0]' -o tsv)
+          active_revision=$(az containerapp show --name "$APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query 'properties.latestRevisionName' -o tsv)
           if [ -z "$active_revision" ]; then
             echo "::error::No active Container Apps revision found; aborting health probe."
             exit 1
