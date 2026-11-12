@@ -31,9 +31,8 @@ jobs:
         with:
           shellcheck: true
 
+      # No dotnet-version: setup-dotnet installs from global.json, the single SDK pin.
       - uses: actions/setup-dotnet@v6
-        with:
-          dotnet-version: 10.0.x
 
       - name: Restore solution
         run: dotnet restore FixPortal.Ci.Backend.slnx
