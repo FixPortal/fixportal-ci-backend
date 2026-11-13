@@ -5,6 +5,7 @@ using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
+using FixPortal.Ci.Backend.Api.Security;
 using Microsoft.Extensions.Options;
 using NodaTime.Serialization.SystemTextJson;
 
@@ -213,12 +214,7 @@ public static class IdeEndpoints
 
     private static bool IsAuthorized(HttpRequest request, string? configured)
     {
-        var provided = request.Headers["X-CI-IDE-Key"].FirstOrDefault() ?? "";
-        return !string.IsNullOrEmpty(configured)
-            && CryptographicOperations.FixedTimeEquals(
-                Encoding.UTF8.GetBytes(provided),
-                Encoding.UTF8.GetBytes(configured)
-            );
+        return SharedKeyComparer.Matches(request.Headers["X-CI-IDE-Key"].FirstOrDefault(), configured);
     }
 
     private static void PreventSensitiveCaching(HttpResponse response)
