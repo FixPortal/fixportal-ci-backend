@@ -1,10 +1,9 @@
 using System.Net;
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
+using FixPortal.Ci.Backend.Api.Security;
 using Microsoft.Extensions.Options;
 
 namespace FixPortal.Ci.Backend.Api.Dashboard.Endpoints;
@@ -127,12 +126,7 @@ public static class DashboardEndpoints
 
     private static bool IsAdmin(HttpRequest request, string? configured)
     {
-        var provided = request.Headers["X-Admin-Key"].FirstOrDefault() ?? "";
-        return !string.IsNullOrEmpty(configured)
-            && CryptographicOperations.FixedTimeEquals(
-                Encoding.UTF8.GetBytes(provided),
-                Encoding.UTF8.GetBytes(configured)
-            );
+        return SharedKeyComparer.Matches(request.Headers["X-Admin-Key"].FirstOrDefault(), configured);
     }
 
     private static async Task<IResult> HandleMergeAsync(
