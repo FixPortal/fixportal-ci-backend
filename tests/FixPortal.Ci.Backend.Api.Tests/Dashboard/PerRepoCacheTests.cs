@@ -131,15 +131,12 @@ public class PerRepoCacheTests
             }
         );
 
-        cache.Update(
-            "repo",
-            current =>
-            {
-                var updated = current!.ToDictionary();
-                updated[1] = new(1, false, "CONFLICTING", "DIRTY", "head-1");
-                return updated;
-            }
-        );
+        cache.Update("repo", current =>
+        {
+            var updated = current!.ToDictionary();
+            updated[1] = new(1, false, "CONFLICTING", "DIRTY", "head-1");
+            return updated;
+        });
 
         _ = cache.TryGet("repo", out var result).Should().BeTrue();
         _ = result![1].IsMergeClean.Should().BeFalse();
@@ -155,14 +152,11 @@ public class PerRepoCacheTests
         clock.AdvanceMinutes(11);
         var sawExpiredEntry = false;
 
-        cache.Update(
-            "repo",
-            current =>
-            {
-                sawExpiredEntry = current is not null;
-                return new Dictionary<int, PrMergeState> { [2] = new(2, false, "CONFLICTING", "DIRTY") };
-            }
-        );
+        cache.Update("repo", current =>
+        {
+            sawExpiredEntry = current is not null;
+            return new Dictionary<int, PrMergeState> { [2] = new(2, false, "CONFLICTING", "DIRTY") };
+        });
 
         _ = sawExpiredEntry.Should().BeFalse();
         _ = cache.TryGet("repo", out var result).Should().BeTrue();

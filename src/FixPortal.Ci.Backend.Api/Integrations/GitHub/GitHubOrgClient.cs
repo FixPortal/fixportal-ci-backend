@@ -692,8 +692,8 @@ public sealed class GitHubOrgClient(
         var page = 1;
         while (true)
         {
-            var batch =
-                await SendAsync<List<GitHubRepoDto>>($"orgs/{_gitHub.Owner}/repos?per_page=100&page={page}", ct) ?? [];
+            var batch = await SendAsync<List<GitHubRepoDto>>($"orgs/{_gitHub.Owner}/repos?per_page=100&page={page}", ct)
+                ?? [];
             all.AddRange(batch);
             if (batch.Count < 100)
             {
@@ -869,12 +869,11 @@ public sealed class GitHubOrgClient(
         var page = 1;
         while (true)
         {
-            var batch =
-                await SendAsync<List<GitHubPullDto>>(
-                    $"repos/{_gitHub.Owner}/{repo}/pulls?state=open&per_page=100&page={page}",
-                    ct,
-                    affectsAuthState: false
-                ) ?? [];
+            var batch = await SendAsync<List<GitHubPullDto>>(
+                $"repos/{_gitHub.Owner}/{repo}/pulls?state=open&per_page=100&page={page}",
+                ct,
+                affectsAuthState: false
+            ) ?? [];
             all.AddRange(batch);
             if (batch.Count < 100)
             {

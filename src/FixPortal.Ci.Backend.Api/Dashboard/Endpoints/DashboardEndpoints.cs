@@ -60,19 +60,16 @@ public static class DashboardEndpoints
         // with the background writer. 204 until the first snapshot is available.
         // Private repositories are stripped before responding — the endpoint is
         // unauthenticated, so the server must enforce visibility, not the client.
-        _ = endpoints.MapGet(
-            "/api/dashboard/snapshot",
-            (DashboardSnapshotState state, IOptions<AdminOptions> admin) =>
+        _ = endpoints.MapGet("/api/dashboard/snapshot", (DashboardSnapshotState state, IOptions<AdminOptions> admin) =>
+        {
+            var snapshot = admin.Value.ExposePrivateToGuests ? state.Current : state.Public;
+            if (snapshot is null)
             {
-                var snapshot = admin.Value.ExposePrivateToGuests ? state.Current : state.Public;
-                if (snapshot is null)
-                {
-                    return Results.NoContent();
-                }
-
-                return Results.Ok(snapshot);
+                return Results.NoContent();
             }
-        );
+
+            return Results.Ok(snapshot);
+        });
 
         // Full snapshot including private repositories. Protected by a shared
         // key that the host application holds server-side and forwards
@@ -105,21 +102,18 @@ public static class DashboardEndpoints
         // request URL including the private repo name (repos/{owner}/{repo}/...), which
         // would leak private repo names to anonymous callers. Return a generic message;
         // the detailed error is already logged server-side (DashboardRefreshService).
-        _ = endpoints.MapGet(
-            "/api/health",
-            (DashboardSnapshotState state) =>
+        _ = endpoints.MapGet("/api/health", (DashboardSnapshotState state) =>
+        {
+            if (state.LastAuthError is not null)
             {
-                if (state.LastAuthError is not null)
-                {
-                    return Results.Json(
-                        new { Status = "Degraded", Error = "GitHub credential check failing" },
-                        statusCode: 503
-                    );
-                }
-
-                return Results.Ok(new { Status = "Healthy" });
+                return Results.Json(
+                    new { Status = "Degraded", Error = "GitHub credential check failing" },
+                    statusCode: 503
+                );
             }
-        );
+
+            return Results.Ok(new { Status = "Healthy" });
+        });
 
         return endpoints;
     }
@@ -244,31 +238,28 @@ public static class DashboardEndpoints
         // GitHub itself just said no — a real conflict or a blocked required check,
         // not a transport hiccup. Replace the cached verdict so refreshes keep it,
         // then patch the served snapshot so the pill reflects it immediately.
-        mergeStates.Update(
-            repository,
-            current =>
+        mergeStates.Update(repository, current =>
+        {
+            PrMergeState? existing = null;
+            _ = current?.TryGetValue(merge.PullNumber, out existing);
+            if (
+                existing is not null
+                && !string.IsNullOrEmpty(existing.HeadSha)
+                && !DashboardRefreshService.SameHead(existing.HeadSha, merge.HeadSha)
+            )
             {
-                PrMergeState? existing = null;
-                _ = current?.TryGetValue(merge.PullNumber, out existing);
-                if (
-                    existing is not null
-                    && !string.IsNullOrEmpty(existing.HeadSha)
-                    && !DashboardRefreshService.SameHead(existing.HeadSha, merge.HeadSha)
-                )
-                {
-                    return current!;
-                }
-                var updated = current?.ToDictionary(pair => pair.Key, pair => pair.Value) ?? [];
-                updated[merge.PullNumber] = new PrMergeState(
-                    merge.PullNumber,
-                    existing?.IsDraft ?? false,
-                    "CONFLICTING",
-                    "DIRTY",
-                    merge.HeadSha
-                );
-                return updated;
+                return current!;
             }
-        );
+            var updated = current?.ToDictionary(pair => pair.Key, pair => pair.Value) ?? [];
+            updated[merge.PullNumber] = new PrMergeState(
+                merge.PullNumber,
+                existing?.IsDraft ?? false,
+                "CONFLICTING",
+                "DIRTY",
+                merge.HeadSha
+            );
+            return updated;
+        });
         state.MarkNotMergeable(repository, merge.PullNumber, merge.HeadSha);
         return Error(HttpStatusCode.Conflict, error);
     }

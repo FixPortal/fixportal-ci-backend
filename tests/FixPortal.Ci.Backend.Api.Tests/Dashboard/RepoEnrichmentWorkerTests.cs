@@ -62,9 +62,8 @@ public sealed class RepoEnrichmentWorkerTests : IDisposable
         // and leave every repo's signal stale for the cycle.
         var cache = new PerRepoCache<RepoMetrics>();
         var value = new RepoMetrics(10, 1.0, 1, 0, Instant.FromUnixTimeSeconds(1));
-        var worker = new FakeEnrichmentWorker(
-            cache,
-            repo => repo.Name == "denied" ? throw new GitHubAuthException("403") : value
+        var worker = new FakeEnrichmentWorker(cache, repo =>
+            repo.Name == "denied" ? throw new GitHubAuthException("403") : value
         );
 
         await worker.Sweep([Repo("a"), Repo("denied"), Repo("c")], CancellationToken.None);
@@ -175,27 +174,22 @@ public sealed class RepoEnrichmentWorkerTests : IDisposable
         var collectCount = 0;
         var firstAttemptStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var secondAttemptStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var worker = new ExecuteAsyncFakeWorker(
-            NewSingleRepoInventory(),
-            cache,
-            timeProvider,
-            _ =>
+        var worker = new ExecuteAsyncFakeWorker(NewSingleRepoInventory(), cache, timeProvider, _ =>
+        {
+            // The callback intentionally updates the observation read after the worker stops.
+            // ReSharper disable once AccessToModifiedClosure
+            var attempt = Interlocked.Increment(ref collectCount);
+            if (attempt == 1)
             {
-                // The callback intentionally updates the observation read after the worker stops.
-                // ReSharper disable once AccessToModifiedClosure
-                var attempt = Interlocked.Increment(ref collectCount);
-                if (attempt == 1)
-                {
-                    firstAttemptStarted.TrySetResult();
-                }
-                else if (attempt == 2)
-                {
-                    secondAttemptStarted.TrySetResult();
-                }
-
-                throw new InvalidOperationException("cold-start sweep failure");
+                firstAttemptStarted.TrySetResult();
             }
-        );
+            else if (attempt == 2)
+            {
+                secondAttemptStarted.TrySetResult();
+            }
+
+            throw new InvalidOperationException("cold-start sweep failure");
+        });
 
         await worker.StartAsync(TestContext.Current.CancellationToken);
         try

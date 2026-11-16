@@ -165,9 +165,9 @@ public sealed class DashboardRefreshService(
                 // wfRuns is newest-first. A workflow with no default-branch run in the page
                 // (pull_request-only, e.g. review-tier.yml) has no main state to mask, so it
                 // falls back to its newest run rather than a permanent Unknown pill.
-                var latest =
-                    wfRuns.FirstOrDefault(r => string.Equals(r.Branch, defaultBranch, StringComparison.Ordinal))
-                    ?? wfRuns.FirstOrDefault();
+                var latest = wfRuns.FirstOrDefault(r =>
+                    string.Equals(r.Branch, defaultBranch, StringComparison.Ordinal)
+                ) ?? wfRuns.FirstOrDefault();
                 snaps.Add(
                     new WorkflowSnapshot(
                         wf.Name,

@@ -303,8 +303,8 @@ public class BicepEnvironmentBindingTests
             parts[^1],
             BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase
         );
-        var propertyType =
-            Nullable.GetUnderlyingType(property?.PropertyType ?? typeof(string)) ?? property?.PropertyType;
+        var propertyType = Nullable.GetUnderlyingType(property?.PropertyType ?? typeof(string))
+            ?? property?.PropertyType;
         if (propertyType == typeof(int) || propertyType == typeof(long))
         {
             return "4242";

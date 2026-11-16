@@ -185,11 +185,7 @@ public class GitHubReviewFactsTests
         // The body can waive a required review, so it is only evidence when someone with
         // standing in the org wrote it — an outside author must not be able to waive their
         // own review by typing one line.
-        var pull = Pull() with
-        {
-            Body = "@coderabbitai ignore",
-            AuthorAssociation = association,
-        };
+        var pull = Pull() with { Body = "@coderabbitai ignore", AuthorAssociation = association };
 
         var facts = GitHubOrgClient.ToReviewFacts(pull);
 
@@ -652,16 +648,11 @@ public class GitHubReviewFactsTransportTests
         var observed = new List<GraphQlRateLimit?>();
 
         var batch = await CreateClient(http)
-            .GetPullRequestReviewFactsAsync(
-                "repo",
-                [181, 182],
-                CancellationToken.None,
-                reserveBreached: budget =>
-                {
-                    observed.Add(budget);
-                    return budget?.Remaining <= 10;
-                }
-            );
+            .GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None, reserveBreached: budget =>
+            {
+                observed.Add(budget);
+                return budget?.Remaining <= 10;
+            });
 
         _ = batch.Facts.Keys.Should().Equal(181);
         _ = batch.Failed.Should().Equal(182);
