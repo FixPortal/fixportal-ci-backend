@@ -149,10 +149,7 @@ public class DashboardRefreshServiceTests
     {
         // A snapshot restored from a pre-PR on-disk file deserializes PullRequests
         // to null; it must not throw when counted.
-        var restored = Repo("old", (SignalState.Success, "success")) with
-        {
-            PullRequests = null!,
-        };
+        var restored = Repo("old", (SignalState.Success, "success")) with { PullRequests = null! };
         var summary = DashboardRefreshService.BuildSummary([restored]).ToDictionary(s => s.Key, s => s.Count);
         _ = summary["open-prs"].Should().Be(0);
     }

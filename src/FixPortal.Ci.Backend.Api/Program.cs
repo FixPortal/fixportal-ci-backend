@@ -248,13 +248,11 @@ builder.Services.AddSingleton(sp =>
 // real behaviour explicit — a persistently-failing lane keeps its last chip, exactly
 // as a stale metric or merged-PR does — rather than documenting a stale-out the code
 // never delivered.
-builder.Services.AddKeyedSingleton<PerRepoCache<IReadOnlyList<JobSignal>>>(
-    "deploys",
-    (_, _) => new PerRepoCache<IReadOnlyList<JobSignal>>()
+builder.Services.AddKeyedSingleton<PerRepoCache<IReadOnlyList<JobSignal>>>("deploys", (_, _) =>
+    new PerRepoCache<IReadOnlyList<JobSignal>>()
 );
-builder.Services.AddKeyedSingleton<PerRepoCache<IReadOnlyList<JobSignal>>>(
-    "packages",
-    (_, _) => new PerRepoCache<IReadOnlyList<JobSignal>>()
+builder.Services.AddKeyedSingleton<PerRepoCache<IReadOnlyList<JobSignal>>>("packages", (_, _) =>
+    new PerRepoCache<IReadOnlyList<JobSignal>>()
 );
 builder.Services.AddSingleton<LizardScanner>();
 builder.Services.AddSingleton<DashboardRefreshService>();

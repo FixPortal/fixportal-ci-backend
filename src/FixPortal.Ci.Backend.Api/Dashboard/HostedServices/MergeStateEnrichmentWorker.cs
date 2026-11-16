@@ -75,16 +75,12 @@ public sealed class MergeStateEnrichmentWorker(
                 return new Dictionary<int, PrMergeState>();
             }
 
-            var states = await Client.GetPullRequestMergeStatesAsync(
-                repo.Name,
-                open.Keys.ToList(),
-                ct,
-                budget =>
-                    ReviewSignalEnrichmentWorker.IsBelowReserve(
-                        budget,
-                        reviewOptions.Value.ReserveBudgetPoints,
-                        clock.GetCurrentInstant()
-                    )
+            var states = await Client.GetPullRequestMergeStatesAsync(repo.Name, open.Keys.ToList(), ct, budget =>
+                ReviewSignalEnrichmentWorker.IsBelowReserve(
+                    budget,
+                    reviewOptions.Value.ReserveBudgetPoints,
+                    clock.GetCurrentInstant()
+                )
             );
 
             // Say so when the reserve stops a sweep. The sibling review-signal worker counts
