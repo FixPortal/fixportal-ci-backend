@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           sarif="$RUNNER_TEMP/inspectcode.sarif"
-          dotnet jb inspectcode FixPortal.Ci.Backend.slnx --output="$sarif" --format=Sarif --severity=WARNING --no-build --properties:Configuration=Release --dotnetcoresdk="$(dotnet --version)"
+          dotnet jb inspectcode --no-swea FixPortal.Ci.Backend.slnx --output="$sarif" --format=Sarif --severity=WARNING --no-build --properties:Configuration=Release --dotnetcoresdk="$(dotnet --version)"
           # Fail closed: only exactly one structurally valid SARIF 2.1.0 document can count as zero findings.
           count="$(jq -es 'if length == 1 and (.[0].version == "2.1.0") and (.[0].runs | type) == "array" and (.[0].runs | length) > 0 and all(.[0].runs[]; (.tool.driver.name | type) == "string" and (.results | type) == "array" and (.invocations | type) == "array" and (.invocations | length) > 0 and all(.invocations[]; .executionSuccessful == true)) then [.[0].runs[].results[]] | length else error("invalid SARIF: need one document, version 2.1.0 and, per run, tool.driver.name, a results array and successful invocations") end' "$sarif")"
           case "$count" in '' | *[!0-9]*) echo "::error::InspectCode report did not yield a finding count"; exit 1 ;; esac
