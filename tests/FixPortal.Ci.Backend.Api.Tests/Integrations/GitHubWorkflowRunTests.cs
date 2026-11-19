@@ -55,4 +55,45 @@ public class GitHubWorkflowRunTests
         _ = runs[2].HtmlUrl.Should().Be("https://github.com/acme/repo/actions/workflows/ci.yml");
         _ = runs[1].Title.Should().Be("Build");
     }
+
+    private sealed class ForkRunsHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) =>
+            Task.FromResult(
+                new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(
+                        """
+                        {"workflow_runs":[
+                          {"id":1,"status":"completed","conclusion":"success","head_repository":{"full_name":"stranger/repo"}},
+                          {"id":2,"status":"completed","conclusion":"failure","head_repository":{"full_name":"Acme/Repo"}},
+                          {"id":3,"status":"completed","conclusion":"success"}
+                        ]}
+                        """,
+                        Encoding.UTF8,
+                        "application/json"
+                    ),
+                }
+            );
+    }
+
+    [Fact]
+    public async Task GetRecentDefaultBranchRunsAsync_ignores_runs_whose_head_repository_is_a_fork()
+    {
+        using var http = new HttpClient(new ForkRunsHandler());
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var client = new GitHubOrgClient(
+            http,
+            Options.Create(new GitHubOptions { Owner = "acme", Token = "t" }),
+            Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 60 }),
+            new GitHubETagStore()
+        );
+
+        var runs = await client.GetRecentDefaultBranchRunsAsync("repo", 3, "main", 10, 1, CancellationToken.None);
+
+        _ = runs.Select(r => r.Id).Should().Equal(2, 3);
+    }
 }

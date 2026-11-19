@@ -281,16 +281,29 @@ public class GitHubReviewFactsTests
         _ = facts.HeadCommentAuthors.Should().BeEmpty();
     }
 
-    [Fact]
-    public void A_comment_exactly_at_the_head_commit_does_not_count()
+    // HeadFirstSeenAt is 10:01:00. The filter is "after the commit AND after first-seen", strict on
+    // both, so each bound must be exercised on its own: at the commit, at first-seen, in the gap
+    // while the commit is the later bound, and exactly at that later bound.
+    [Theory]
+    [InlineData("2026-08-03T10:00:00Z", "2026-08-03T10:00:00Z", false)] // equal to commit; first-seen still excludes it
+    [InlineData("2026-08-03T10:00:00Z", "2026-08-03T10:01:00Z", false)] // equal to first-seen; commit is passed
+    [InlineData("2026-08-03T10:00:00Z", "2026-08-03T10:01:01Z", true)] // just past both
+    [InlineData("2026-08-03T10:02:00Z", "2026-08-03T10:01:30Z", false)] // past first-seen, before the commit
+    [InlineData("2026-08-03T10:02:00Z", "2026-08-03T10:02:00Z", false)] // equal to commit; first-seen is passed
+    [InlineData("2026-08-03T10:02:00Z", "2026-08-03T10:02:01Z", true)] // just past both
+    public void A_comment_counts_only_when_strictly_after_both_the_head_commit_and_first_seen(
+        string headCommittedAt,
+        string commentAt,
+        bool counts
+    )
     {
         // Strict >. Equal timestamps are ambiguous, and Pending is the safe direction.
         var facts = GitHubOrgClient.ToReviewFacts(
-            Pull(comments: [Comment("gitar-bot", HeadCommittedAt)]),
+            Pull(comments: [Comment("gitar-bot", commentAt)], headCommittedAt: headCommittedAt),
             HeadFirstSeenAt
         );
 
-        _ = facts.HeadCommentAuthors.Should().BeEmpty();
+        _ = facts.HeadCommentAuthors.Contains("gitar-bot").Should().Be(counts);
     }
 
     [Fact]
@@ -512,7 +525,7 @@ public class GitHubReviewFactsTransportTests
         // The retry isolates the offender so its neighbours still get their pills, and the
         // caller is told which one failed so it can keep that watermark dirty.
         const string refused = """
-            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            {"errors":[{"type":"FORBIDDEN","path":["repository","pr181"],"message":"Resource not accessible by personal access token"}]}
             """;
         const string ok = """
             {"data":{"repository":{"pr182":{"number":182,"author":{"login":"chris"},"labels":{"nodes":[]},
@@ -530,6 +543,31 @@ public class GitHubReviewFactsTransportTests
         // 1 batched attempt + 2 individual retries, all counted: a sweep being refused
         // must never report zero queries.
         _ = batch.QueriesIssued.Should().Be(3);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.BadGateway, "")]
+    // GraphQL errors that name no alias path are a whole-request failure (budget, upstream),
+    // not one refused pull request.
+    [InlineData(HttpStatusCode.OK, """{"errors":[{"type":"RATE_LIMITED","message":"API rate limit exceeded"}]}""")]
+    public async Task A_whole_request_failure_marks_the_chunk_failed_without_per_PR_retries(
+        HttpStatusCode status,
+        string body
+    )
+    {
+        var response = new HttpResponseMessage(status)
+        {
+            Content = new StringContent(body, Encoding.UTF8, "application/json"),
+        };
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([response]));
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+
+        var batch = await CreateClient(http).GetPullRequestReviewFactsAsync("repo", [181, 182], CancellationToken.None);
+
+        _ = batch.Failed.Should().Equal(181, 182);
+        _ = batch.QueriesIssued.Should().Be(1);
+        _ = handler.Requests.Should().ContainSingle();
     }
 
     [Fact]
@@ -569,7 +607,7 @@ public class GitHubReviewFactsTransportTests
         static string Ok(int number, int cost) =>
             template.Replace("__N__", number.ToString()).Replace("__COST__", cost.ToString());
         const string refused = """
-            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            {"errors":[{"type":"FORBIDDEN","path":["repository","pr181"],"message":"Resource not accessible by personal access token"}]}
             """;
         var handler = new ScriptedHandler(
             new Queue<HttpResponseMessage>([Json(refused), Json(Ok(181, 3)), Json(Ok(182, 3))])
@@ -588,7 +626,7 @@ public class GitHubReviewFactsTransportTests
     {
         // A one-PR chunk has nothing to isolate, so it must not re-issue the same query.
         const string refused = """
-            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            {"errors":[{"type":"FORBIDDEN","path":["repository","pr181"],"message":"Resource not accessible by personal access token"}]}
             """;
         var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([Json(refused)]));
         using var http = new HttpClient(handler);
@@ -634,7 +672,7 @@ public class GitHubReviewFactsTransportTests
     public async Task Individual_review_retries_stop_when_a_retry_response_reaches_the_reserve()
     {
         const string refused = """
-            {"errors":[{"message":"Resource not accessible by personal access token"}]}
+            {"errors":[{"type":"FORBIDDEN","path":["repository","pr181"],"message":"Resource not accessible by personal access token"}]}
             """;
         const string recovered = """
             {"data":{"rateLimit":{"cost":3,"remaining":10,"resetAt":"2026-08-02T21:00:00Z"},

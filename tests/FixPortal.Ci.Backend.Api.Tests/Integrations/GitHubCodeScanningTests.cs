@@ -59,24 +59,31 @@ public class GitHubCodeScanningTests
     }
 
     [Fact]
-    public async Task Buckets_open_alerts_by_pull_request_number()
+    public async Task Queries_each_pull_request_with_the_pr_filter_and_attributes_counts_by_the_requested_number()
     {
-        const string body = """
+        // With pr=N GitHub reports each alert's most_recent_instance against the default
+        // branch ref, so the count must come from the number asked for, not the instance ref.
+        const string pr181 = """
             [
-              {"most_recent_instance":{"ref":"refs/pull/181/head"}},
-              {"most_recent_instance":{"ref":"refs/pull/181/head"}},
-              {"most_recent_instance":{"ref":"refs/pull/179/head"}},
+              {"most_recent_instance":{"ref":"refs/heads/main"}},
               {"most_recent_instance":{"ref":"refs/heads/main"}}
             ]
             """;
-        using var http = Responding(HttpStatusCode.OK, body);
+        const string pr179 = """[{"most_recent_instance":{"ref":"refs/heads/main"}}]""";
+        var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([JsonOk(pr181), JsonOk(pr179), JsonOk("[]")]));
+        using var http = new HttpClient(handler) { BaseAddress = new Uri("https://api.github.com/") };
 
-        var counts = await CreateClient(http).GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
+        var counts = await CreateClient(http)
+            .GetOpenCodeScanningAlertCountsAsync("repo", [181, 179, 7], CancellationToken.None);
 
         _ = counts.Should().NotBeNull();
         _ = counts[181].Should().Be(2);
         _ = counts[179].Should().Be(1);
         _ = counts.Should().HaveCount(2);
+        _ = handler.Urls.Should().HaveCount(3);
+        _ = handler.Urls[0].Should().Contain("pr=181");
+        _ = handler.Urls[1].Should().Contain("pr=179");
+        _ = handler.Urls[2].Should().Contain("pr=7");
     }
 
     [Fact]
@@ -89,15 +96,16 @@ public class GitHubCodeScanningTests
             "["
             + string.Join(",", Enumerable.Repeat("""{"most_recent_instance":{"ref":"refs/heads/main"}}""", 100))
             + "]";
-        const string secondPage = """[{"most_recent_instance":{"ref":"refs/pull/181/head"}}]""";
+        const string secondPage = """[{"most_recent_instance":{"ref":"refs/heads/main"}}]""";
         var handler = new ScriptedHandler(new Queue<HttpResponseMessage>([JsonOk(firstPage), JsonOk(secondPage)]));
         using var http = new HttpClient(handler);
         http.BaseAddress = new Uri("https://api.github.com/");
 
-        var counts = await CreateClient(http).GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
+        var counts = await CreateClient(http)
+            .GetOpenCodeScanningAlertCountsAsync("repo", [181], CancellationToken.None);
 
         _ = counts.Should().NotBeNull();
-        _ = counts[181].Should().Be(1);
+        _ = counts[181].Should().Be(101);
         _ = handler.Urls.Should().HaveCount(2);
         _ = handler.Urls[1].Should().Contain("page=2");
     }
@@ -115,7 +123,8 @@ public class GitHubCodeScanningTests
         using var http = new HttpClient(handler);
         http.BaseAddress = new Uri("https://api.github.com/");
 
-        var counts = await CreateClient(http).GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
+        var counts = await CreateClient(http)
+            .GetOpenCodeScanningAlertCountsAsync("repo", [181], CancellationToken.None);
 
         _ = counts.Should().BeNull();
         _ = handler.Urls.Should().HaveCount(2);
@@ -131,7 +140,8 @@ public class GitHubCodeScanningTests
     {
         using var http = Responding(status);
 
-        var counts = await CreateClient(http).GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
+        var counts = await CreateClient(http)
+            .GetOpenCodeScanningAlertCountsAsync("repo", [181], CancellationToken.None);
 
         // Null, not empty: an empty dictionary would render the CodeQL pill green,
         // claiming a clean scan that never ran.
@@ -156,9 +166,9 @@ public class GitHubCodeScanningTests
         var logger = new CapturingLogger<GitHubOrgClient>();
         var client = CreateClient(http, logger);
 
-        _ = await client.GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
-        var recovered = await client.GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
-        _ = await client.GetOpenCodeScanningAlertCountsAsync("repo", CancellationToken.None);
+        _ = await client.GetOpenCodeScanningAlertCountsAsync("repo", [181], CancellationToken.None);
+        var recovered = await client.GetOpenCodeScanningAlertCountsAsync("repo", [181], CancellationToken.None);
+        _ = await client.GetOpenCodeScanningAlertCountsAsync("repo", [181], CancellationToken.None);
 
         _ = recovered.Should().NotBeNull();
         _ = recovered[181].Should().Be(1);

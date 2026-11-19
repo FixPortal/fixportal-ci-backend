@@ -27,7 +27,9 @@ public sealed record WorkflowRun(
     string? WorkflowFile = null,
     long? ProviderRunId = null,
     int? RunAttempt = null,
-    string? HeadSha = null
+    string? HeadSha = null,
+    // Selection-time only: kept out of the snapshot contract.
+    [property: System.Text.Json.Serialization.JsonIgnore] string? HeadRepository = null
 );
 
 public sealed record WorkflowSnapshot(

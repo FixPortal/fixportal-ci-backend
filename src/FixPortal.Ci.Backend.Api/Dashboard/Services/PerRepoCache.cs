@@ -36,7 +36,11 @@ public sealed class PerRepoCache<T>
     public void Update(string repo, T value) =>
         _byRepo[repo] = new CacheEntry(value, _clock?.GetCurrentInstant() ?? Instant.MinValue);
 
-    public void Update(string repo, Func<T?, T> update)
+    /// <param name="keepAge">
+    /// True for a request-path patch of one entry: the existing write time is kept, so
+    /// untouched siblings are not given a fresh TTL window. A full worker write leaves it false.
+    /// </param>
+    public void Update(string repo, Func<T?, T> update, bool keepAge = false)
     {
         var writtenAt = _clock?.GetCurrentInstant() ?? Instant.MinValue;
         _ = _byRepo.AddOrUpdate(
@@ -44,8 +48,13 @@ public sealed class PerRepoCache<T>
             _ => new CacheEntry(update(null), writtenAt),
             (_, current) =>
             {
-                var updated = update(_maxAge is { } age && writtenAt - current.WrittenAt > age ? null : current.Value);
-                return ReferenceEquals(updated, current.Value) ? current : new CacheEntry(updated, writtenAt);
+                var expired = _maxAge is { } age && writtenAt - current.WrittenAt > age;
+                var updated = update(expired ? null : current.Value);
+                if (ReferenceEquals(updated, current.Value))
+                {
+                    return current;
+                }
+                return new CacheEntry(updated, keepAge && !expired ? current.WrittenAt : writtenAt);
             }
         );
     }

@@ -45,8 +45,11 @@ public sealed record GitHubRunItem(
     Instant UpdatedAt,
     long Id = 0,
     int? RunAttempt = null,
-    string? HeadSha = null
+    string? HeadSha = null,
+    GitHubHeadRepositoryDto? HeadRepository = null
 );
+
+public sealed record GitHubHeadRepositoryDto(string? FullName);
 
 public sealed record GitHubRunsResponse(IReadOnlyList<GitHubRunItem>? WorkflowRuns);
 
@@ -73,7 +76,13 @@ public sealed record GitHubPullDto(
 
 public sealed record GitHubRunSummary(long Id, string? HtmlUrl, string? Status, string? Conclusion);
 
-public sealed record GitHubRunRawItem(long Id, string? HtmlUrl, string? Status, string? Conclusion);
+public sealed record GitHubRunRawItem(
+    long Id,
+    string? HtmlUrl,
+    string? Status,
+    string? Conclusion,
+    GitHubHeadRepositoryDto? HeadRepository = null
+);
 
 public sealed record GitHubRunsRawResponse(IReadOnlyList<GitHubRunRawItem>? WorkflowRuns);
 
@@ -259,6 +268,9 @@ public sealed class GitHubOrgClient(
     /// </summary>
     internal const int ExactPrBatchSize = 20;
 
+    // Marks the GraphQL-errors HttpRequestException whose errors all name a pull-request alias.
+    private const string AliasRefusalKey = "FixPortal.GraphQlAliasRefusal";
+
     // Search/issues page size. internal so the merged-PR tests size their full-page
     // fixtures off the same value instead of a hand-mirrored literal.
     internal const int SearchPageSize = 20;
@@ -392,7 +404,10 @@ public sealed class GitHubOrgClient(
             // a 401/403 is credential-wide, so every sibling chunk would fail the same
             // way — it escapes to the worker, which keeps last-known-good for the repo,
             // agreeing with the merge-state path.
-            catch (HttpRequestException ex) when (chunk.Length > 1)
+            // A 5xx, a dropped connection or a path-less GraphQL error (budget, upstream)
+            // is a whole-request failure with nothing to isolate: it falls to the generic
+            // catch below, so a batch outage is not multiplied into one retry per pull request.
+            catch (HttpRequestException ex) when (chunk.Length > 1 && ex.Data.Contains(AliasRefusalKey))
             {
                 logger?.LogWarning(
                     ex,
@@ -415,7 +430,13 @@ public sealed class GitHubOrgClient(
             catch (HttpRequestException ex)
             {
                 failed.AddRange(chunk);
-                logger?.LogWarning(ex, "Review facts unavailable for {Repo}#{Number}.", repo, chunk[0]);
+                logger?.LogWarning(
+                    ex,
+                    "Review facts unavailable for {Repo} ({Count} pull requests starting at #{Number}).",
+                    repo,
+                    chunk.Length,
+                    chunk[0]
+                );
             }
         }
 
@@ -678,9 +699,15 @@ public sealed class GitHubOrgClient(
         // last-known-good cache rather than writing a partial result.
         if (envelope?.Errors is { Count: > 0 } errors)
         {
-            throw new HttpRequestException(
-                $"GitHub GraphQL returned {errors.Count} error(s) for {subject}: {errors[0].Message}"
-            );
+            var message = $"GitHub GraphQL returned {errors.Count} error(s) for {subject}: {errors[0].Message}";
+            var refusal = new HttpRequestException(message);
+            if (errors.All(e => e.NamesPullRequestAlias))
+            {
+                // Every error is pinned to one pull-request alias: retrying that pull
+                // request alone can isolate it. Anything else fails the whole request.
+                refusal.Data[AliasRefusalKey] = true;
+            }
+            throw refusal;
         }
 
         return envelope is null ? default : envelope.Data;
@@ -824,7 +851,8 @@ public sealed class GitHubOrgClient(
             FileName(workflow.Path),
             run.Id,
             run.RunAttempt,
-            run.HeadSha
+            run.HeadSha,
+            run.HeadRepository?.FullName
         );
 
     private string GetRunUrl(GitHubRunItem run, string repo, GitHubWorkflowDto workflow)
@@ -923,18 +951,39 @@ public sealed class GitHubOrgClient(
     }
 
     /// <summary>
-    /// Open code-scanning alerts for a repo, bucketed by pull-request number. One call
-    /// per repo, not per pull request. Returns NULL when the endpoint cannot be read —
+    /// Open code-scanning alerts per pull request, one filtered query (<c>pr=</c>) per
+    /// number given and attributed by the number asked for: an unfiltered listing reports
+    /// only default-branch instances. Returns NULL when the endpoint cannot be read —
     /// the token lacks "Code scanning alerts: read", or scanning is not enabled — which
     /// the caller must render as "not yet reviewed", never as a clean scan. An empty
     /// dictionary means the endpoint answered and nothing is open.
     /// </summary>
     public async Task<IReadOnlyDictionary<int, int>?> GetOpenCodeScanningAlertCountsAsync(
         string repo,
+        IEnumerable<int> pullNumbers,
         CancellationToken ct
     )
     {
-        var all = new List<CodeScanningAlertDto>();
+        var counts = new Dictionary<int, int>();
+        foreach (var number in pullNumbers)
+        {
+            if (await CountOpenCodeScanningAlertsAsync(repo, number, ct) is not { } total)
+            {
+                return null;
+            }
+
+            if (total > 0)
+            {
+                counts[number] = total;
+            }
+        }
+        return counts;
+    }
+
+    // NULL when unreadable, as for GetOpenCodeScanningAlertCountsAsync.
+    private async Task<int?> CountOpenCodeScanningAlertsAsync(string repo, int number, CancellationToken ct)
+    {
+        var total = 0;
         var page = 1;
         while (true)
         {
@@ -944,7 +993,7 @@ public sealed class GitHubOrgClient(
                 // affectsAuthState: false — a missing code-scanning scope 403s here and must
                 // not flip /api/health, exactly as the pull-request listing does.
                 batch = await SendAsync<List<CodeScanningAlertDto>>(
-                    $"repos/{_gitHub.Owner}/{repo}/code-scanning/alerts?state=open&per_page=100&page={page}",
+                    $"repos/{_gitHub.Owner}/{repo}/code-scanning/alerts?state=open&pr={number}&per_page=100&page={page}",
                     ct,
                     affectsAuthState: false
                 );
@@ -983,15 +1032,14 @@ public sealed class GitHubOrgClient(
                 return null;
             }
 
-            all.AddRange(batch);
+            total += batch.Count;
             if (batch.Count < 100)
             {
-                break;
+                return total;
             }
 
             page++;
         }
-        return Bucket(all);
     }
 
     /// <summary>
@@ -1061,19 +1109,6 @@ public sealed class GitHubOrgClient(
             page++;
         }
         return total;
-    }
-
-    private static Dictionary<int, int> Bucket(IReadOnlyList<CodeScanningAlertDto> alerts)
-    {
-        var counts = new Dictionary<int, int>();
-        foreach (var alert in alerts)
-        {
-            if (PullNumberFromRef(alert.MostRecentInstance?.Ref) is { } number)
-            {
-                counts[number] = counts.GetValueOrDefault(number) + 1;
-            }
-        }
-        return counts;
     }
 
     /// <summary>
@@ -1396,6 +1431,14 @@ public sealed class GitHubOrgClient(
         }
     }
 
+    /// <summary>
+    /// True unless the run reports a head repository other than <paramref name="owner"/>/<paramref name="repo"/>.
+    /// A missing head repository is treated as the repository's own, as in older payloads.
+    /// </summary>
+    public static bool IsOwnRun(string? headRepositoryFullName, string owner, string repo) =>
+        headRepositoryFullName is null
+        || string.Equals(headRepositoryFullName, $"{owner}/{repo}", StringComparison.OrdinalIgnoreCase);
+
     public async Task<IReadOnlyList<GitHubRunSummary>> GetRecentDefaultBranchRunsAsync(
         string repo,
         long workflowId,
@@ -1409,7 +1452,10 @@ public sealed class GitHubOrgClient(
             $"repos/{_gitHub.Owner}/{repo}/actions/workflows/{workflowId}/runs?branch={Uri.EscapeDataString(branch)}&per_page={count}&page={page}",
             ct
         );
+        // A fork pull request from a branch named like the default branch matches ?branch=;
+        // it is not this repository's default-branch run.
         return (response?.WorkflowRuns ?? [])
+            .Where(r => IsOwnRun(r.HeadRepository?.FullName, _gitHub.Owner, repo))
             .Select(r => new GitHubRunSummary(r.Id, r.HtmlUrl, r.Status, r.Conclusion))
             .ToList();
     }

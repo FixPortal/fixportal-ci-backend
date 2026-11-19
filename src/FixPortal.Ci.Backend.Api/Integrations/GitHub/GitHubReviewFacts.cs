@@ -8,7 +8,21 @@ namespace FixPortal.Ci.Backend.Api.Integrations.GitHub;
 // properties and no error, so the two must not be mixed.
 public sealed record GraphQlEnvelope<T>(T? Data, IReadOnlyList<GraphQlError>? Errors);
 
-public sealed record GraphQlError(string? Message);
+// Path elements are strings (field or alias names) or ints (list indexes).
+public sealed record GraphQlError(string? Message, IReadOnlyList<System.Text.Json.JsonElement>? Path = null)
+{
+    /// <summary>
+    /// True when the error is located at one of the exact-PR query's <c>pr&lt;N&gt;</c> aliases,
+    /// i.e. GitHub refused that single pull request rather than the whole request.
+    /// </summary>
+    public bool NamesPullRequestAlias =>
+        Path is { Count: >= 2 }
+        && Path[1].ValueKind == System.Text.Json.JsonValueKind.String
+        && Path[1].GetString() is { } alias
+        && alias.StartsWith("pr", StringComparison.Ordinal)
+        && alias.Length > 2
+        && alias.AsSpan(2).IndexOfAnyExceptInRange('0', '9') < 0;
+}
 
 // PageInfo is optional and trailing. The per-repo sweep asks for it only on the comments
 // connection, and only as a diagnostic, not a safety mechanism: `last: 20` drops the

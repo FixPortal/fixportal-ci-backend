@@ -38,7 +38,19 @@ public sealed class DashboardRefreshService(
 
     public async Task RefreshAsync(CancellationToken ct)
     {
-        var repos = await inventory.GetRepositoriesAsync(ct);
+        IReadOnlyList<GitHubRepoDto> repos;
+        try
+        {
+            repos = await inventory.GetRepositoriesAsync(ct);
+        }
+        catch (GitHubAuthException ex)
+        {
+            // Runs before the per-repo collectors that normally record auth failures, and a
+            // failed token mint throws here before any response exists: without this the
+            // loop dies every cycle while /api/health keeps answering Healthy.
+            state.SetAuthError(ex.Message);
+            throw;
+        }
 
         // When one repo hits the rate limit, cancel this CTS to stop the other parallel fetches
         // from burning the remaining quota. Linked to ct so host shutdown still propagates.
@@ -101,8 +113,32 @@ public sealed class DashboardRefreshService(
             publicSnapshot,
             persist: ShouldPersist(results.Any(r => r.FetchFailed), previous is not null),
             logger,
-            ct
+            ct,
+            ReapplyMergeVerdicts
         );
+    }
+
+    // Merge verdicts are read from the cache while the per-repo fetches run, and a merge
+    // rejection can land after that read; applying them again just before publishing keeps
+    // a slow refresh from republishing "ready to merge" over it.
+    private DashboardSnapshot ReapplyMergeVerdicts(DashboardSnapshot snapshot)
+    {
+        var changed = false;
+        var repositories = new List<RepositorySnapshot>(snapshot.Repositories.Count);
+        foreach (var repo in snapshot.Repositories)
+        {
+            _ = mergeStates.TryGet(repo.Name, out var verdicts);
+            var reapplied = ApplyReadyToMerge(repo.PullRequests, verdicts, _reviewsConfigured, _excludedAuthors);
+            if (reapplied.Select(pr => pr.ReadyToMerge).SequenceEqual(repo.PullRequests.Select(pr => pr.ReadyToMerge)))
+            {
+                repositories.Add(repo);
+                continue;
+            }
+            changed = true;
+            repositories.Add(repo with { PullRequests = reapplied });
+        }
+        // The same instance when nothing moved, so the saved and published snapshots stay one object.
+        return changed ? snapshot with { Repositories = repositories } : snapshot;
     }
 
     private async Task<(
@@ -167,6 +203,7 @@ public sealed class DashboardRefreshService(
                 // falls back to its newest run rather than a permanent Unknown pill.
                 var latest = wfRuns.FirstOrDefault(r =>
                     string.Equals(r.Branch, defaultBranch, StringComparison.Ordinal)
+                    && GitHubOrgClient.IsOwnRun(r.HeadRepository, gitHub.Value.Owner, repo.Name)
                 ) ?? wfRuns.FirstOrDefault();
                 snaps.Add(
                     new WorkflowSnapshot(
@@ -528,7 +565,8 @@ public sealed class DashboardRefreshService(
         DashboardSnapshot publicSnapshot,
         bool persist,
         ILogger logger,
-        CancellationToken ct
+        CancellationToken ct,
+        Func<DashboardSnapshot, DashboardSnapshot>? beforePublish = null
     )
     {
         if (persist)
@@ -553,7 +591,10 @@ public sealed class DashboardRefreshService(
             );
         }
 
-        state.Update(snapshot, publicSnapshot);
+        state.Update(
+            beforePublish is null ? snapshot : beforePublish(snapshot),
+            beforePublish is null ? publicSnapshot : beforePublish(publicSnapshot)
+        );
     }
 
     // 24 hourly buckets, oldest first, aligned to UTC clock-hour boundaries. Each
