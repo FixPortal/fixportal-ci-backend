@@ -148,7 +148,8 @@ jobs:
     # main-only: the explicit ref check also blocks workflow_dispatch from a feature branch.
     if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
-    # Three probe loops allow 675s plus the wrong-key probe, after ARM and restart.
+    # The revision check allows 300s and the three probe loops 675s plus the wrong-key
+    # probe, after ARM and restart.
     # This downstream deploy is outside the ten-minute required PR lane.
     timeout-minutes: 30
     # Serialize deployments; workflow-level concurrency also prevents cancellation.
@@ -188,21 +189,18 @@ jobs:
       - name: Import image from GHCR into ACR
         env:
           IMAGE_TAG: ${{ github.sha }}
-          # GHCR read token. Passed via env so the secret is not templated directly
-          # into the command line in the workflow source.
-          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           # Import the image the publish job already built and pushed, rather than
           # rebuilding from source, so ACR receives that same artifact. The SHA tag
           # is immutable by construction; --force makes a re-run of the same commit
           # idempotent (it overwrites the identical tag instead of erroring). It does
-          # NOT itself verify digests.
+          # NOT itself verify digests. The GHCR package is public (gh api
+          # /orgs/FixPortal/packages/container/fixportal-ci-backend reports
+          # visibility public), so the import is anonymous and no token reaches az argv.
           az acr import \
             --name "$ACR_NAME" \
             --source "ghcr.io/fixportal/fixportal-ci-backend:sha-$IMAGE_TAG" \
             --image "$IMAGE_REPO:$IMAGE_TAG" \
-            --username "${{ github.actor }}" \
-            --password "$GHCR_TOKEN" \
             --force
 
       - name: Deploy container app (Bicep)
@@ -254,18 +252,14 @@ jobs:
           # The App private key goes through the same jq path as the other secrets, and
           # for a stronger reason: a PEM is multi-line, so any route that does not escape
           # it properly corrupts the key rather than failing loudly.
-          jq -n \
-            --arg gitHubToken "$DASHBOARD_GH_TOKEN" \
-            --arg adminKey "$CI_ADMIN_KEY" \
-            --arg gitHubAppPrivateKey "$DASHBOARD_GH_APP_PRIVATE_KEY" \
-            '{
+          jq -n '{
               "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
               "contentVersion": "1.0.0.0",
               "parameters": {
-                "gitHubToken": { "value": $gitHubToken },
-                "adminKey": { "value": $adminKey },
+                "gitHubToken": { "value": env.DASHBOARD_GH_TOKEN },
+                "adminKey": { "value": env.CI_ADMIN_KEY },
                 "ideApiKey": { "value": env.CI_IDE_API_KEY },
-                "gitHubAppPrivateKey": { "value": $gitHubAppPrivateKey }
+                "gitHubAppPrivateKey": { "value": env.DASHBOARD_GH_APP_PRIVATE_KEY }
               }
             }' > "$params_file"
 
@@ -315,6 +309,55 @@ jobs:
             exit 1
           fi
           az containerapp revision restart --name "$APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$active_revision"
+
+      # Read-only and bounded (30 x 10s). The probes below hit the shared FQDN, so an old
+      # revision still holding traffic would pass them; tie the serving revision to this
+      # commit first. Whether ARM can report success for a revision that cannot start is
+      # UNVERIFIED, so this does not depend on it.
+      - name: Verify new revision is serving
+        env:
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          crash_streak=0
+          for i in $(seq 1 30); do
+            latest=$(az containerapp show --name "$APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --query 'properties.{latest:latestRevisionName,ready:latestReadyRevisionName}' -o json)
+            latest_name=$(jq -r '.latest // empty' <<< "$latest")
+            ready_name=$(jq -r '.ready // empty' <<< "$latest")
+            if [ -z "$latest_name" ]; then
+              echo "::error::No latest Container Apps revision found."
+              exit 1
+            fi
+            revision=$(az containerapp revision show --name "$APP_NAME" --resource-group "$AZURE_RESOURCE_GROUP" --revision "$latest_name" --query '{image:properties.template.containers[0].image,traffic:properties.trafficWeight,running:properties.runningState,replicas:properties.replicas}' -o json)
+            image=$(jq -r '.image // empty' <<< "$revision")
+            traffic=$(jq -r '.traffic // 0' <<< "$revision")
+            running=$(jq -r '.running // empty' <<< "$revision")
+            replicas=$(jq -r '.replicas // 0' <<< "$revision")
+            tag_match=no
+            case "$image" in *":$SHA") tag_match=yes ;; esac
+            echo "[$i/30] revision=$latest_name ready=$ready_name running=$running replicas=$replicas traffic=$traffic tag=$tag_match"
+            if [ "$tag_match" = "yes" ] && [ "$traffic" = "100" ] && [ "$ready_name" = "$latest_name" ]; then
+              echo "Revision $latest_name runs $SHA and holds 100% of traffic."
+              exit 0
+            fi
+            if [ "$running" = "Failed" ]; then
+              echo "::error::Revision $latest_name entered the Failed state; the previous revision may still be serving."
+              exit 1
+            fi
+            # Activating with no replicas for 2 minutes is a crash loop that has not yet reached Failed.
+            if [ "$running" = "Activating" ] && [ "$replicas" = "0" ]; then
+              crash_streak=$((crash_streak + 1))
+              if [ "$crash_streak" -ge 12 ]; then
+                echo "::error::Revision $latest_name stuck in Activating with 0 replicas for 2 minutes; likely crash-looping."
+                exit 1
+              fi
+            else
+              crash_streak=0
+            fi
+            sleep 10
+          done
+          echo "::error::Revision running $SHA with 100% traffic was not confirmed within 5 minutes."
+          exit 1
 
       - name: CI IDE snapshot probe
         env:
@@ -486,10 +529,14 @@ jobs:
       - name: Test deploy safety
         run: python3 .github/scripts/test_ci_deploy_safety.py
 
-      - name: Assert every job in this workflow is gated
+      # Directory mode: a new workflow file must either carry its own gate job or be named
+      # here deliberately. These four are gated by branch-ruleset entries, a schedule, or
+      # are comment-only.
+      - name: Assert every workflow job is gated or deliberately exempt
         env:
           GATE_EXEMPT: publish deploy
-        run: python3 .github/scripts/assert_gate_coverage.py .github/workflows/ci.yml
+          GATE_FILE_EXEMPT: .github/workflows/ai-smells.yml .github/workflows/mutation.yml .github/workflows/review-policy-guard.yml .github/workflows/review-tier.yml
+        run: python3 .github/scripts/assert_gate_coverage.py .github/workflows
 
       - name: Assert canonical asset copies match the committed manifest
         run: python3 .github/scripts/assert_canonical_assets.py
