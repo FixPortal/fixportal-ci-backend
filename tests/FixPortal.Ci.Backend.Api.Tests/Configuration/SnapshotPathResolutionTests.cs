@@ -132,10 +132,9 @@ public class SnapshotPathResolutionTests
     [Fact]
     public async Task Registered_snapshot_store_should_discard_a_snapshot_when_the_owner_changes()
     {
-        var directory = Directory.CreateTempSubdirectory("fixportal-owner-snapshot-").FullName;
-        var path = Path.Combine(directory, "snapshot.json");
-        try
+        await OwnedSnapshotDirectory.RunAsync(async owned =>
         {
+            var path = owned.SnapshotPath;
             await using var parentFactory = new WebApplicationFactory<Program>();
             await using var originalFactory = parentFactory.WithWebHostBuilder(builder =>
             {
@@ -162,60 +161,42 @@ public class SnapshotPathResolutionTests
             var changedOwnerStore = changedFactory.Services.GetRequiredService<IDashboardSnapshotStore>();
 
             _ = (await changedOwnerStore.LoadAsync(TestContext.Current.CancellationToken)).Should().BeNull();
-        }
-        finally
-        {
-            if (Directory.Exists(directory))
-            {
-                Directory.Delete(directory, recursive: true);
-            }
-        }
+        });
     }
 
     [Fact]
     public async Task Relative_snapshot_path_should_resolve_under_the_host_content_root()
     {
-        var contentRoot = Directory.CreateTempSubdirectory("fixportal-cib18-").FullName;
-        var relativeDirectory = $"snapshot-path-{Guid.NewGuid():N}";
+        // Both roots are claimed up front with a witness file. The working-directory one is named like the
+        // relative directory, so a regression that resolves against the working directory writes into it.
+        using var contentRootDirectory = new OwnedTempDirectory(Path.GetTempPath(), "fixportal-cib18-");
+        using var workingDirectory = new OwnedTempDirectory(Environment.CurrentDirectory, "snapshot-path-");
+        var contentRoot = contentRootDirectory.Root;
+        var relativeDirectory = Path.GetFileName(workingDirectory.Root);
         var relativePath = Path.Join(relativeDirectory, "snapshot.json");
         var contentRootPath = Path.Join(contentRoot, relativePath);
         var workingDirectoryPath = Path.Join(Environment.CurrentDirectory, relativePath);
 
-        try
+        // WebApplicationFactory implements IAsyncDisposable; disposing it synchronously
+        // blocks the host's async teardown on the calling thread.
+        await using var parentFactory = new WebApplicationFactory<Program>();
+        await using var factory = parentFactory.WithWebHostBuilder(builder =>
         {
-            // WebApplicationFactory implements IAsyncDisposable; disposing it synchronously
-            // blocks the host's async teardown on the calling thread.
-            await using var parentFactory = new WebApplicationFactory<Program>();
-            await using var factory = parentFactory.WithWebHostBuilder(builder =>
-            {
-                _ = builder.UseContentRoot(contentRoot);
-                _ = builder.UseSetting("GitHub:Owner", "FixPortal");
-                _ = builder.UseSetting("GitHub:Token", "test-token");
-                _ = builder.UseSetting("Dashboard:SnapshotPath", relativePath);
-                _ = builder.UseSetting("Dashboard:RefreshSeconds", "60");
-                _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
-            });
-            var environment = factory.Services.GetRequiredService<IHostEnvironment>();
-            var store = factory.Services.GetRequiredService<IDashboardSnapshotStore>();
-            var snapshot = new DashboardSnapshot(Instant.FromUtc(2026, 7, 30, 12, 0), "FixPortal", [], [], null);
+            _ = builder.UseContentRoot(contentRoot);
+            _ = builder.UseSetting("GitHub:Owner", "FixPortal");
+            _ = builder.UseSetting("GitHub:Token", "test-token");
+            _ = builder.UseSetting("Dashboard:SnapshotPath", relativePath);
+            _ = builder.UseSetting("Dashboard:RefreshSeconds", "60");
+            _ = builder.ConfigureServices(services => services.RemoveAll<IHostedService>());
+        });
+        var environment = factory.Services.GetRequiredService<IHostEnvironment>();
+        var store = factory.Services.GetRequiredService<IDashboardSnapshotStore>();
+        var snapshot = new DashboardSnapshot(Instant.FromUtc(2026, 7, 30, 12, 0), "FixPortal", [], [], null);
 
-            await store.SaveAsync(snapshot, TestContext.Current.CancellationToken);
+        await store.SaveAsync(snapshot, TestContext.Current.CancellationToken);
 
-            _ = environment.ContentRootPath.Should().Be(contentRoot);
-            _ = File.Exists(contentRootPath).Should().BeTrue();
-            _ = File.Exists(workingDirectoryPath).Should().BeFalse();
-        }
-        finally
-        {
-            if (Directory.Exists(contentRoot))
-            {
-                Directory.Delete(contentRoot, recursive: true);
-            }
-            var workingDirectory = Path.GetDirectoryName(workingDirectoryPath)!;
-            if (Directory.Exists(workingDirectory))
-            {
-                Directory.Delete(workingDirectory, recursive: true);
-            }
-        }
+        _ = environment.ContentRootPath.Should().Be(contentRoot);
+        _ = File.Exists(contentRootPath).Should().BeTrue();
+        _ = File.Exists(workingDirectoryPath).Should().BeFalse();
     }
 }

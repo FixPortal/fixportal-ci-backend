@@ -207,15 +207,17 @@ public class RunDiagnosisReaderTests
     [Fact]
     public async Task Text_is_truncated_at_a_valid_utf8_boundary()
     {
-        var text = new string('a', 512 * 1024 - 1) + "€tail";
+        // The 16-byte entry header spends part of the 512 KB excerpt budget first, so 17 bytes are
+        // reserved: header + body leave exactly 1 byte of budget, and the 3-byte euro sign must not fit.
+        var body = new string('a', 512 * 1024 - 17);
+        var text = body + "€tail";
         using var content = Content(Zip(("job.txt", Encoding.UTF8.GetBytes(text))));
 
         var result = await RunDiagnosisReader.ReadArchiveAsync(content, TestContext.Current.CancellationToken);
 
         result.Truncated.Should().BeTrue();
-        Encoding.UTF8.GetByteCount(result.Excerpt).Should().Be(512 * 1024);
-        // The 16-byte entry header spends part of the 512 KB excerpt budget first.
-        result.Excerpt.Should().Be("--- job.txt ---\n" + new string('a', 512 * 1024 - 16));
+        result.Excerpt.Should().Be("--- job.txt ---\n" + body);
+        Encoding.UTF8.GetByteCount(result.Excerpt).Should().Be(512 * 1024 - 1);
     }
 
     [Fact]

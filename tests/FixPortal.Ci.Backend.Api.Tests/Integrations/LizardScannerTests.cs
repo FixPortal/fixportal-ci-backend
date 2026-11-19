@@ -181,8 +181,10 @@ public class LizardScannerTests
     public async Task ScanAsync_should_not_touch_a_directory_outside_WorkRoot_when_the_repo_name_traverses_out()
     {
         var workRoot = Path.Combine(Path.GetTempPath(), $"ci-scanner-workroot-{Guid.NewGuid():N}");
-        var sentinelDir = Path.Combine(Path.GetTempPath(), $"ci-scanner-sentinel-{Guid.NewGuid():N}");
-        _ = Directory.CreateDirectory(sentinelDir);
+        // A witness inside the sentinel lets cleanup prove ownership, and survive the sentinel having
+        // been deleted by the regression under test without masking that assertion.
+        using var sentinel = new OwnedTempDirectory(Path.GetTempPath(), "ci-scanner-sentinel-");
+        var sentinelDir = sentinel.Root;
         var markerFile = Path.Combine(sentinelDir, "marker.txt");
         await File.WriteAllTextAsync(markerFile, "do-not-delete", TestContext.Current.CancellationToken);
         try
@@ -201,10 +203,12 @@ public class LizardScannerTests
         }
         finally
         {
-            Directory.Delete(sentinelDir, recursive: true);
+            // workRoot is a name only; the scanner can at most have created it empty, so remove it
+            // non-recursively and never delete anything it might have put there.
             if (Directory.Exists(workRoot))
             {
-                Directory.Delete(workRoot, recursive: true);
+                Console.WriteLine($"Removing scanner work root: {workRoot}");
+                Directory.Delete(workRoot, recursive: false);
             }
         }
     }
