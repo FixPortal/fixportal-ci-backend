@@ -337,6 +337,9 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
 
         public int GraphQlCalls => _graphQlCalls;
 
+        // Query string of every code-scanning alerts request, in arrival order.
+        public List<string> AlertQueries { get; } = [];
+
         // Overrides the GraphQL body from the next call onward, so a test can drive a
         // SEQUENCE of responses -- a healthy one, then a data-less one -- through a single
         // client instance. Null leaves the constructor-supplied body in force.
@@ -393,6 +396,10 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
             };
             if (isAlertsRequest)
             {
+                lock (AlertQueries)
+                {
+                    AlertQueries.Add(request.RequestUri.Query);
+                }
                 if (Interlocked.Increment(ref _alertsCalls) == 2)
                 {
                     SecondAlertsRequest.TrySetResult();
@@ -502,6 +509,83 @@ public partial class ReviewSignalEnrichmentWorkerCollectTests
             .Should()
             .BeTrue("the cold-start sweep should have written to the cache within 30s of the alerts response");
         return result!;
+    }
+
+    // One changed pull request must cost one alerts request, not one per open pull request:
+    // the alert counts are only read for the pull requests being recomputed.
+    [Fact]
+    public async Task A_sweep_queries_code_scanning_alerts_only_for_the_pull_requests_it_recomputes()
+    {
+        const string twoPulls = """
+            [{"number":181,"title":"PR 181","user":{"login":"chris"},
+              "html_url":"https://github.com/FixPortal/repo-a/pull/181","draft":false,
+              "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","head":{"sha":"sha"}},
+             {"number":182,"title":"PR 182","user":{"login":"chris"},
+              "html_url":"https://github.com/FixPortal/repo-a/pull/182","draft":false,
+              "created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-02T00:00:00Z","head":{"sha":"sha"}}]
+            """;
+        const string twoFacts = """
+            {"data":{"repository":{
+              "pr181":{"number":181,"author":{"login":"chris"},
+               "labels":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},
+               "commits":{"nodes":[{"commit":{"oid":"sha","statusCheckRollup":{"contexts":{"nodes":[]}}}}]}},
+              "pr182":{"number":182,"author":{"login":"chris"},
+               "labels":{"nodes":[]},"reviews":{"nodes":[]},"reviewThreads":{"nodes":[]},
+               "commits":{"nodes":[{"commit":{"oid":"sha","statusCheckRollup":{"contexts":{"nodes":[]}}}}]}}
+            }}}
+            """;
+        var handler = new RoutingHandler(twoFacts, HttpStatusCode.OK, "[]") { PullsJson = twoPulls };
+        using var http = new HttpClient(handler);
+        http.BaseAddress = new Uri("https://api.github.com/");
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "x", RefreshSeconds = 20 });
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var cache = new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>();
+        var worker = new ReviewSignalEnrichmentWorker(
+            client,
+            new GitHubInventoryCache(client, new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)), dashboardOptions),
+            cache,
+            Options.Create(
+                new ReviewSignalsOptions
+                {
+                    Reviewers = [new ReviewerOptions { Name = "CodeQL", Source = ReviewerSource.CodeScanning }],
+                }
+            ),
+            gitHubOptions,
+            new FakeTimeProvider(),
+            new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0)),
+            NullLogger<ReviewSignalEnrichmentWorker>.Instance
+        );
+        var repo = new GitHubRepoDto(RepoName, $"https://github.com/FixPortal/{RepoName}", false, false, "main");
+        var collect = typeof(ReviewSignalEnrichmentWorker).GetMethod(
+            "CollectAsync",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        );
+        _ = collect.Should().NotBeNull();
+
+        var first =
+            (Task<IReadOnlyDictionary<int, CachedReviewSignals>?>)
+                collect.Invoke(worker, [repo, TestContext.Current.CancellationToken])!;
+        cache.Update(RepoName, (await first)!);
+        _ = handler.AlertQueries.Should().HaveCount(2, "the cold sweep recomputes both pull requests");
+
+        // Only PR 182 changes; the next sweep recomputes it alone.
+        handler.AlertQueries.Clear();
+        handler.PullsJson = twoPulls.Replace(
+            "\"updated_at\":\"2026-01-02T00:00:00Z\",\"head\":{\"sha\":\"sha\"}}]",
+            "\"updated_at\":\"2026-01-03T00:00:00Z\",\"head\":{\"sha\":\"sha\"}}]",
+            StringComparison.Ordinal
+        );
+        var second =
+            (Task<IReadOnlyDictionary<int, CachedReviewSignals>?>)
+                collect.Invoke(worker, [repo, TestContext.Current.CancellationToken])!;
+        _ = (await second).Should().ContainKey(182);
+
+        _ = handler
+            .AlertQueries.Should()
+            .ContainSingle("one recomputed pull request costs one alerts request")
+            .Which.Should()
+            .Contain("pr=182");
     }
 
     [Fact]
