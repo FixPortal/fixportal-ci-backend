@@ -9,26 +9,53 @@ from pathlib import Path
 # copied constant, so it fails the moment the deployed value drifts.
 BICEP_PATH = Path(__file__).resolve().parents[2] / "deploy" / "bicep" / "main.bicep"
 
+SCALE = re.compile(r"scale:\s*\{\s*minReplicas:\s*(\d+)\s*maxReplicas:\s*(\d+)\s*\}")
+
+
+def container_app_scale(text):
+    """Return (min, max) from the `resource app` block only, or None if it has no match."""
+    app_match = re.search(r"resource\s+app\s+'Microsoft\.App/containerApps@[^']+'\s*=\s*\{", text)
+    if app_match is None:
+        raise ValueError("no 'resource app' Container App declaration")
+    # shortcut: braces inside string literals are not skipped; fine for this template, upgrade
+    # to compiled ARM JSON if main.bicep starts embedding brace-bearing strings.
+    depth = 1
+    end = app_match.end()
+    while depth and end < len(text):
+        depth += {"{": 1, "}": -1}.get(text[end], 0)
+        end += 1
+    match = SCALE.search(text[app_match.end() : end])
+    return match.groups() if match else None
+
 
 class BicepSingleReplicaTests(unittest.TestCase):
     def test_container_app_scale_bounds_are_pinned_to_one(self):
         text = BICEP_PATH.read_text(encoding="utf-8")
 
-        # Scope to the `resource app` block first so a future resource with its own
-        # (unrelated) 1/1-bounded scale block earlier in the file can't produce a
-        # false pass here via re.search's first-match behaviour.
-        app_match = re.search(r"resource\s+app\s+'Microsoft\.App/containerApps@[^']+'\s*=\s*\{", text)
-        self.assertIsNotNone(app_match, f"Could not find the 'resource app' Container App declaration in {BICEP_PATH}")
-
-        match = re.search(
-            r"scale:\s*\{\s*minReplicas:\s*(\d+)\s*maxReplicas:\s*(\d+)\s*\}", text[app_match.end() :]
-        )
+        scale = container_app_scale(text)
         self.assertIsNotNone(
-            match, f"Could not find a Container App scale block with minReplicas/maxReplicas in {BICEP_PATH}"
+            scale, f"Could not find a Container App scale block with minReplicas/maxReplicas in {BICEP_PATH}"
         )
-        min_replicas, max_replicas = match.group(1), match.group(2)
+        min_replicas, max_replicas = scale
         self.assertEqual(min_replicas, "1", "Container App minReplicas must stay 1 (process-local state).")
         self.assertEqual(max_replicas, "1", "Container App maxReplicas must stay 1 (process-local state).")
+
+    def test_a_later_resource_with_one_by_one_scale_cannot_mask_the_app(self):
+        text = (
+            "resource app 'Microsoft.App/containerApps@2024-03-01' = {\n"
+            "  properties: { template: { scale: {\n    minReplicas: 1\n    maxReplicas: 5\n  } } }\n}\n"
+            "resource other 'Microsoft.App/jobs@2024-03-01' = {\n"
+            "  scale: {\n    minReplicas: 1\n    maxReplicas: 1\n  }\n}\n"
+        )
+        self.assertEqual(container_app_scale(text), ("1", "5"))
+
+    def test_app_without_a_scale_block_is_not_satisfied_by_a_later_resource(self):
+        text = (
+            "resource app 'Microsoft.App/containerApps@2024-03-01' = {\n  properties: {}\n}\n"
+            "resource other 'Microsoft.App/jobs@2024-03-01' = {\n"
+            "  scale: {\n    minReplicas: 1\n    maxReplicas: 1\n  }\n}\n"
+        )
+        self.assertIsNone(container_app_scale(text))
 
 
 if __name__ == "__main__":
