@@ -73,6 +73,25 @@ public class BicepEnvironmentBindingTests
         var entries = ReadEnvEntries();
         entries.Should().NotBeEmpty("the parser found no environment entries, so it and the template have drifted");
 
+        // The loop below asserts only over what was parsed, so a deleted declaration would delete its
+        // own assertion. The roster is pinned by value in its own test; Cors is indexed and has its own.
+        entries
+            .Where(e => !e.Name.StartsWith("ReviewSignals__", StringComparison.Ordinal))
+            .Select(e => e.Name)
+            .Should()
+            .BeEquivalentTo(
+                [
+                    "GitHub__Owner",
+                    "GitHub__Token",
+                    "Admin__AdminKey",
+                    "IdeIntegration__ApiKey",
+                    "Dashboard__RefreshSeconds",
+                    "GitHubApp__AppId",
+                    "GitHubApp__PrivateKeyPem",
+                ],
+                "the template must declare exactly this set of non-roster settings"
+            );
+
         using var environment = new TemplateEnvironment(entries.ToDictionary(e => e.Name, string? (e) => SampleFor(e)));
         var configuration = environment.Configuration;
 

@@ -116,23 +116,55 @@ public sealed class DashboardRefreshWorkerTests : IDisposable
         var workerLogger = new SignalingLogger<DashboardRefreshWorker>();
         var worker = new DashboardRefreshWorker(refreshService, options, TimeProvider.System, workerLogger);
 
-        await worker.StartAsync(TestContext.Current.CancellationToken);
-        // Event-driven: wait for the exact moment the guard logged
-        // the failed cycle, rather than sleeping a guessed duration.
-        await workerLogger.ErrorLogged.Task.WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        Exception? primaryFailure = null;
+        try
+        {
+            await worker.StartAsync(TestContext.Current.CancellationToken);
+            // Event-driven: wait for the exact moment the guard logged
+            // the failed cycle, rather than sleeping a guessed duration.
+            await workerLogger.ErrorLogged.Task.WaitAsync(
+                TimeSpan.FromSeconds(10),
+                TestContext.Current.CancellationToken
+            );
 
-        // Survives: the background loop must still be alive (not faulted) right after
-        // absorbing the failure — it is now waiting on the next PeriodicTimer tick.
-        _ = worker.ExecuteTask.Should().NotBeNull();
-        _ = worker.ExecuteTask!.IsFaulted.Should().BeFalse();
-        _ = worker.ExecuteTask.IsCompleted.Should().BeFalse();
+            // Survives: the background loop must still be alive (not faulted) right after
+            // absorbing the failure — it is now waiting on the next PeriodicTimer tick.
+            _ = worker.ExecuteTask.Should().NotBeNull();
+            _ = worker.ExecuteTask!.IsFaulted.Should().BeFalse();
+            _ = worker.ExecuteTask.IsCompleted.Should().BeFalse();
 
-        // Stops on shutdown: StopAsync must unwind the loop without the task faulting.
-        await worker
-            .StopAsync(TestContext.Current.CancellationToken)
-            .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
-        _ = worker.ExecuteTask.IsCompleted.Should().BeTrue();
-        _ = worker.ExecuteTask.IsFaulted.Should().BeFalse();
+            // Stops on shutdown: StopAsync must unwind the loop without the task faulting.
+            await worker
+                .StopAsync(TestContext.Current.CancellationToken)
+                .WaitAsync(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            _ = worker.ExecuteTask.IsCompleted.Should().BeTrue();
+            _ = worker.ExecuteTask.IsFaulted.Should().BeFalse();
+        }
+        catch (Exception error)
+        {
+            primaryFailure = error;
+            throw;
+        }
+        finally
+        {
+            try
+            {
+                // Independent deadline: the test token may already be cancelled when a failure got us here.
+                using var cleanup = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+                await worker.StopAsync(CancellationToken.None).WaitAsync(cleanup.Token);
+                if (worker.ExecuteTask is { } execution)
+                {
+                    _ = execution
+                        .IsCompleted.Should()
+                        .BeTrue("worker shutdown must join before dependencies are disposed");
+                }
+                worker.Dispose();
+            }
+            catch (Exception cleanupError) when (primaryFailure is not null)
+            {
+                Console.WriteLine("SurviveFailureCleanupFailure: " + cleanupError);
+            }
+        }
     }
 
     private sealed class RecoveringReposHandler : HttpMessageHandler
