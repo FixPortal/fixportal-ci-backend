@@ -140,6 +140,32 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             cpu: json('0.25')
             memory: '0.5Gi'
           }
+          // /api/live fails only when no snapshot has been published for 20 refresh cycles
+          // (floor 15 minutes) and no credential error explains it, so a slow GitHub refresh,
+          // a cold start or a revoked token cannot restart-loop the app; 3 misses at 30s
+          // spacing then restarts a genuinely stalled loop. Never point these at /api/health.
+          probes: [
+            {
+              type: 'Startup'
+              httpGet: {
+                path: '/api/live'
+                port: 8080
+              }
+              periodSeconds: 10
+              failureThreshold: 10
+              timeoutSeconds: 5
+            }
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/api/live'
+                port: 8080
+              }
+              periodSeconds: 30
+              failureThreshold: 3
+              timeoutSeconds: 5
+            }
+          ]
           // CORS origins are appended as Cors__AllowedOrigins__N entries. They live
           // in the template (not set out-of-band) so an incremental deployment can't
           // strip them — the env array is fully managed here.

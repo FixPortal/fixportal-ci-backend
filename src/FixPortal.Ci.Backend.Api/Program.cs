@@ -176,7 +176,7 @@ builder
     .ConfigurePrimaryHttpMessageHandler(() =>
         new SocketsHttpHandler { AllowAutoRedirect = false, PooledConnectionLifetime = TimeSpan.FromMinutes(2) }
     );
-builder.Services.AddSingleton<DashboardSnapshotState>();
+builder.Services.AddSingleton(sp => new DashboardSnapshotState(sp.GetRequiredService<IClock>().GetCurrentInstant()));
 builder.Services.AddSingleton<IDashboardSnapshotStore>(sp =>
 {
     var dashboardOptions = sp.GetRequiredService<IOptions<DashboardOptions>>().Value;

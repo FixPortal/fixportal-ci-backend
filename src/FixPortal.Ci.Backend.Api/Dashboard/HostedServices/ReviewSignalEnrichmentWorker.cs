@@ -1,4 +1,5 @@
 using FixPortal.Ci.Backend.Api.Dashboard.Configuration;
+using FixPortal.Ci.Backend.Api.Dashboard.Model;
 using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using Microsoft.Extensions.Options;
@@ -263,7 +264,13 @@ public sealed class ReviewSignalEnrichmentWorker(
             // Only pay for the alerts call when a configured reviewer actually reads it,
             // AND only when something is being recomputed — an unchanged sweep must cost
             // nothing at all, which is the entire point of this path.
-            var (alerts, secretAlerts) = await FetchScanAlertsAsync(repo.Name, reviewers, toFetch.Count > 0, ct);
+            var (alerts, secretAlerts) = await FetchScanAlertsAsync(
+                repo.Name,
+                reviewers,
+                current.Keys,
+                toFetch.Count > 0,
+                ct
+            );
 
             // Commit the watermark LAST, once everything this sweep depends on has
             // succeeded. Advancing it earlier is the subtle version of the bug this whole
@@ -320,6 +327,7 @@ public sealed class ReviewSignalEnrichmentWorker(
     private async Task<(IReadOnlyDictionary<int, int>? Alerts, int? SecretAlerts)> FetchScanAlertsAsync(
         string repo,
         IReadOnlyList<ReviewerOptions> reviewers,
+        IEnumerable<int> pullNumbers,
         bool recomputing,
         CancellationToken ct
     )
@@ -330,7 +338,7 @@ public sealed class ReviewSignalEnrichmentWorker(
         }
 
         var alerts = reviewers.Any(r => r.Source == ReviewerSource.CodeScanning)
-            ? await Client.GetOpenCodeScanningAlertCountsAsync(repo, ct)
+            ? await Client.GetOpenCodeScanningAlertCountsAsync(repo, pullNumbers, ct)
             : null;
         var secretAlerts = reviewers.Any(r => r.Source == ReviewerSource.SecretScanning)
             ? await Client.GetOpenSecretScanningAlertCountAsync(repo, ct)
@@ -376,7 +384,7 @@ public sealed class ReviewSignalEnrichmentWorker(
     /// so a comment predating the observation cannot certify the new head; a head seen
     /// for a while keeps its original stamp, so later comments still count.
     /// </summary>
-    private Dictionary<int, HeadAnchor> TrackHeadTransitions(
+    internal Dictionary<int, HeadAnchor> TrackHeadTransitions(
         string repo,
         IReadOnlyDictionary<int, PrWatermark> previous,
         IReadOnlyDictionary<int, PrWatermark> current
@@ -403,13 +411,13 @@ public sealed class ReviewSignalEnrichmentWorker(
                 continue;
             }
 
-            var known = previous.TryGetValue(number, out var before);
+            var known = previous.ContainsKey(number);
             var hadEntry = seen.TryGetValue(number, out var existing);
-            var unchanged =
-                known
-                && string.Equals(before.HeadSha, watermark.HeadSha, StringComparison.Ordinal)
-                && hadEntry
-                && string.Equals(existing.HeadSha, watermark.HeadSha, StringComparison.Ordinal);
+            // The decision rests on the SEEN entry, not the committed watermark: the
+            // watermark is held back when a sweep fails, so basing "unchanged" on it
+            // restamped a head already stamped by a failed sweep and discarded the
+            // comments that preceded the restamp.
+            var unchanged = hadEntry && string.Equals(existing.HeadSha, watermark.HeadSha, StringComparison.Ordinal);
             if (unchanged)
             {
                 seen[number] = existing with { LastSeen = now };
@@ -427,8 +435,13 @@ public sealed class ReviewSignalEnrichmentWorker(
                 // MovedAfter is the last listing of whatever head preceded this one; a
                 // listing that already showed the new head only makes it later, which
                 // only narrows the check suites that can vouch for the push.
-                Instant? movedAfter = known && hadEntry ? existing.LastSeen : null;
-                seen[number] = (watermark.HeadSha, known ? now : HeadSeenBeforeObservation, movedAfter, now);
+                Instant? movedAfter = hadEntry ? existing.LastSeen : null;
+                seen[number] = (
+                    watermark.HeadSha,
+                    known || hadEntry ? now : HeadSeenBeforeObservation,
+                    movedAfter,
+                    now
+                );
             }
         }
 
@@ -444,7 +457,7 @@ public sealed class ReviewSignalEnrichmentWorker(
     /// the signal it already had rather than being recomputed or dropped, while one that
     /// closed disappears — fixing a pill that used to outlive its pull request.
     /// </summary>
-    private IReadOnlyDictionary<int, CachedReviewSignals> Merge(
+    internal IReadOnlyDictionary<int, CachedReviewSignals> Merge(
         string repo,
         IReadOnlyDictionary<int, CachedReviewSignals> cached,
         IReadOnlyDictionary<int, PrWatermark> stillOpen,
@@ -473,7 +486,11 @@ public sealed class ReviewSignalEnrichmentWorker(
                 // carried-over pull requests get the fresh count too, or sibling PRs
                 // disagree about one repository-level number until each is refetched.
                 .Select(signal =>
-                    secretAlerts is { } freshCount && secretReviewers.TryGetValue(signal.Name, out var secretReviewer)
+                    // A Disabled pill means the reviewer's RequiredLabel was absent when this
+                    // PR was built; rebuilding here would bypass that gate.
+                    secretAlerts is { } freshCount
+                    && signal.State != ReviewSignalState.Disabled
+                    && secretReviewers.TryGetValue(signal.Name, out var secretReviewer)
                         ? ReviewSignalFactory.BuildSecretScanning(secretReviewer, freshCount, repoHtmlUrl)
                         : signal
                 )

@@ -395,6 +395,33 @@ public sealed class GitHubAppTokenSourceTests : IDisposable
     }
 
     [Fact]
+    public async Task A_transient_mint_failure_inside_the_refresh_margin_keeps_serving_the_still_valid_token()
+    {
+        // Real expiry is 20:30; at 20:26 the token is inside the 5 minute refresh margin
+        // but still valid, so a transport blip on the early refresh must not turn into a
+        // credential failure for the next minute.
+        var clock = new FakeClock(Now);
+        var handler = new MintHandler("""{"token":"ghs_test","expires_at":"__EXPIRES_AT__"}""");
+        var source = CreateMinting(handler, clock);
+        _ = await source.GetTokenAsync(TestContext.Current.CancellationToken);
+        clock.Advance(Duration.FromMinutes(26));
+        handler.MintStatusOverride = HttpStatusCode.ServiceUnavailable;
+
+        var first = await source.GetTokenAsync(TestContext.Current.CancellationToken);
+        var insideBackoff = await source.GetTokenAsync(TestContext.Current.CancellationToken);
+
+        _ = first.Should().Be("ghs_test");
+        _ = insideBackoff.Should().Be("ghs_test");
+        _ = handler.Mints.Should().Be(2, "the backoff still suppresses a re-POST");
+
+        // Once the token has really expired nothing usable remains: the transport failure
+        // surfaces as itself, not as a credential failure.
+        clock.Advance(Duration.FromMinutes(5));
+        var expired = () => source.GetTokenAsync(TestContext.Current.CancellationToken);
+        _ = await expired.Should().ThrowAsync<HttpRequestException>();
+    }
+
+    [Fact]
     public async Task Concurrent_successful_callers_share_one_installation_token_mint()
     {
         var handler = new ConcurrentMintHandler();

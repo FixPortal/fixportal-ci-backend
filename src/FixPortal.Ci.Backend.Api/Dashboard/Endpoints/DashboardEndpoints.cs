@@ -5,6 +5,7 @@ using FixPortal.Ci.Backend.Api.Dashboard.Services;
 using FixPortal.Ci.Backend.Api.Integrations.GitHub;
 using FixPortal.Ci.Backend.Api.Security;
 using Microsoft.Extensions.Options;
+using NodaTime;
 
 namespace FixPortal.Ci.Backend.Api.Dashboard.Endpoints;
 
@@ -115,7 +116,35 @@ public static class DashboardEndpoints
             return Results.Ok(new { Status = "Healthy" });
         });
 
+        // Container liveness probe. Unauthenticated and body-free of detail: it answers only
+        // whether the refresh loop is still making progress, so a stall inside a live process
+        // restarts the container. Deliberately not /api/health, which returns 503 on an auth
+        // failure and would restart-loop on a revoked token.
+        _ = endpoints.MapGet(
+            "/api/live",
+            (DashboardSnapshotState state, IClock clock, IOptions<DashboardOptions> options) =>
+                IsRefreshStalled(state, clock.GetCurrentInstant(), options.Value.RefreshSeconds)
+                    ? Results.Json(new { Status = "Stalled" }, statusCode: 503)
+                    : Results.Ok(new { Status = "Alive" })
+        );
+
         return endpoints;
+    }
+
+    // Stalled means no snapshot published for 20 refresh cycles (floor 15 minutes), measured
+    // from the later of the last publish and process start so a restored-from-disk snapshot
+    // or a cold start gets the full window; the floor outlasts a long rate-limit pause. A
+    // credential failure is excluded because a restart cannot fix it.
+    internal static bool IsRefreshStalled(DashboardSnapshotState state, Instant now, int refreshSeconds)
+    {
+        if (state.LastAuthError is not null)
+        {
+            return false;
+        }
+        var last = state.Current?.RefreshedAt;
+        var started = state.StartedAt;
+        Instant? reference = last is { } l && started is { } s ? Instant.Max(l, s) : last ?? started;
+        return reference is { } r && now - r > Duration.FromSeconds(Math.Max(20L * refreshSeconds, 900));
     }
 
     private static bool IsAdmin(HttpRequest request, string? configured)
@@ -238,28 +267,32 @@ public static class DashboardEndpoints
         // GitHub itself just said no — a real conflict or a blocked required check,
         // not a transport hiccup. Replace the cached verdict so refreshes keep it,
         // then patch the served snapshot so the pill reflects it immediately.
-        mergeStates.Update(repository, current =>
-        {
-            PrMergeState? existing = null;
-            _ = current?.TryGetValue(merge.PullNumber, out existing);
-            if (
-                existing is not null
-                && !string.IsNullOrEmpty(existing.HeadSha)
-                && !DashboardRefreshService.SameHead(existing.HeadSha, merge.HeadSha)
-            )
+        mergeStates.Update(
+            repository,
+            current =>
             {
-                return current!;
-            }
-            var updated = current?.ToDictionary(pair => pair.Key, pair => pair.Value) ?? [];
-            updated[merge.PullNumber] = new PrMergeState(
-                merge.PullNumber,
-                existing?.IsDraft ?? false,
-                "CONFLICTING",
-                "DIRTY",
-                merge.HeadSha
-            );
-            return updated;
-        });
+                PrMergeState? existing = null;
+                _ = current?.TryGetValue(merge.PullNumber, out existing);
+                if (
+                    existing is not null
+                    && !string.IsNullOrEmpty(existing.HeadSha)
+                    && !DashboardRefreshService.SameHead(existing.HeadSha, merge.HeadSha)
+                )
+                {
+                    return current!;
+                }
+                var updated = current?.ToDictionary(pair => pair.Key, pair => pair.Value) ?? [];
+                updated[merge.PullNumber] = new PrMergeState(
+                    merge.PullNumber,
+                    existing?.IsDraft ?? false,
+                    "CONFLICTING",
+                    "DIRTY",
+                    merge.HeadSha
+                );
+                return updated;
+            },
+            keepAge: true
+        );
         state.MarkNotMergeable(repository, merge.PullNumber, merge.HeadSha);
         return Error(HttpStatusCode.Conflict, error);
     }

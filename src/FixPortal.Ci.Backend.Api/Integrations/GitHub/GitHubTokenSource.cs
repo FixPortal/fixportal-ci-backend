@@ -61,6 +61,7 @@ public sealed class GitHubAppTokenSource(
     private string? _token;
     private Instant _expiresAt = Instant.MinValue;
     private Instant _mintFailedUntil = Instant.MinValue;
+    private bool _mintFailureWasAuth;
     private string? _installationId;
 
     public async Task<string> GetTokenAsync(CancellationToken ct)
@@ -80,11 +81,13 @@ public sealed class GitHubAppTokenSource(
                 return fresh;
             }
 
+            // Inside the refresh margin the cached token is still valid. A transport failure
+            // on the early refresh must not discard it; an auth refusal still surfaces.
+            var stillValid = _token is { Length: > 0 } && clock.GetCurrentInstant() < _expiresAt;
+
             if (clock.GetCurrentInstant() < _mintFailedUntil)
             {
-                throw new GitHubAuthException(
-                    "GitHub App token mint failed recently; failing fast until the backoff elapses."
-                );
+                return ServeCachedOrThrow(stillValid, null);
             }
 
             try
@@ -94,13 +97,28 @@ public sealed class GitHubAppTokenSource(
             catch (Exception ex) when (ex is GitHubAuthException or HttpRequestException)
             {
                 _mintFailedUntil = clock.GetCurrentInstant() + MintFailureBackoff;
-                throw;
+                _mintFailureWasAuth = ex is GitHubAuthException;
+                return ServeCachedOrThrow(stillValid, ex);
             }
         }
         finally
         {
             _ = _gate.Release();
         }
+    }
+
+    // A failed mint serves the still-valid cached token unless it was an auth failure.
+    // Otherwise it throws the original failure, or on a backoff fast-fail one of the
+    // same kind, so a transport blip never reads as a credential failure.
+    private string ServeCachedOrThrow(bool stillValid, Exception? original)
+    {
+        if (!_mintFailureWasAuth && stillValid)
+        {
+            return _token!;
+        }
+
+        const string backoff = "GitHub App token mint failed recently; failing fast until the backoff elapses.";
+        throw original ?? (_mintFailureWasAuth ? new GitHubAuthException(backoff) : new HttpRequestException(backoff));
     }
 
     private async Task<string> MintAsync(CancellationToken ct)

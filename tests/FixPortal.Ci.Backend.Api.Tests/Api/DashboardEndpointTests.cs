@@ -1046,6 +1046,32 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             .BeFalse();
     }
 
+    // A request-path patch must not give unexpired sibling verdicts a fresh TTL window:
+    // only a full worker write refreshes the entry's age.
+    [Fact]
+    public async Task Merge_rejection_should_not_extend_the_age_of_sibling_verdicts()
+    {
+        var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        var mergeStates = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>(clock, Duration.FromSeconds(360));
+        mergeStates.Update(
+            "public-repo",
+            new Dictionary<int, PrMergeState> { [7] = new(7, false, "MERGEABLE", "CLEAN", HeadSha) }
+        );
+        clock.Advance(Duration.FromSeconds(300));
+        var handler = new MergeHandler(HttpStatusCode.Conflict, """{"message":"Head branch was modified"}""");
+        var client = CreateClient(SnapshotWithPrivateRepo(), AdminKey, handler, mergeStates);
+        using var request = CreateMergeRequest("public-repo", 42);
+
+        var response = await client.SendAsync(request, TestContext.Current.CancellationToken);
+        clock.Advance(Duration.FromSeconds(100));
+
+        _ = response.StatusCode.Should().Be(HttpStatusCode.Conflict);
+        _ = mergeStates
+            .TryGet("public-repo", out _)
+            .Should()
+            .BeFalse("400 seconds after the last worker write the entry is past its 360 second window");
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -1566,6 +1592,39 @@ public class DashboardEndpointTests(WebApplicationFactory<Program> factory)
             await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken)
         );
         return body.RootElement.GetProperty("error").GetString();
+    }
+
+    // Liveness is its own endpoint: /api/health returns 503 on an auth failure, which as a
+    // liveness probe would restart-loop the container on a revoked token no restart can fix.
+    // 900 seconds is the floor of the staleness window (RefreshSeconds is 20 here).
+    [Theory]
+    [InlineData(10, 10, false, HttpStatusCode.OK)]
+    [InlineData(1000, 10, false, HttpStatusCode.OK)]
+    [InlineData(1000, 1000, false, HttpStatusCode.ServiceUnavailable)]
+    [InlineData(1000, 1000, true, HttpStatusCode.OK)]
+    public async Task Live_should_fail_only_when_refresh_progress_is_stale_and_no_auth_error_explains_it(
+        int snapshotAgeSeconds,
+        int processAgeSeconds,
+        bool authError,
+        HttpStatusCode expected
+    )
+    {
+        const string sentinel = "SENTINEL-PRIVATE-REPO-MUST-NOT-LEAK";
+        var now = SystemClock.Instance.GetCurrentInstant();
+        var state = new DashboardSnapshotState(now - Duration.FromSeconds(processAgeSeconds));
+        var seed = SnapshotWithPrivateRepo() with { RefreshedAt = now - Duration.FromSeconds(snapshotAgeSeconds) };
+        state.Update(seed, DashboardSnapshotState.ComputePublicSnapshot(seed));
+        if (authError)
+        {
+            state.SetAuthError($"401 for repos/FixPortal/{sentinel}/actions/workflows");
+        }
+        using var client = CreateClient(null, AdminKey, githubHandler: null, sharedState: state);
+
+        using var response = await client.GetAsync("/api/live", TestContext.Current.CancellationToken);
+
+        _ = response.StatusCode.Should().Be(expected);
+        var body = await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+        _ = body.Should().NotContain(sentinel).And.NotContain("private-repo");
     }
 
     // CB-C2: /api/health is unauthenticated, so it must never echo state.LastAuthError

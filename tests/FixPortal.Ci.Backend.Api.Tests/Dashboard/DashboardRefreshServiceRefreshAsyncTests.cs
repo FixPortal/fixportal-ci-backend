@@ -59,7 +59,11 @@ public class DashboardRefreshServiceRefreshAsyncTests
     // Newest run (30) is a green workflow_dispatch run on a side branch; the older run
     // (20) is red, on olderBranch. Pins the masking bug observed 2026-09-27 on
     // a monitored repository, and the fallback for workflows that never run on main.
-    private sealed class NonDefaultBranchNewestRunHandler(string olderBranch) : HttpMessageHandler
+    private sealed class NonDefaultBranchNewestRunHandler(
+        string olderBranch,
+        string newestBranch = "ci/sql-memory-probe",
+        string? newestHeadRepo = null
+    ) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
@@ -67,6 +71,11 @@ public class DashboardRefreshServiceRefreshAsyncTests
         )
         {
             var path = request.RequestUri!.AbsolutePath;
+            var headRepoJson = newestHeadRepo is null
+                ? ""
+                : $$"""
+                    "head_repository":{"full_name":"{{newestHeadRepo}}"},
+                    """;
             var body = path switch
             {
                 _ when path.EndsWith("/repos", StringComparison.Ordinal) =>
@@ -74,7 +83,7 @@ public class DashboardRefreshServiceRefreshAsyncTests
                 _ when path.EndsWith("/actions/workflows", StringComparison.Ordinal) =>
                     """{"workflows":[{"id":1,"name":"CI","path":".github/workflows/ci.yml","state":"active"}]}""",
                 _ when path.EndsWith("/runs", StringComparison.Ordinal) =>
-                    $$"""{"workflow_runs":[{"id":30,"status":"completed","conclusion":"success","html_url":"https://github.com/FixPortal/repo-a/actions/runs/30","display_title":"newest, side branch","run_number":30,"head_branch":"ci/sql-memory-probe","event":"workflow_dispatch","updated_at":"2026-01-03T00:00:00Z"},{"id":20,"status":"completed","conclusion":"failure","html_url":"https://github.com/FixPortal/repo-a/actions/runs/20","display_title":"older","run_number":20,"head_branch":"{{olderBranch}}","event":"push","updated_at":"2026-01-02T00:00:00Z"}]}""",
+                    $$"""{"workflow_runs":[{"id":30,"status":"completed","conclusion":"success","html_url":"https://github.com/FixPortal/repo-a/actions/runs/30","display_title":"newest, side branch","run_number":30,"head_branch":"{{newestBranch}}",{{headRepoJson}}"event":"workflow_dispatch","updated_at":"2026-01-03T00:00:00Z"},{"id":20,"status":"completed","conclusion":"failure","html_url":"https://github.com/FixPortal/repo-a/actions/runs/20","display_title":"older","run_number":20,"head_branch":"{{olderBranch}}","event":"push","updated_at":"2026-01-02T00:00:00Z"}]}""",
                 _ => "[]",
             };
             return Task.FromResult(JsonOk(body));
@@ -614,18 +623,25 @@ public class DashboardRefreshServiceRefreshAsyncTests
 
     [Theory]
     // A green side-branch run must not mask the red run on main.
-    [InlineData("main", SignalState.Failure, 20)]
+    [InlineData("main", "ci/sql-memory-probe", null, SignalState.Failure, 20)]
     // No main run in the page (a pull_request-only workflow such as review-tier.yml):
     // fall back to the newest run rather than a permanent Unknown pill.
-    [InlineData("feature/x", SignalState.Success, 30)]
+    [InlineData("feature/x", "ci/sql-memory-probe", null, SignalState.Success, 30)]
+    // A fork PR from a branch literally named main reports head_branch "main" but is not
+    // a default-branch run of this repository, so it must not mask the red run on main.
+    [InlineData("main", "main", "stranger/repo-a", SignalState.Failure, 20)]
+    // A same-repository run on main is still the default-branch run.
+    [InlineData("main", "main", "FixPortal/repo-a", SignalState.Success, 30)]
     public async Task RefreshAsync_should_colour_the_pill_from_the_default_branch_run_when_there_is_one(
         string olderBranch,
+        string newestBranch,
+        string? newestHeadRepo,
         SignalState expectedState,
         int expectedRunNumber
     )
     {
         var state = new DashboardSnapshotState();
-        using var handler = new NonDefaultBranchNewestRunHandler(olderBranch);
+        using var handler = new NonDefaultBranchNewestRunHandler(olderBranch, newestBranch, newestHeadRepo);
         using var http = new HttpClient(handler, disposeHandler: false);
         http.BaseAddress = new Uri("https://api.github.com/");
         var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
@@ -844,5 +860,112 @@ public class DashboardRefreshServiceRefreshAsyncTests
         _ = repo.PullRequests.Should().BeEmpty();
         _ = repo.Workflows.Should().ContainSingle(w => w.State == SignalState.Success);
         _ = state.LastAuthError.Should().BeNull();
+    }
+
+    private sealed class UnauthorizedReposHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken
+        ) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.Unauthorized));
+    }
+
+    private DashboardRefreshService NewService(
+        HttpMessageHandler handler,
+        DashboardSnapshotState state,
+        IDashboardSnapshotStore store,
+        PerRepoCache<IReadOnlyDictionary<int, PrMergeState>> mergeStates
+    )
+    {
+        var http = new HttpClient(handler, disposeHandler: false) { BaseAddress = new Uri("https://api.github.com/") };
+        _httpClients.Add(http);
+        var gitHubOptions = Options.Create(new GitHubOptions { Owner = "FixPortal", Token = "t" });
+        var dashboardOptions = Options.Create(new DashboardOptions { SnapshotPath = "s.json", RefreshSeconds = 60 });
+        var client = new GitHubOrgClient(http, gitHubOptions, dashboardOptions, new GitHubETagStore());
+        var clock = new FakeClock(Instant.FromUtc(2026, 1, 1, 0, 0));
+        return new DashboardRefreshService(
+            client,
+            new GitHubInventoryCache(client, clock, dashboardOptions),
+            store,
+            state,
+            new PerRepoCache<RepoMetrics>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<IReadOnlyList<JobSignal>>(),
+            new PerRepoCache<MergedPullRequest>(),
+            new PerRepoCache<IReadOnlyDictionary<int, CachedReviewSignals>>(),
+            mergeStates,
+            Options.Create(new ReviewSignalsOptions()),
+            gitHubOptions,
+            clock,
+            NullLogger<DashboardRefreshService>.Instance
+        );
+    }
+
+    private readonly List<HttpClient> _httpClients = [];
+
+    // The repo-list call runs before the per-repo collectors that normally record an auth
+    // failure, so a credential that fails here must reach /api/health from this call site.
+    [Fact]
+    public async Task RefreshAsync_should_publish_an_auth_error_when_the_repository_list_is_refused()
+    {
+        var state = new DashboardSnapshotState();
+        using var handler = new UnauthorizedReposHandler();
+        var sut = NewService(
+            handler,
+            state,
+            Substitute.For<IDashboardSnapshotStore>(),
+            new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>()
+        );
+
+        var act = () => sut.RefreshAsync(TestContext.Current.CancellationToken);
+
+        _ = await act.Should().ThrowAsync<GitHubAuthException>();
+        _ = state.LastAuthError.Should().NotBeNull();
+        foreach (var client in _httpClients)
+        {
+            client.Dispose();
+        }
+    }
+
+    // A merge rejection that lands between the refresh's cache read and its publish must
+    // not be overwritten by the verdict the refresh read earlier.
+    [Fact]
+    public async Task RefreshAsync_should_not_republish_ready_to_merge_over_a_rejection_made_mid_refresh()
+    {
+        const string head = "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3";
+        var state = new DashboardSnapshotState();
+        var mergeStates = new PerRepoCache<IReadOnlyDictionary<int, PrMergeState>>();
+        mergeStates.Update(
+            "repo-a",
+            new Dictionary<int, PrMergeState> { [181] = new(181, false, "MERGEABLE", "CLEAN", head) }
+        );
+        var store = Substitute.For<IDashboardSnapshotStore>();
+        _ = store
+            .SaveAsync(Arg.Any<DashboardSnapshot>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                mergeStates.Update(
+                    "repo-a",
+                    new Dictionary<int, PrMergeState> { [181] = new(181, false, "CONFLICTING", "DIRTY", head) }
+                );
+                return Task.CompletedTask;
+            });
+        using var handler = new OnePullRequestHandler();
+        var sut = NewService(handler, state, store, mergeStates);
+
+        await sut.RefreshAsync(TestContext.Current.CancellationToken);
+
+        _ = state
+            .Current!.Repositories.Should()
+            .ContainSingle()
+            .Which.PullRequests.Should()
+            .ContainSingle()
+            .Which.ReadyToMerge.Should()
+            .BeFalse();
+        _ = state.Public!.Repositories.Single().PullRequests.Single().ReadyToMerge.Should().BeFalse();
+        foreach (var client in _httpClients)
+        {
+            client.Dispose();
+        }
     }
 }

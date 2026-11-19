@@ -1,4 +1,5 @@
 using FixPortal.Ci.Backend.Api.Dashboard.Model;
+using NodaTime;
 
 namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 
@@ -18,6 +19,11 @@ namespace FixPortal.Ci.Backend.Api.Dashboard.Services;
 public sealed class DashboardSnapshotState
 {
     private sealed record Snapshots(DashboardSnapshot? Current, DashboardSnapshot? Public);
+
+    public DashboardSnapshotState(Instant? startedAt = null) => StartedAt = startedAt;
+
+    /// <summary>When this process began serving; the liveness endpoint's grace anchor for a cold or restored start.</summary>
+    public Instant? StartedAt { get; }
 
     private volatile Snapshots _snapshots = new(null, null);
     private volatile string? _lastAuthError;
