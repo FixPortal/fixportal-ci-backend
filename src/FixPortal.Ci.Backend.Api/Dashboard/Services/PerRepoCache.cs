@@ -36,6 +36,8 @@ public sealed class PerRepoCache<T>
     public void Update(string repo, T value) =>
         _byRepo[repo] = new CacheEntry(value, _clock?.GetCurrentInstant() ?? Instant.MinValue);
 
+    /// <param name="repo">The repository whose entry is patched.</param>
+    /// <param name="update">Receives the live entry, or null when absent or expired, and returns the replacement.</param>
     /// <param name="keepAge">
     /// True for a request-path patch of one entry: the existing write time is kept, so
     /// untouched siblings are not given a fresh TTL window. A full worker write leaves it false.

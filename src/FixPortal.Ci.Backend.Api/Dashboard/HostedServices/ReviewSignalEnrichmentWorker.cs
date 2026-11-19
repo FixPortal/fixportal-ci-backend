@@ -267,7 +267,7 @@ public sealed class ReviewSignalEnrichmentWorker(
             var (alerts, secretAlerts) = await FetchScanAlertsAsync(
                 repo.Name,
                 reviewers,
-                current.Keys,
+                toFetch,
                 toFetch.Count > 0,
                 ct
             );
