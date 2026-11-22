@@ -1,4 +1,4 @@
-[CmdletBinding()]
+﻿[CmdletBinding()]
 param(
     [Parameter(Mandatory)]
     [string] $ReportPath,
@@ -92,9 +92,6 @@ foreach ($status in ($allStatuses | Sort-Object)) {
     ).Sum
 }
 
-# RuntimeError is a legitimate final status (Stryker crashed the mutant's host, not an
-# assurance gap), and it is parsed and summarised above — omitting it here would trip
-# the unapproved-status check on a real run.
 $approvedFinalStatuses = @('Killed', 'Timeout', 'Survived', 'NoCoverage', 'CompileError', 'RuntimeError', 'Ignored')
 # RuntimeError sits beside CompileError deliberately: both are non-viable mutants
 # (never validly tested), both are excluded from the score denominator, and the
